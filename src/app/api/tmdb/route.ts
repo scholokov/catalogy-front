@@ -93,8 +93,9 @@ export async function GET(request: Request) {
     }
   };
 
+  const payload = data as { results?: TmdbMovie[] };
   const results = await Promise.all(
-    (data.results ?? []).map(async (movie) => {
+    (payload.results ?? []).map(async (movie) => {
       const { director, actors } = await fetchCredits(movie.id);
       return {
         id: String(movie.id),
