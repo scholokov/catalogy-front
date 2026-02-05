@@ -63,20 +63,22 @@ export async function GET(
     );
   }
 
+  const detail = data as TmdbDetail;
   const director =
-    data.credits?.crew?.find((member) => member.job === "Director")?.name ?? "";
-  const actors = (data.credits?.cast ?? [])
+    detail.credits?.crew?.find((member) => member.job === "Director")?.name ??
+    "";
+  const actors = (detail.credits?.cast ?? [])
     .slice(0, 5)
     .map((member) => member.name)
     .join(", ");
   const baseImageUrl = "https://image.tmdb.org/t/p/w780";
-  const primaryPoster = data.poster_path
-    ? `${baseImageUrl}${data.poster_path}`
+  const primaryPoster = detail.poster_path
+    ? `${baseImageUrl}${detail.poster_path}`
     : "";
-  const posterImages = (data.images?.posters ?? [])
+  const posterImages = (detail.images?.posters ?? [])
     .slice(0, 10)
     .map((image) => `${baseImageUrl}${image.file_path}`);
-  const backdropImages = (data.images?.backdrops ?? [])
+  const backdropImages = (detail.images?.backdrops ?? [])
     .slice(0, 6)
     .map((image) => `${baseImageUrl}${image.file_path}`);
   const imageUrls = Array.from(
@@ -84,18 +86,18 @@ export async function GET(
   );
 
   return NextResponse.json({
-    id: String(data.id),
-    title: data.title,
-    year: data.release_date ? data.release_date.slice(0, 4) : "",
+    id: String(detail.id),
+    title: detail.title,
+    year: detail.release_date ? detail.release_date.slice(0, 4) : "",
     poster: primaryPoster,
     imageUrls,
-    plot: data.overview ?? "",
-    genres: (data.genres ?? []).map((g) => g.name).join(", "),
+    plot: detail.overview ?? "",
+    genres: (detail.genres ?? []).map((g) => g.name).join(", "),
     director,
     actors,
     imdbRating:
-      typeof data.vote_average === "number"
-        ? data.vote_average.toFixed(1)
+      typeof detail.vote_average === "number"
+        ? detail.vote_average.toFixed(1)
         : "",
     source: "tmdb" as const,
   });
