@@ -22,8 +22,9 @@ type TmdbDetail = {
 
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id } = await params;
   const token = process.env.TMDB_READ_ACCESS_TOKEN;
   const apiKey = process.env.TMDB_API_KEY;
 
@@ -34,9 +35,7 @@ export async function GET(
     );
   }
 
-  const detailUrl = new URL(
-    `https://api.themoviedb.org/3/movie/${params.id}`,
-  );
+  const detailUrl = new URL(`https://api.themoviedb.org/3/movie/${id}`);
   detailUrl.searchParams.set("append_to_response", "credits,images");
   detailUrl.searchParams.set("include_image_language", "uk,en,null");
   detailUrl.searchParams.set("language", "uk-UA");
