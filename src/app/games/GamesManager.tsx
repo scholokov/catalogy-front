@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
@@ -58,7 +59,7 @@ export default function GamesManager() {
   } | null>(null);
   const [contacts, setContacts] = useState<ContactOption[]>([]);
 
-  const loadCollection = async () => {
+  const loadCollection = useCallback(async () => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -91,11 +92,12 @@ export default function GamesManager() {
     }
 
     setIsLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadCollection();
-  }, []);
+  }, [loadCollection]);
 
   const filteredCollection = useMemo(() => {
     const query = filterQuery.trim().toLowerCase();
@@ -329,7 +331,7 @@ export default function GamesManager() {
             mode="instant"
             label=""
             placeholder="Фільтр"
-            buttonLabel="Фільтри"
+            showButton={false}
           />
         </div>
         <div className={styles.toolbarActions}>
@@ -356,11 +358,13 @@ export default function GamesManager() {
           >
             <div className={styles.posterWrapper}>
               {item.items.poster_url ? (
-                <img
+                <Image
                   className={styles.poster}
                   src={item.items.poster_url}
                   alt={`Обкладинка ${item.items.title}`}
-                  loading="lazy"
+                  width={120}
+                  height={180}
+                  unoptimized
                 />
               ) : (
                 <div className={styles.posterPlaceholder}>No image</div>
@@ -408,11 +412,13 @@ export default function GamesManager() {
             <>
               <div className={styles.posterWrapper}>
                 {game.poster ? (
-                  <img
+                  <Image
                     className={styles.poster}
                     src={game.poster}
                     alt={`Обкладинка ${game.title}`}
-                    loading="lazy"
+                    width={120}
+                    height={180}
+                    unoptimized
                   />
                 ) : (
                   <div className={styles.posterPlaceholder}>No image</div>

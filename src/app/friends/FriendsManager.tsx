@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { supabase } from "@/lib/supabase/client";
 import styles from "./FriendsManager.module.css";
 
@@ -64,13 +65,14 @@ export default function FriendsManager() {
   const [sent, setSent] = useState<Recommendation[]>([]);
   const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [referenceTime, setReferenceTime] = useState(() => Date.now());
 
   const pendingCount = useMemo(
     () => inbox.filter((item) => item.status === "pending").length,
     [inbox],
   );
 
-  const loadProfiles = async (ids: string[]) => {
+  const loadProfiles = useCallback(async (ids: string[]) => {
     if (ids.length === 0) return new Map<string, Profile>();
     const { data } = await supabase
       .from("profiles")
@@ -79,9 +81,9 @@ export default function FriendsManager() {
     const map = new Map<string, Profile>();
     (data ?? []).forEach((profile) => map.set(profile.id, profile));
     return map;
-  };
+  }, []);
 
-  const loadAll = async () => {
+  const loadAll = useCallback(async () => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -139,6 +141,7 @@ export default function FriendsManager() {
 
     const profileMap = await loadProfiles([...profileIds]);
 
+    setReferenceTime(Date.now());
     setContacts(
       contactRows.map((contact) => ({
         ...contact,
@@ -169,16 +172,17 @@ export default function FriendsManager() {
     }
 
     setIsLoading(false);
-  };
+  }, [loadProfiles]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadAll();
-  }, []);
+  }, [loadAll]);
 
-  const inviteStatus = (invite: Invite) => {
-    const now = Date.now();
+  const inviteStatus = (invite: Invite, referenceTime: number) => {
     if (invite.revoked_at) return "Відкликаний";
-    if (new Date(invite.expires_at).getTime() < now) return "Прострочений";
+    if (new Date(invite.expires_at).getTime() < referenceTime)
+      return "Прострочений";
     if (invite.used_count >= invite.max_uses) return "Використаний";
     return "Активний";
   };
@@ -323,10 +327,13 @@ export default function FriendsManager() {
           {inbox.map((item) => (
             <div key={item.id} className={styles.card}>
               {item.items.poster_url ? (
-                <img
+                <Image
                   className={styles.poster}
                   src={item.items.poster_url}
                   alt={`Постер ${item.items.title}`}
+                  width={96}
+                  height={140}
+                  unoptimized
                 />
               ) : (
                 <div className={styles.posterPlaceholder}>No image</div>
@@ -378,10 +385,13 @@ export default function FriendsManager() {
           {sent.map((item) => (
             <div key={item.id} className={styles.card}>
               {item.items.poster_url ? (
-                <img
+                <Image
                   className={styles.poster}
                   src={item.items.poster_url}
                   alt={`Постер ${item.items.title}`}
+                  width={96}
+                  height={140}
+                  unoptimized
                 />
               ) : (
                 <div className={styles.posterPlaceholder}>No image</div>
@@ -408,10 +418,13 @@ export default function FriendsManager() {
             <div key={contact.other_user_id} className={styles.rowCard}>
               <div className={styles.contactInfo}>
                 {contact.profile?.avatar_url ? (
-                  <img
+                  <Image
                     className={styles.avatar}
                     src={contact.profile.avatar_url}
                     alt={contact.profile.username ?? "avatar"}
+                    width={28}
+                    height={28}
+                    unoptimized
                   />
                 ) : (
                   <div className={styles.avatarPlaceholder} />
@@ -452,7 +465,9 @@ export default function FriendsManager() {
             {invites.map((invite) => (
               <div key={invite.id} className={styles.rowCard}>
                 <div>
-                  <p className={styles.contactName}>{inviteStatus(invite)}</p>
+                  <p className={styles.contactName}>
+                    {inviteStatus(invite, referenceTime)}
+                  </p>
                   <p className={styles.meta}>
                     Використано: {invite.used_count}/{invite.max_uses}
                   </p>

@@ -9,6 +9,7 @@ type SearchProps = {
   label?: string;
   placeholder?: string;
   buttonLabel?: string;
+  showButton?: boolean;
   isLoading?: boolean;
   mode?: "submit" | "instant";
   onButtonClick?: () => void;
@@ -19,6 +20,7 @@ export default function Search({
   label = "Пошук",
   placeholder = "Пошук",
   buttonLabel = "Пошук",
+  showButton = true,
   isLoading = false,
   mode = "submit",
   onButtonClick,
@@ -52,14 +54,16 @@ export default function Search({
           value={value}
           onChange={setValue}
         />
-        <button
-          className={`${styles.button} btnPrimary`}
-          type={mode === "submit" ? "submit" : "button"}
-          disabled={isLoading}
-          onClick={mode === "submit" ? undefined : onButtonClick}
-        >
-          {isLoading && mode === "submit" ? "Шукаємо..." : buttonLabel}
-        </button>
+        {showButton ? (
+          <button
+            className={`${styles.button} btnPrimary`}
+            type={mode === "submit" ? "submit" : "button"}
+            disabled={isLoading}
+            onClick={mode === "submit" ? undefined : onButtonClick}
+          >
+            {isLoading && mode === "submit" ? "Шукаємо..." : buttonLabel}
+          </button>
+        ) : null}
       </form>
     </div>
   );

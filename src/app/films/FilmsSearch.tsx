@@ -1,6 +1,7 @@
 "use client";
 
 import CatalogSearch from "@/components/catalog/CatalogSearch";
+import Image from "next/image";
 import { supabase } from "@/lib/supabase/client";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
@@ -98,11 +99,13 @@ export default function FilmsSearch() {
         <>
           <div className={styles.posterWrapper}>
             {film.poster && film.poster !== "N/A" ? (
-              <img
+              <Image
                 className={styles.poster}
                 src={film.poster}
                 alt={`Постер ${film.title}`}
-                loading="lazy"
+                width={120}
+                height={180}
+                unoptimized
               />
             ) : (
               <div className={styles.posterPlaceholder}>No image</div>

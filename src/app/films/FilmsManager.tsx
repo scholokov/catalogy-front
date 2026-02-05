@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
@@ -63,7 +64,7 @@ export default function FilmsManager() {
   } | null>(null);
   const [contacts, setContacts] = useState<ContactOption[]>([]);
 
-  const loadCollection = async () => {
+  const loadCollection = useCallback(async () => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -96,11 +97,12 @@ export default function FilmsManager() {
     }
 
     setIsLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadCollection();
-  }, []);
+  }, [loadCollection]);
 
   const filteredCollection = useMemo(() => {
     const query = filterQuery.trim().toLowerCase();
@@ -339,7 +341,7 @@ export default function FilmsManager() {
             mode="instant"
             label=""
             placeholder="Фільтр"
-            buttonLabel="Фільтри"
+            showButton={false}
           />
         </div>
         <div className={styles.toolbarActions}>
@@ -366,11 +368,13 @@ export default function FilmsManager() {
           >
             <div className={styles.posterWrapper}>
               {item.items.poster_url ? (
-                <img
+                <Image
                   className={styles.poster}
                   src={item.items.poster_url}
                   alt={`Постер ${item.items.title}`}
-                  loading="lazy"
+                  width={120}
+                  height={180}
+                  unoptimized
                 />
               ) : (
                 <div className={styles.posterPlaceholder}>No image</div>
@@ -430,11 +434,13 @@ export default function FilmsManager() {
             <>
               <div className={styles.posterWrapper}>
                 {film.poster && film.poster !== "N/A" ? (
-                  <img
+                  <Image
                     className={styles.poster}
                     src={film.poster}
                     alt={`Постер ${film.title}`}
-                    loading="lazy"
+                    width={120}
+                    height={180}
+                    unoptimized
                   />
                 ) : (
                   <div className={styles.posterPlaceholder}>No image</div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import styles from "./CatalogModal.module.css";
 
 type CatalogModalProps = {
@@ -206,10 +207,13 @@ export default function CatalogModal({
         <div className={styles.content}>
           <div className={styles.posterBlock}>
             {images.length > 0 ? (
-              <img
+              <Image
                 className={styles.poster}
                 src={images[activeImageIndex]}
                 alt={title}
+                width={320}
+                height={480}
+                unoptimized
               />
             ) : (
               <div className={styles.posterPlaceholder}>No image</div>

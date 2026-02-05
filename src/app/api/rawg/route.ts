@@ -39,7 +39,7 @@ export async function GET(request: Request) {
   const results = (data.results ?? []).map((game) => ({
     id: String(game.id),
     title: game.name,
-    rating: typeof game.rating === "number" ? game.rating : null,
+    rating: Number.isFinite(game.rating) ? game.rating : null,
     released: game.released ?? "",
     poster: game.background_image ?? "",
     genres: (game.genres ?? []).map((g) => g.name).join(", "),

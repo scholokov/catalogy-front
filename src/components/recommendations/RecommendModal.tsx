@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import styles from "./RecommendModal.module.css";
 
 type ContactOption = {
@@ -116,10 +117,13 @@ export default function RecommendModal({
                     disabled={isSending}
                   />
                   {contact.avatarUrl ? (
-                    <img
+                    <Image
                       src={contact.avatarUrl}
                       alt={contact.name}
                       className={styles.avatar}
+                      width={28}
+                      height={28}
+                      unoptimized
                     />
                   ) : (
                     <div className={styles.avatarPlaceholder} />

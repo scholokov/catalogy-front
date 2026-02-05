@@ -1,6 +1,7 @@
 "use client";
 
 import CatalogSearch from "@/components/catalog/CatalogSearch";
+import Image from "next/image";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
 type GameResult = {
@@ -26,11 +27,13 @@ export default function GamesSearch() {
         <>
           <div className={styles.posterWrapper}>
             {game.cover ? (
-              <img
+              <Image
                 className={styles.poster}
                 src={game.cover}
                 alt={`Обкладинка ${game.title}`}
-                loading="lazy"
+                width={120}
+                height={180}
+                unoptimized
               />
             ) : (
               <div className={styles.posterPlaceholder}>No image</div>
