@@ -249,6 +249,138 @@ body {
   margin: 0 auto;
 }
 
+.heroSection {
+  position: relative;
+  min-height: 100vh;
+}
+
+.heroMedia {
+  position: absolute;
+  inset: 0;
+}
+
+.heroImage {
+  object-fit: cover;
+}
+
+.heroText {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  min-height: 100vh;
+  padding: 48px 24px;
+}
+
+.contentImage {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.contentMedia {
+  position: relative;
+}
+
+.contentText {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 24px;
+}
+
+.textBlock {
+  opacity: 0;
+}
+
+@keyframes textFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.textFadeIn {
+  animation: textFadeIn 4.5s ease forwards;
+}
+
+.joinBar {
+  position: fixed;
+  left: 50%;
+  top: 24px;
+  transform: translateX(-50%);
+  width: min(1600px, calc(100% - 32px));
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 24px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.joinButton {
+  pointer-events: auto;
+  font-size: 18px;
+}
+
+.joinButtonSolid {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  border: 1px solid transparent;
+}
+
+.joinButtonTransparent {
+  background: transparent;
+  border: 1px solid #ffffff;
+  color: #ffffff;
+}
+
+.authModalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 18, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 70;
+}
+
+.authModal {
+  width: 100%;
+  max-width: 520px;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  padding: 32px;
+  background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.authModalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.authClose {
+  height: 32px;
+  width: 32px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
 * {
   box-sizing: border-box;
   padding: 0;

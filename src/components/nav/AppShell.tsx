@@ -1,10 +1,11 @@
 "use client";
 
-import { ReactNode, useEffect, useMemo, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import LogoutButton from "@/components/nav/LogoutButton";
+import HomeUnauthPage from "@/app/HomeUnauthPage";
 
 type AppShellProps = {
   children: ReactNode;
@@ -13,14 +14,8 @@ type AppShellProps = {
 export default function AppShell({ children }: AppShellProps) {
   const [hasSession, setHasSession] = useState<boolean | null>(null);
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const router = useRouter();
   const isAuthRoute = pathname.startsWith("/auth");
-
-  const fullPath = useMemo(() => {
-    const query = searchParams.toString();
-    return query ? `${pathname}?${query}` : pathname;
-  }, [pathname, searchParams]);
 
   useEffect(() => {
     let isMounted = true;
@@ -46,15 +41,21 @@ export default function AppShell({ children }: AppShellProps) {
   useEffect(() => {
     if (isAuthRoute) return;
     if (hasSession === false) {
-      router.replace(`/auth?redirect=${encodeURIComponent(fullPath)}`);
+      if (pathname !== "/") {
+        const currentPath = `${window.location.pathname}${window.location.search}`;
+        router.replace(`/auth?redirect=${encodeURIComponent(currentPath)}`);
+      }
     }
-  }, [fullPath, hasSession, isAuthRoute, router]);
+  }, [hasSession, isAuthRoute, pathname, router]);
 
   if (isAuthRoute) {
     return <>{children}</>;
   }
 
   if (!hasSession) {
+    if (pathname === "/") {
+      return <HomeUnauthPage />;
+    }
     return null;
   }
 

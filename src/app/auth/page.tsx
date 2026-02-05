@@ -88,7 +88,17 @@ export default function AuthPage() {
   return (
     <div className={styles.page}>
       <main className={styles.card}>
-        <h1 className={styles.title}>Авторизація</h1>
+        <div className={styles.header}>
+          <h1 className={styles.title}>Авторизація</h1>
+          <button
+            type="button"
+            className={styles.closeButton}
+            onClick={() => router.push("/")}
+            aria-label="Закрити"
+          >
+            ✕
+          </button>
+        </div>
         <p className={styles.text}>Увійди або зареєструйся.</p>
 
         <form className={styles.form} onSubmit={handleSignIn}>
