@@ -85,7 +85,7 @@ export default function GamesManager() {
       setMessage("Не вдалося завантажити колекцію.");
       setCollection([]);
     } else {
-      setCollection((data as GameCollectionItem[]) ?? []);
+      setCollection((data as unknown as GameCollectionItem[]) ?? []);
       if (!data || data.length === 0) {
         setMessage("Колекція порожня.");
       }
