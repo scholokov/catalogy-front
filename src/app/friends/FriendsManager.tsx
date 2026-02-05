@@ -131,8 +131,8 @@ export default function FriendsManager() {
 
     const contactRows = (contactsRes.data ?? []) as Contact[];
     const inviteRows = (invitesRes.data ?? []) as Invite[];
-    const inboxRows = (inboxRes.data ?? []) as Recommendation[];
-    const sentRows = (sentRes.data ?? []) as Recommendation[];
+    const inboxRows = (inboxRes.data ?? []) as unknown as Recommendation[];
+    const sentRows = (sentRes.data ?? []) as unknown as Recommendation[];
 
     const profileIds = new Set<string>();
     contactRows.forEach((contact) => profileIds.add(contact.other_user_id));
