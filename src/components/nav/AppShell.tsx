@@ -39,12 +39,10 @@ export default function AppShell({ children }: AppShellProps) {
   }, []);
 
   useEffect(() => {
-    if (isAuthRoute) return;
+    if (isAuthRoute || pathname === "/") return;
     if (hasSession === false) {
-      if (pathname !== "/") {
-        const currentPath = `${window.location.pathname}${window.location.search}`;
-        router.replace(`/auth?redirect=${encodeURIComponent(currentPath)}`);
-      }
+      const currentPath = `${window.location.pathname}${window.location.search}`;
+      router.replace(`/auth?redirect=${encodeURIComponent(currentPath)}`);
     }
   }, [hasSession, isAuthRoute, pathname, router]);
 
