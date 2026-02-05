@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } },
+  { params }: { params: Promise<{ id: string }> },
 ) {
+  const { id } = await params;
   const apiKey = process.env.RAWG_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
@@ -12,7 +13,7 @@ export async function GET(
     );
   }
 
-  const detailUrl = new URL(`https://api.rawg.io/api/games/${params.id}`);
+  const detailUrl = new URL(`https://api.rawg.io/api/games/${id}`);
   detailUrl.searchParams.set("key", apiKey);
 
   const response = await fetch(detailUrl.toString());
