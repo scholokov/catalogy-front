@@ -41,6 +41,11 @@ export default function AuthPage() {
     };
   }, [redirectTo, router]);
 
+  useEffect(() => {
+    if (!session || redirectTo) return;
+    router.replace("/");
+  }, [redirectTo, router, session]);
+
   const handleSignIn = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsLoading(true);
