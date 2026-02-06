@@ -13,6 +13,7 @@ type SearchProps = {
   isLoading?: boolean;
   mode?: "submit" | "instant";
   onButtonClick?: () => void;
+  initialValue?: string;
 };
 
 export default function Search({
@@ -24,9 +25,16 @@ export default function Search({
   isLoading = false,
   mode = "submit",
   onButtonClick,
+  initialValue,
 }: SearchProps) {
   const inputId = useId();
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(initialValue ?? "");
+
+  useEffect(() => {
+    if (initialValue === undefined) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setValue(initialValue);
+  }, [initialValue]);
 
   useEffect(() => {
     if (mode !== "instant" || !onSearch) return;

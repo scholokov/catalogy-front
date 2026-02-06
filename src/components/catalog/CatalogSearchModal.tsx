@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Search from "@/components/search/Search";
 import listStyles from "@/components/catalog/CatalogSearch.module.css";
 import styles from "./CatalogSearchModal.module.css";
@@ -12,6 +12,7 @@ type CatalogSearchModalProps<T> = {
   getKey: (item: T) => string;
   onSelect: (item: T) => void;
   onClose: () => void;
+  initialQuery?: string;
   emptyQueryMessage?: string;
   emptyResultsMessage?: string;
   errorMessage?: string;
@@ -24,6 +25,7 @@ export default function CatalogSearchModal<T>({
   getKey,
   onSelect,
   onClose,
+  initialQuery,
   emptyQueryMessage = "Введіть запит для пошуку.",
   emptyResultsMessage = "Нічого не знайдено.",
   errorMessage = "Не вдалося виконати пошук.",
@@ -32,30 +34,39 @@ export default function CatalogSearchModal<T>({
   const [message, setMessage] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSearch = async (query: string) => {
-    const trimmed = query.trim();
-    if (!trimmed) {
-      setResults([]);
-      setMessage(emptyQueryMessage);
-      return;
-    }
+  const handleSearch = useCallback(
+    async (query: string) => {
+      const trimmed = query.trim();
+      if (!trimmed) {
+        setResults([]);
+        setMessage(emptyQueryMessage);
+        return;
+      }
 
-    setIsLoading(true);
-    setMessage("");
+      setIsLoading(true);
+      setMessage("");
 
-    try {
-      const nextResults = await onSearch(trimmed);
-      setResults(nextResults);
-      setMessage(nextResults.length === 0 ? emptyResultsMessage : "");
-    } catch (error) {
-      const messageFromError =
-        error instanceof Error && error.message ? error.message : errorMessage;
-      setResults([]);
-      setMessage(messageFromError);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+      try {
+        const nextResults = await onSearch(trimmed);
+        setResults(nextResults);
+        setMessage(nextResults.length === 0 ? emptyResultsMessage : "");
+      } catch (error) {
+        const messageFromError =
+          error instanceof Error && error.message ? error.message : errorMessage;
+        setResults([]);
+        setMessage(messageFromError);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [emptyQueryMessage, emptyResultsMessage, errorMessage, onSearch],
+  );
+
+  useEffect(() => {
+    const trimmed = initialQuery?.trim();
+    if (!trimmed) return;
+    void handleSearch(trimmed);
+  }, [initialQuery, handleSearch]);
 
   return (
     <div className={styles.overlay} role="dialog" aria-modal="true" onClick={onClose}>
@@ -72,7 +83,11 @@ export default function CatalogSearchModal<T>({
           </button>
         </div>
         <div className={styles.body}>
-          <Search onSearch={handleSearch} isLoading={isLoading} />
+          <Search
+            onSearch={handleSearch}
+            isLoading={isLoading}
+            initialValue={initialQuery}
+          />
           {message ? <p className={listStyles.message}>{message}</p> : null}
           <div className={`${listStyles.results} ${styles.results}`}>
             {results.map((item) => (

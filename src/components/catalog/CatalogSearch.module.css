@@ -143,6 +143,30 @@
   line-height: 1.6;
 }
 
+.resultPlotClamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.plotBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plotToggle {
+  font-size: 13px;
+  color: var(--color-accent);
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.plotToggle:hover {
+  text-decoration: underline;
+}
+
 .userMeta {
   display: grid;
   gap: 4px;

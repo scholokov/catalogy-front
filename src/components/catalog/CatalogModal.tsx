@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import Image from "next/image";
 import styles from "./CatalogModal.module.css";
 
@@ -45,6 +45,7 @@ export default function CatalogModal({
   submitLabel = "Додати",
   children,
 }: CatalogModalProps) {
+  const viewedAtId = useId();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const images = useMemo(() => {
     if (imageUrls && imageUrls.length > 0) {
@@ -183,6 +184,8 @@ export default function CatalogModal({
     setActiveImageIndex((prev) => (prev + 1) % images.length);
   };
 
+  const viewedAtDisplay = isViewed ? viewedAt : "";
+
   return (
     <div
       className={styles.overlay}
@@ -193,15 +196,36 @@ export default function CatalogModal({
       <div className={styles.modal} onClick={(event) => event.stopPropagation()}>
         <div className={styles.header}>
           <h2 className={styles.title}>{title}</h2>
-          <button
-            type="button"
-            className={`${styles.closeButton} btnSecondary`}
-            onClick={onClose}
-            aria-label="Закрити"
-            disabled={isSaving}
-          >
-            ✕
-          </button>
+          <div className={styles.headerActions}>
+            {onDelete ? (
+              <button
+                type="button"
+                className={`${styles.iconButton} ${styles.deleteButton}`}
+                onClick={handleDelete}
+                aria-label="Видалити"
+                disabled={isSaving || isDeleting}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 -960 960 960"
+                  width="20"
+                  height="20"
+                  aria-hidden="true"
+                >
+                  <path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z" />
+                </svg>
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={`${styles.iconButton} btnSecondary`}
+              onClick={onClose}
+              aria-label="Закрити"
+              disabled={isSaving}
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         <div className={styles.content}>
@@ -245,16 +269,6 @@ export default function CatalogModal({
             <div className={styles.formBlock}>
               <div className={styles.formRow}>
                 <label className={styles.label}>
-                  Дата перегляду
-                  <input
-                    className={styles.input}
-                    type="date"
-                  value={viewedAt}
-                  onChange={(event) => setViewedAt(event.target.value)}
-                  disabled={isSaving}
-                  />
-                </label>
-                <label className={styles.label}>
                   Коментар
                   <textarea
                     className={styles.textarea}
@@ -264,17 +278,6 @@ export default function CatalogModal({
                   />
                 </label>
               </div>
-
-              <label className={styles.checkboxRow}>
-                <input
-                  className={styles.checkbox}
-                  type="checkbox"
-                  checked={recommendSimilar}
-                  onChange={(event) => setRecommendSimilar(event.target.checked)}
-                  disabled={isSaving}
-                />
-                Рекомендувати подібне
-              </label>
 
               <div className={styles.checkboxRow}>
                 <label className={styles.checkboxLabel}>
@@ -302,10 +305,30 @@ export default function CatalogModal({
                 <span className={styles.percentLabel}>%</span>
               </div>
 
-              <label className={styles.label}>
-                Особистий рейтинг
+              <label
+                className={`${styles.label} ${styles.inlineLabel} ${
+                  !isViewed ? styles.labelDisabled : ""
+                }`}
+              >
+                <span>Дата перегляду</span>
+                <input
+                  id={viewedAtId}
+                  className={`${styles.input} ${styles.dateInput}`}
+                  type="date"
+                  value={viewedAtDisplay}
+                  onChange={(event) => setViewedAt(event.target.value)}
+                  disabled={!isViewed || isSaving}
+                />
+              </label>
+
+              <label
+                className={`${styles.label} ${styles.inlineLabel} ${
+                  !isViewed ? styles.labelDisabled : ""
+                }`}
+              >
+                <span>Особистий рейтинг</span>
                 <select
-                  className={styles.select}
+                  className={`${styles.select} ${styles.inlineSelect}`}
                   value={rating}
                   onChange={(event) => setRating(Number(event.target.value))}
                   disabled={!isViewed || isSaving}
@@ -317,6 +340,21 @@ export default function CatalogModal({
                   ))}
                 </select>
               </label>
+
+              <label
+                className={`${styles.checkboxRow} ${
+                  !isViewed ? styles.labelDisabled : ""
+                }`}
+              >
+                <input
+                  className={styles.checkbox}
+                  type="checkbox"
+                  checked={recommendSimilar}
+                  onChange={(event) => setRecommendSimilar(event.target.checked)}
+                  disabled={!isViewed || isSaving}
+                />
+                Рекомендувати подібне
+              </label>
             </div>
           </div>
         </div>
@@ -325,16 +363,6 @@ export default function CatalogModal({
         <div className={styles.actions}>
           {extraActions ? (
             <div className={styles.actionsGroup}>{extraActions}</div>
-          ) : null}
-          {onDelete ? (
-            <button
-              type="button"
-              className="btnBase btnSecondary"
-              onClick={handleDelete}
-              disabled={isSaving || isDeleting}
-            >
-              Видалити
-            </button>
           ) : null}
           <button
             type="button"

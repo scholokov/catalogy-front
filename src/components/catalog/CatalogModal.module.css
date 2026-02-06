@@ -30,6 +30,12 @@
   gap: 16px;
 }
 
+.headerActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .title {
   margin: 0;
   font-size: var(--font-size-3xl);
@@ -37,14 +43,14 @@
   font-weight: var(--font-weight-semibold);
 }
 
-.closeButton {
-  height: 36px;
-  width: 36px;
+.iconButton {
+  height: 54px;
+  width: 54px;
   border-radius: var(--radius-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 27px;
   border: none;
   background: transparent;
   color: var(--color-text-muted);
@@ -52,8 +58,23 @@
   cursor: pointer;
 }
 
-.closeButton:hover {
+.iconButton:hover {
   color: var(--color-text-primary);
+}
+
+.iconButton svg {
+  display: block;
+  fill: currentColor;
+  width: 30px;
+  height: 30px;
+}
+
+.deleteButton {
+  color: var(--color-text-primary);
+}
+
+.deleteButton:hover {
+  color: var(--color-accent);
 }
 
 .content {
@@ -142,6 +163,25 @@
   color: var(--color-text-secondary);
 }
 
+.labelDisabled {
+  color: var(--color-text-muted);
+}
+
+.inlineLabel {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dateInput {
+  width: 180px;
+}
+
+.inlineSelect {
+  width: 120px;
+}
+
 .input,
 .textarea,
 .select {
@@ -151,6 +191,13 @@
   background: var(--control-bg);
   color: var(--control-text);
   font-size: var(--font-size-md);
+}
+
+.input:disabled,
+.textarea:disabled,
+.select:disabled {
+  color: var(--color-text-muted);
+  -webkit-text-fill-color: var(--color-text-muted);
 }
 
 .textarea {
@@ -165,6 +212,10 @@
   flex-wrap: wrap;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+
+.checkboxRow.labelDisabled {
+  color: var(--color-text-muted);
 }
 
 .checkboxLabel {

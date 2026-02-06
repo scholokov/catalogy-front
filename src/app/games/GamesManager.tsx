@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import Image from "next/image";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import CatalogModal from "@/components/catalog/CatalogModal";
@@ -53,6 +61,18 @@ export default function GamesManager() {
   const [selectedView, setSelectedView] = useState<GameCollectionItem | null>(
     null,
   );
+  const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(
+    new Set(),
+  );
+  const [overflowDescriptions, setOverflowDescriptions] = useState<Set<string>>(
+    new Set(),
+  );
+  const [recommendedItemIds, setRecommendedItemIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const descriptionRefs = useRef<Map<string, HTMLParagraphElement | null>>(
+    new Map(),
+  );
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
     title: string;
@@ -67,6 +87,7 @@ export default function GamesManager() {
     if (!user) {
       setCollection([]);
       setMessage("Потрібна авторизація.");
+      setRecommendedItemIds(new Set());
       return;
     }
 
@@ -84,8 +105,26 @@ export default function GamesManager() {
     if (error) {
       setMessage("Не вдалося завантажити колекцію.");
       setCollection([]);
+      setRecommendedItemIds(new Set());
     } else {
-      setCollection((data as unknown as GameCollectionItem[]) ?? []);
+      const nextCollection = (data as unknown as GameCollectionItem[]) ?? [];
+      setCollection(nextCollection);
+      const itemIds = nextCollection
+        .map((item) => item.items.id)
+        .filter(Boolean);
+      if (itemIds.length === 0) {
+        setRecommendedItemIds(new Set());
+      } else {
+        const { data: recommendations } = await supabase
+          .from("recommendations")
+          .select("item_id")
+          .eq("from_user_id", user.id)
+          .in("item_id", itemIds);
+        const ids = (recommendations ?? [])
+          .map((row) => row.item_id)
+          .filter((id): id is string => Boolean(id));
+        setRecommendedItemIds(new Set(ids));
+      }
       if (!data || data.length === 0) {
         setMessage("Колекція порожня.");
       }
@@ -180,6 +219,11 @@ export default function GamesManager() {
     }
 
     setMessage("Рекомендацію надіслано.");
+    setRecommendedItemIds((prev) => {
+      const next = new Set(prev);
+      next.add(recommendItem.itemId);
+      return next;
+    });
     return (data as number) ?? 0;
   };
 
@@ -322,6 +366,37 @@ export default function GamesManager() {
     return results.filter((item) => !existingExternalIds.has(item.id));
   };
 
+  const handleExpandDescription = (
+    event: MouseEvent | KeyboardEvent,
+    id: string,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setExpandedDescriptions((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  };
+
+  const formatViewedDate = (value: string) => {
+    const [year, month, day] = value.slice(0, 10).split("-");
+    if (!year || !month || !day) return value.slice(0, 10);
+    return `${day}.${month}.${year}`;
+  };
+
+  useEffect(() => {
+    const next = new Set<string>();
+    descriptionRefs.current.forEach((node, id) => {
+      if (!node) return;
+      if (node.scrollHeight > node.clientHeight + 1) {
+        next.add(id);
+      }
+    });
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOverflowDescriptions(next);
+  }, [filteredCollection, expandedDescriptions]);
+
   return (
     <div className={styles.searchBlock}>
       <div className={styles.toolbar}>
@@ -383,14 +458,55 @@ export default function GamesManager() {
                 </div>
               </div>
               {item.items.description ? (
-                <p className={styles.resultPlot}>{item.items.description}</p>
+                <div className={styles.plotBlock}>
+                  <p
+                    className={`${styles.resultPlot} ${
+                      expandedDescriptions.has(item.id)
+                        ? ""
+                        : styles.resultPlotClamp
+                    }`}
+                    ref={(node) => {
+                      if (node) {
+                        descriptionRefs.current.set(item.id, node);
+                      } else {
+                        descriptionRefs.current.delete(item.id);
+                      }
+                    }}
+                  >
+                    {item.items.description}
+                  </p>
+                  {!expandedDescriptions.has(item.id) &&
+                  overflowDescriptions.has(item.id) ? (
+                    <span
+                      className={styles.plotToggle}
+                      role="button"
+                      tabIndex={0}
+                      onClick={(event) =>
+                        handleExpandDescription(event, item.id)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          handleExpandDescription(event, item.id);
+                        }
+                      }}
+                    >
+                      детальніше...
+                    </span>
+                  ) : null}
+                </div>
               ) : (
                 <p className={styles.resultPlot}>Опис недоступний.</p>
               )}
               <div className={styles.userMeta}>
-                <span>Переглянуто: {item.viewed_at.slice(0, 10)}</span>
-                <span>Відсоток: {item.view_percent}%</span>
-                <span>Рекомендації: {item.recommend_similar ? "так" : "ні"}</span>
+                <span>
+                  Переглянуто:{" "}
+                  {item.is_viewed
+                    ? `${formatViewedDate(item.viewed_at)} (${item.view_percent}%)`
+                    : "ні"}
+                </span>
+                {recommendedItemIds.has(item.items.id) ? (
+                  <span>Рекомендовано друзям</span>
+                ) : null}
                 {item.comment ? <span>Коментар: {item.comment}</span> : null}
               </div>
             </div>
@@ -403,6 +519,7 @@ export default function GamesManager() {
           title="Додати гру"
           onSearch={handleGameSearch}
           getKey={(game) => game.id}
+          initialQuery={filterQuery}
           onSelect={(game) => {
             setSelectedGame(game);
             setIsAddOpen(false);
