@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import LogoutButton from "@/components/nav/LogoutButton";
+import HomeUnauthPage from "@/app/HomeUnauthPage";
 
 type AppShellProps = {
   children: ReactNode;
@@ -38,7 +39,7 @@ export default function AppShell({ children }: AppShellProps) {
   }, []);
 
   useEffect(() => {
-    if (isAuthRoute) return;
+    if (isAuthRoute || pathname === "/") return;
     if (hasSession === false) {
       const currentPath = `${window.location.pathname}${window.location.search}`;
       router.replace(`/auth?redirect=${encodeURIComponent(currentPath)}`);
@@ -50,6 +51,9 @@ export default function AppShell({ children }: AppShellProps) {
   }
 
   if (!hasSession) {
+    if (pathname === "/") {
+      return <HomeUnauthPage />;
+    }
     return null;
   }
 

@@ -54,6 +54,8 @@ type ContactOption = {
 export default function GamesManager() {
   const [collection, setCollection] = useState<GameCollectionItem[]>([]);
   const [filterQuery, setFilterQuery] = useState("");
+  const [filterViewed, setFilterViewed] = useState(true);
+  const [filterPlanned, setFilterPlanned] = useState(true);
   const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -140,13 +142,16 @@ export default function GamesManager() {
 
   const filteredCollection = useMemo(() => {
     const query = filterQuery.trim().toLowerCase();
-    if (!query) return collection;
     return collection.filter((item) => {
+      if (!filterViewed && !filterPlanned) return true;
+      if (item.is_viewed && !filterViewed) return false;
+      if (!item.is_viewed && !filterPlanned) return false;
+      if (!query) return true;
       const title = item.items.title?.toLowerCase() ?? "";
       const description = item.items.description?.toLowerCase() ?? "";
       return title.includes(query) || description.includes(query);
     });
-  }, [collection, filterQuery]);
+  }, [collection, filterPlanned, filterQuery, filterViewed]);
 
   const existingExternalIds = useMemo(() => {
     return new Set(
@@ -417,6 +422,29 @@ export default function GamesManager() {
           >
             Додати
           </button>
+        </div>
+      </div>
+      <div className={styles.filtersRow}>
+        <span className={styles.filtersTitle}>Фільтри</span>
+        <div className={styles.filtersControls}>
+          <label className={styles.filtersOption}>
+            <input
+              className={styles.filtersCheckbox}
+              type="checkbox"
+              checked={filterViewed}
+              onChange={(event) => setFilterViewed(event.target.checked)}
+            />
+            Переглянуто
+          </label>
+          <label className={styles.filtersOption}>
+            <input
+              className={styles.filtersCheckbox}
+              type="checkbox"
+              checked={filterPlanned}
+              onChange={(event) => setFilterPlanned(event.target.checked)}
+            />
+            Заплановано
+          </label>
         </div>
       </div>
 

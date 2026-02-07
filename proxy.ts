@@ -12,7 +12,10 @@ const hasSupabaseAuthCookie = (request: NextRequest) => {
 };
 
 export function proxy(request: NextRequest) {
-  if (request.nextUrl.pathname.startsWith("/auth")) {
+  if (
+    request.nextUrl.pathname === "/" ||
+    request.nextUrl.pathname.startsWith("/auth")
+  ) {
     return NextResponse.next();
   }
 
