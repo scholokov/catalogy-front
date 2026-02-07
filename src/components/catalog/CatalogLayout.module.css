@@ -21,10 +21,23 @@
   gap: 16px;
 }
 
+.headerRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
 .title {
   font-size: 32px;
   font-weight: 600;
   letter-spacing: -0.5px;
+}
+
+.headerRight {
+  font-size: 14px;
+  color: var(--color-text-muted);
 }
 
 .text {

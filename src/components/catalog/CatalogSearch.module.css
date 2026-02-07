@@ -63,7 +63,24 @@
 .results {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+}
+
+.resultsVirtual {
+  position: relative;
+}
+
+.resultsSpacer {
+  position: relative;
+  width: 100%;
+}
+
+.resultItemWrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding-bottom: 16px;
 }
 
 .resultItem {
@@ -187,16 +204,19 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  color: var(--color-text-secondary);
 }
 
 .plotToggle {
   font-size: 13px;
-  color: var(--color-accent);
+  color: inherit;
   cursor: pointer;
   align-self: flex-start;
+  text-decoration: underline;
 }
 
 .plotToggle:hover {
+  color: var(--color-accent);
   text-decoration: underline;
 }
 
@@ -233,6 +253,10 @@
   }
 
   .resultPlot {
+    color: var(--color-text-subtle);
+  }
+
+  .plotBlock {
     color: var(--color-text-subtle);
   }
 }

@@ -10,6 +10,7 @@ import {
   type MouseEvent,
 } from "react";
 import Image from "next/image";
+import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
@@ -51,7 +52,11 @@ type ContactOption = {
   avatarUrl?: string | null;
 };
 
-export default function GamesManager() {
+type GamesManagerProps = {
+  onCountChange?: (count: number) => void;
+};
+
+export default function GamesManager({ onCountChange }: GamesManagerProps) {
   const [collection, setCollection] = useState<GameCollectionItem[]>([]);
   const [filterQuery, setFilterQuery] = useState("");
   const [filterViewed, setFilterViewed] = useState(true);
@@ -75,6 +80,8 @@ export default function GamesManager() {
   const descriptionRefs = useRef<Map<string, HTMLParagraphElement | null>>(
     new Map(),
   );
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [listOffset, setListOffset] = useState(0);
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
     title: string;
@@ -160,6 +167,10 @@ export default function GamesManager() {
         .filter((id): id is string => Boolean(id)),
     );
   }, [collection]);
+
+  useEffect(() => {
+    onCountChange?.(filteredCollection.length);
+  }, [filteredCollection.length, onCountChange]);
 
   const handleSearch = async (query: string) => {
     setFilterQuery(query);
@@ -391,6 +402,24 @@ export default function GamesManager() {
   };
 
   useEffect(() => {
+    const updateOffset = () => {
+      setListOffset(listRef.current?.offsetTop ?? 0);
+    };
+    updateOffset();
+    window.addEventListener("resize", updateOffset);
+    return () => window.removeEventListener("resize", updateOffset);
+  }, []);
+
+  const rowVirtualizer = useWindowVirtualizer({
+    count: filteredCollection.length,
+    estimateSize: () => 260,
+    overscan: 6,
+    scrollMargin: listOffset,
+  });
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
+
+  useEffect(() => {
     const next = new Set<string>();
     descriptionRefs.current.forEach((node, id) => {
       if (!node) return;
@@ -400,7 +429,7 @@ export default function GamesManager() {
     });
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setOverflowDescriptions(next);
-  }, [filteredCollection, expandedDescriptions]);
+  }, [expandedDescriptions, filteredCollection, virtualItems]);
 
   return (
     <div className={styles.searchBlock}>
@@ -451,14 +480,30 @@ export default function GamesManager() {
       {message ? <p className={styles.message}>{message}</p> : null}
       {isLoading ? <p className={styles.message}>Завантаження...</p> : null}
 
-      <div className={styles.results}>
-        {filteredCollection.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`${styles.resultItem} ${styles.resultButton}`}
-            onClick={() => setSelectedView(item)}
-          >
+      <div className={`${styles.results} ${styles.resultsVirtual}`} ref={listRef}>
+        <div
+          className={styles.resultsSpacer}
+          style={{ height: rowVirtualizer.getTotalSize() }}
+        >
+          {virtualItems.map((virtualRow) => {
+            const item = filteredCollection[virtualRow.index];
+            if (!item) return null;
+            return (
+              <div
+                key={item.id}
+                ref={rowVirtualizer.measureElement}
+                className={styles.resultItemWrapper}
+                style={{
+                  transform: `translateY(${
+                    virtualRow.start - rowVirtualizer.options.scrollMargin
+                  }px)`,
+                }}
+              >
+                <button
+                  type="button"
+                  className={`${styles.resultItem} ${styles.resultButton}`}
+                  onClick={() => setSelectedView(item)}
+                >
             <div className={styles.posterWrapper}>
               {item.items.poster_url ? (
                 <Image
@@ -467,6 +512,8 @@ export default function GamesManager() {
                   alt={`Обкладинка ${item.items.title}`}
                   width={120}
                   height={180}
+                  sizes="(max-width: 600px) 100vw, 120px"
+                  loading="lazy"
                   unoptimized
                 />
               ) : (
@@ -538,8 +585,11 @@ export default function GamesManager() {
                 {item.comment ? <span>Коментар: {item.comment}</span> : null}
               </div>
             </div>
-          </button>
-        ))}
+                </button>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {isAddOpen ? (
