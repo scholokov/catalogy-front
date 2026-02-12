@@ -10,11 +10,10 @@ import {
   type MouseEvent,
 } from "react";
 import Image from "next/image";
-import { useWindowVirtualizer } from "@tanstack/react-virtual";
+import { Range, getTrackBackground } from "react-range";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
-import Search from "@/components/search/Search";
 import { supabase } from "@/lib/supabase/client";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
@@ -47,6 +46,7 @@ type FilmCollectionItem = {
     poster_url: string | null;
     external_id: string | null;
     imdb_rating: string | null;
+    year?: number | null;
     type: string;
   };
 };
@@ -61,14 +61,46 @@ type FilmsManagerProps = {
   onCountChange?: (count: number) => void;
 };
 
+type Filters = {
+  query: string;
+  viewed: boolean;
+  planned: boolean;
+  yearRange: [number, number];
+};
+
+const MIN_YEAR = 1950;
+const MAX_YEAR = new Date().getFullYear();
+const PAGE_SIZE = 20;
+const DEFAULT_FILTERS: Filters = {
+  query: "",
+  viewed: true,
+  planned: true,
+  yearRange: [MIN_YEAR, MAX_YEAR],
+};
+
+const clampRange = (range: [number, number], bounds: [number, number]) => {
+  const [min, max] = bounds;
+  const start = Math.min(Math.max(range[0], min), max);
+  const end = Math.max(Math.min(range[1], max), min);
+  return start <= end ? ([start, end] as [number, number]) : ([min, max] as [number, number]);
+};
+
 export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   const [collection, setCollection] = useState<FilmCollectionItem[]>([]);
-  const [filterQuery, setFilterQuery] = useState("");
-  const [filterViewed, setFilterViewed] = useState(true);
-  const [filterPlanned, setFilterPlanned] = useState(true);
+  const [appliedFilters, setAppliedFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [pendingFilters, setPendingFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [hasApplied, setHasApplied] = useState(false);
+  const [yearBounds, setYearBounds] = useState<[number, number]>([
+    MIN_YEAR,
+    MAX_YEAR,
+  ]);
   const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [page, setPage] = useState(0);
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [selectedFilm, setSelectedFilm] = useState<FilmResult | null>(null);
   const [selectedView, setSelectedView] = useState<FilmCollectionItem | null>(
     null,
@@ -82,18 +114,54 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   const [recommendedItemIds, setRecommendedItemIds] = useState<Set<string>>(
     new Set(),
   );
+  const [filmDetails, setFilmDetails] = useState<
+    Record<string, { director?: string; actors?: string; year?: string; genres?: string }>
+  >({});
   const descriptionRefs = useRef<Map<string, HTMLParagraphElement | null>>(
     new Map(),
   );
-  const listRef = useRef<HTMLDivElement | null>(null);
-  const [listOffset, setListOffset] = useState(0);
+  const fetchingDetailsRef = useRef<Set<string>>(new Set());
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const skipNextApplyRef = useRef(false);
+  const loadingPagesRef = useRef<Set<number>>(new Set());
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
     title: string;
   } | null>(null);
   const [contacts, setContacts] = useState<ContactOption[]>([]);
 
-  const loadCollection = useCallback(async () => {
+  const loadRecommendations = useCallback(
+    async (itemIds: string[], shouldReset: boolean) => {
+      if (itemIds.length === 0) {
+        if (shouldReset) setRecommendedItemIds(new Set());
+        return;
+      }
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        if (shouldReset) setRecommendedItemIds(new Set());
+        return;
+      }
+      const { data: recommendations } = await supabase
+        .from("recommendations")
+        .select("item_id")
+        .eq("from_user_id", user.id)
+        .in("item_id", itemIds);
+      const ids = (recommendations ?? [])
+        .map((row) => row.item_id)
+        .filter((id): id is string => Boolean(id));
+      setRecommendedItemIds((prev) => {
+        if (shouldReset) return new Set(ids);
+        const next = new Set(prev);
+        ids.forEach((id) => next.add(id));
+        return next;
+      });
+    },
+    [],
+  );
+
+  const fetchPage = useCallback(async (pageIndex: number, filters: Filters) => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -102,68 +170,210 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       setCollection([]);
       setMessage("Потрібна авторизація.");
       setRecommendedItemIds(new Set());
-      return;
+      setHasMore(false);
+      setIsLoading(false);
+      setIsLoadingMore(false);
+      loadingPagesRef.current.delete(pageIndex);
+      return false;
     }
 
-    setIsLoading(true);
-    setMessage("");
+    const trimmedQuery = filters.query.trim();
+    if (!filters.viewed && !filters.planned) {
+      if (pageIndex === 0) {
+        setCollection([]);
+        setHasMore(false);
+        setMessage("Оберіть фільтри.");
+      }
+      loadingPagesRef.current.delete(pageIndex);
+      return false;
+    }
 
-    const { data, error } = await supabase
+    if (loadingPagesRef.current.has(pageIndex)) {
+      return false;
+    }
+    loadingPagesRef.current.add(pageIndex);
+
+    if (pageIndex === 0) {
+      setIsLoading(true);
+      setMessage("");
+    } else {
+      setIsLoadingMore(true);
+    }
+
+    let query = supabase
       .from("user_views")
       .select(
-        "id, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, type)",
+        "id, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
       )
       .eq("items.type", "film")
       .order("viewed_at", { ascending: false });
 
+    if (filters.viewed !== filters.planned) {
+      query = query.eq("is_viewed", filters.viewed);
+    }
+
+    if (trimmedQuery) {
+      const escaped = trimmedQuery.replaceAll("%", "\\%");
+      query = query.or(
+        `items.title.ilike.%${escaped}%,items.description.ilike.%${escaped}%`,
+      );
+    }
+
+    const [minYear, maxYear] = yearBounds;
+    const [fromYear, toYear] = clampRange(filters.yearRange, yearBounds);
+    const isYearFilterActive = fromYear !== minYear || toYear !== maxYear;
+    if (isYearFilterActive) {
+      query = query.gte("items.year", fromYear).lte("items.year", toYear);
+    }
+
+    const from = pageIndex * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await query.range(from, to);
+
     if (error) {
-      setMessage("Не вдалося завантажити колекцію.");
-      setCollection([]);
-      setRecommendedItemIds(new Set());
+      if (pageIndex === 0) {
+        setMessage("Не вдалося завантажити колекцію.");
+        setCollection([]);
+        setHasMore(false);
+      }
+      setIsLoading(false);
+      setIsLoadingMore(false);
+      loadingPagesRef.current.delete(pageIndex);
+      return false;
     } else {
       const nextCollection = (data as unknown as FilmCollectionItem[]) ?? [];
-      setCollection(nextCollection);
+      setCollection((prev) => {
+        if (pageIndex === 0) {
+          return nextCollection;
+        }
+        const existingIds = new Set(prev.map((item) => item.id));
+        const merged = [...prev];
+        nextCollection.forEach((item) => {
+          if (!existingIds.has(item.id)) {
+            merged.push(item);
+          }
+        });
+        return merged;
+      });
+      const nextHasMore = nextCollection.length === PAGE_SIZE;
+      setHasMore(nextHasMore);
+      setPage(pageIndex);
+      if (pageIndex === 0 && nextCollection.length === 0) {
+        setMessage("Колекція порожня.");
+      }
+
       const itemIds = nextCollection
         .map((item) => item.items.id)
         .filter(Boolean);
-      if (itemIds.length === 0) {
-        setRecommendedItemIds(new Set());
-      } else {
-        const { data: recommendations } = await supabase
-          .from("recommendations")
-          .select("item_id")
-          .eq("from_user_id", user.id)
-          .in("item_id", itemIds);
-        const ids = (recommendations ?? [])
-          .map((row) => row.item_id)
-          .filter((id): id is string => Boolean(id));
-        setRecommendedItemIds(new Set(ids));
+      await loadRecommendations(itemIds, pageIndex === 0);
+      setIsLoading(false);
+      setIsLoadingMore(false);
+      loadingPagesRef.current.delete(pageIndex);
+      return nextHasMore;
+    }
+  }, [loadRecommendations, yearBounds]);
+
+  useEffect(() => {
+    if (!hasApplied) return;
+    if (skipNextApplyRef.current) {
+      skipNextApplyRef.current = false;
+      return;
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchPage(0, appliedFilters);
+  }, [appliedFilters, fetchPage, hasApplied]);
+
+  useEffect(() => {
+    if (hasApplied) return;
+    skipNextApplyRef.current = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAppliedFilters(DEFAULT_FILTERS);
+    setHasApplied(true);
+    void (async () => {
+      const canLoadMore = await fetchPage(0, DEFAULT_FILTERS);
+      if (canLoadMore) {
+        await fetchPage(1, DEFAULT_FILTERS);
       }
-      if (!data || data.length === 0) {
-        setMessage("Колекція порожня.");
-      }
+    })();
+  }, [fetchPage, hasApplied]);
+
+  const loadYearBounds = useCallback(async () => {
+    const { data: minRows } = await supabase
+      .from("items")
+      .select("year")
+      .eq("type", "film")
+      .not("year", "is", null)
+      .order("year", { ascending: true })
+      .limit(1);
+    const { data: maxRows } = await supabase
+      .from("items")
+      .select("year")
+      .eq("type", "film")
+      .not("year", "is", null)
+      .order("year", { ascending: false })
+      .limit(1);
+
+    const min = Number(minRows?.[0]?.year);
+    const max = Number(maxRows?.[0]?.year);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      return;
     }
 
-    setIsLoading(false);
+    const bounds: [number, number] = [min, max];
+    setYearBounds(bounds);
+    setPendingFilters((prev) => {
+      const nextRange = clampRange(prev.yearRange, bounds);
+      if (
+        nextRange[0] === prev.yearRange[0] &&
+        nextRange[1] === prev.yearRange[1]
+      ) {
+        return prev;
+      }
+      return { ...prev, yearRange: nextRange };
+    });
+    setAppliedFilters((prev) => {
+      const nextRange = clampRange(prev.yearRange, bounds);
+      if (
+        nextRange[0] === prev.yearRange[0] &&
+        nextRange[1] === prev.yearRange[1]
+      ) {
+        return prev;
+      }
+      return { ...prev, yearRange: nextRange };
+    });
   }, []);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadCollection();
-  }, [loadCollection]);
+    void loadYearBounds();
+  }, [loadYearBounds]);
 
-  const filteredCollection = useMemo(() => {
-    const query = filterQuery.trim().toLowerCase();
-    return collection.filter((item) => {
-      if (!filterViewed && !filterPlanned) return true;
-      if (item.is_viewed && !filterViewed) return false;
-      if (!item.is_viewed && !filterPlanned) return false;
-      if (!query) return true;
-      const title = item.items.title?.toLowerCase() ?? "";
-      const description = item.items.description?.toLowerCase() ?? "";
-      return title.includes(query) || description.includes(query);
+  useEffect(() => {
+    if (!hasApplied || isLoading || isLoadingMore || !hasMore) return;
+    const node = loadMoreRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry.isIntersecting) return;
+      void fetchPage(page + 1, appliedFilters);
     });
-  }, [collection, filterPlanned, filterQuery, filterViewed]);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [appliedFilters, fetchPage, hasApplied, hasMore, isLoading, isLoadingMore, page]);
+
+  useEffect(() => {
+    onCountChange?.(collection.length);
+  }, [collection.length, onCountChange]);
+
+  useEffect(() => {
+    if (!isFiltersOpen) return;
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsFiltersOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isFiltersOpen]);
 
   const existingExternalIds = useMemo(() => {
     return new Set(
@@ -172,14 +382,6 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
         .filter((id): id is string => Boolean(id)),
     );
   }, [collection]);
-
-  useEffect(() => {
-    onCountChange?.(filteredCollection.length);
-  }, [filteredCollection.length, onCountChange]);
-
-  const handleSearch = async (query: string) => {
-    setFilterQuery(query);
-  };
 
   const loadContacts = async () => {
     const {
@@ -269,6 +471,8 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
 
     const imdbRatingValue =
       film.imdbRating && film.imdbRating !== "N/A" ? film.imdbRating : null;
+    const parsedYear = Number.parseInt(film.year, 10);
+    const yearValue = Number.isNaN(parsedYear) ? null : parsedYear;
 
     const { data: existingItem, error: findError } = await supabase
       .from("items")
@@ -293,6 +497,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
           poster_url: film.poster,
           external_id: film.id,
           imdb_rating: imdbRatingValue,
+          year: yearValue,
         })
         .select("id")
         .single();
@@ -304,14 +509,21 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       itemId = createdItem.id;
     }
 
-    if (itemId && imdbRatingValue) {
+    const itemUpdates: { imdb_rating?: string | null; year?: number | null } = {};
+    if (imdbRatingValue) {
+      itemUpdates.imdb_rating = imdbRatingValue;
+    }
+    if (yearValue) {
+      itemUpdates.year = yearValue;
+    }
+    if (itemId && Object.keys(itemUpdates).length > 0) {
       const { error: updateError } = await supabase
         .from("items")
-        .update({ imdb_rating: imdbRatingValue })
+        .update(itemUpdates)
         .eq("id", itemId);
 
       if (updateError) {
-        throw new Error("Не вдалося оновити рейтинг IMDb.");
+        throw new Error("Не вдалося оновити дані фільму.");
       }
     }
 
@@ -330,7 +542,9 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       throw new Error("Не вдалося зберегти у колекцію.");
     }
 
-    await loadCollection();
+    await loadYearBounds();
+    setHasApplied(true);
+    await fetchPage(0, appliedFilters);
   };
 
   const handleUpdateView = async (
@@ -360,7 +574,8 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       throw new Error("Не вдалося оновити запис.");
     }
 
-    await loadCollection();
+    setHasApplied(true);
+    await fetchPage(0, appliedFilters);
   };
 
   const handleDeleteView = async (viewId: string) => {
@@ -370,7 +585,8 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       throw new Error("Не вдалося видалити запис.");
     }
 
-    await loadCollection();
+    setHasApplied(true);
+    await fetchPage(0, appliedFilters);
   };
 
   const handleTmdbSearch = async (query: string) => {
@@ -407,22 +623,45 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   };
 
   useEffect(() => {
-    const updateOffset = () => {
-      setListOffset(listRef.current?.offsetTop ?? 0);
-    };
-    updateOffset();
-    window.addEventListener("resize", updateOffset);
-    return () => window.removeEventListener("resize", updateOffset);
-  }, []);
+    collection.forEach((item) => {
+      const externalId = item.items.external_id;
+      if (!externalId) return;
+      if (filmDetails[item.items.id] || fetchingDetailsRef.current.has(item.id)) {
+        return;
+      }
 
-  const rowVirtualizer = useWindowVirtualizer({
-    count: filteredCollection.length,
-    estimateSize: () => 260,
-    overscan: 6,
-    scrollMargin: listOffset,
-  });
-
-  const virtualItems = rowVirtualizer.getVirtualItems();
+      fetchingDetailsRef.current.add(item.id);
+      void fetch(`/api/tmdb/${externalId}`)
+        .then(async (response) => {
+          if (!response.ok) return null;
+          return (await response.json()) as FilmResult;
+        })
+        .then((detail) => {
+          if (!detail) return;
+          setFilmDetails((prev) => ({
+            ...prev,
+            [item.items.id]: {
+              director: detail.director,
+              actors: detail.actors,
+              year: detail.year,
+              genres: detail.genres,
+            },
+          }));
+          if (!item.items.year && detail.year) {
+            const parsedYear = Number.parseInt(detail.year.slice(0, 4), 10);
+            if (!Number.isNaN(parsedYear)) {
+              void supabase
+                .from("items")
+                .update({ year: parsedYear })
+                .eq("id", item.items.id);
+            }
+          }
+        })
+        .finally(() => {
+          fetchingDetailsRef.current.delete(item.id);
+        });
+    });
+  }, [collection, filmDetails]);
 
   useEffect(() => {
     const next = new Set<string>();
@@ -434,7 +673,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     });
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setOverflowDescriptions(next);
-  }, [expandedDescriptions, filteredCollection, virtualItems]);
+  }, [expandedDescriptions, collection]);
 
   const handleFilmSearch = async (query: string) => {
     const tmdbResults = await handleTmdbSearch(query);
@@ -443,171 +682,316 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
 
   return (
     <div className={styles.searchBlock}>
-      <div className={styles.toolbar}>
-        <div className={styles.toolbarSearch}>
-          <Search
-            onSearch={handleSearch}
-            mode="instant"
-            label=""
-            placeholder="Фільтр"
-            showButton={false}
-          />
-        </div>
-        <div className={styles.toolbarActions}>
-          <button
-            type="button"
-            className="btnBase btnPrimary"
-            onClick={() => setIsAddOpen(true)}
-          >
-            Додати
-          </button>
-        </div>
-      </div>
-      <div className={styles.filtersRow}>
-        <span className={styles.filtersTitle}>Фільтри</span>
-        <div className={styles.filtersControls}>
-          <label className={styles.filtersOption}>
-            <input
-              className={styles.filtersCheckbox}
-              type="checkbox"
-              checked={filterViewed}
-              onChange={(event) => setFilterViewed(event.target.checked)}
-            />
-            Переглянуто
-          </label>
-          <label className={styles.filtersOption}>
-            <input
-              className={styles.filtersCheckbox}
-              type="checkbox"
-              checked={filterPlanned}
-              onChange={(event) => setFilterPlanned(event.target.checked)}
-            />
-            Заплановано
-          </label>
+      <div className={styles.filtersWrapper}>
+        <div className={styles.toolbar}>
+          <div className={styles.toolbarSearch}>
+            <button
+              type="button"
+              className="btnBase btnSecondary"
+              onClick={() => {
+                setPendingFilters(appliedFilters);
+                setIsFiltersOpen(true);
+              }}
+            >
+              Фільтри
+            </button>
+          </div>
+          <div className={styles.toolbarActions}>
+            <button
+              type="button"
+              className="btnBase btnPrimary"
+              onClick={() => setIsAddOpen(true)}
+            >
+              Додати
+            </button>
+          </div>
         </div>
       </div>
 
+      {!hasApplied ? (
+        <p className={styles.message}>
+          Оберіть фільтри та натисніть &quot;Відобразити&quot;.
+        </p>
+      ) : null}
       {message ? <p className={styles.message}>{message}</p> : null}
       {isLoading ? <p className={styles.message}>Завантаження...</p> : null}
 
-      <div className={`${styles.results} ${styles.resultsVirtual}`} ref={listRef}>
+      <div className={styles.results}>
+        {collection.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`${styles.resultItem} ${styles.resultButton} ${styles.collectionItem}`}
+            onClick={() => setSelectedView(item)}
+          >
+                  <div className={styles.resultHeader}>
+                    <div className={styles.titleRow}>
+                      <h2 className={styles.resultTitle}>{item.items.title}</h2>
+                      <div className={styles.ratingRow}>
+                        <span className={styles.resultRating}>
+                          IMDb: {item.items.imdb_rating ?? "—"}
+                        </span>
+                        <span className={styles.resultRating}>
+                          Мій: {item.rating ?? "—"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className={styles.posterWrapper}>
+                    {item.items.poster_url ? (
+                      <Image
+                        className={styles.poster}
+                        src={item.items.poster_url}
+                        alt={`Постер ${item.items.title}`}
+                        width={180}
+                        height={270}
+                        sizes="(max-width: 600px) 100vw, 120px"
+                        loading="lazy"
+                        unoptimized
+                      />
+                    ) : (
+                      <div className={styles.posterPlaceholder}>No image</div>
+                    )}
+                  </div>
+                  <div className={styles.resultContent}>
+                    {filmDetails[item.items.id]?.year ? (
+                      <p className={styles.resultMeta}>
+                        Рік: {filmDetails[item.items.id]?.year}
+                      </p>
+                    ) : null}
+                    {filmDetails[item.items.id]?.director ? (
+                      <p className={styles.resultMeta}>
+                        Режисер: {filmDetails[item.items.id]?.director}
+                      </p>
+                    ) : null}
+                    {filmDetails[item.items.id]?.actors ? (
+                      <p className={styles.resultMeta}>
+                        Актори: {filmDetails[item.items.id]?.actors}
+                      </p>
+                    ) : null}
+                    {filmDetails[item.items.id]?.genres ? (
+                      <p className={styles.resultMeta}>
+                        Жанри: {filmDetails[item.items.id]?.genres}
+                      </p>
+                    ) : null}
+                    {item.items.description ? (
+                      <div className={styles.plotBlock}>
+                        <p
+                          className={`${styles.resultPlot} ${
+                            expandedDescriptions.has(item.id)
+                              ? ""
+                              : styles.resultPlotClamp
+                          }`}
+                          ref={(node) => {
+                            if (node) {
+                              descriptionRefs.current.set(item.id, node);
+                            } else {
+                              descriptionRefs.current.delete(item.id);
+                            }
+                          }}
+                        >
+                          {item.items.description}
+                        </p>
+                        {!expandedDescriptions.has(item.id) &&
+                        overflowDescriptions.has(item.id) ? (
+                          <span
+                            className={styles.plotToggle}
+                            role="button"
+                            tabIndex={0}
+                            onClick={(event) =>
+                              handleExpandDescription(event, item.id)
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                handleExpandDescription(event, item.id);
+                              }
+                            }}
+                          >
+                            детальніше...
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className={styles.resultPlot}>Опис недоступний.</p>
+                    )}
+                    <div className={styles.userMeta}>
+                      <span>
+                        Переглянуто:{" "}
+                        {item.is_viewed
+                          ? `${formatViewedDate(item.viewed_at)} (${item.view_percent}%)`
+                          : "ні"}
+                      </span>
+                      {recommendedItemIds.has(item.items.id) ? (
+                        <span>Рекомендовано друзям</span>
+                      ) : null}
+                      {item.comment ? <span>Коментар: {item.comment}</span> : null}
+                    </div>
+                  </div>
+          </button>
+        ))}
+      </div>
+      {hasApplied && hasMore ? (
+        <div ref={loadMoreRef} />
+      ) : null}
+      {isLoadingMore ? <p className={styles.message}>Завантаження...</p> : null}
+
+      {isFiltersOpen ? (
         <div
-          className={styles.resultsSpacer}
-          style={{ height: rowVirtualizer.getTotalSize() }}
+          className={styles.filtersOverlay}
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setIsFiltersOpen(false)}
         >
-          {virtualItems.map((virtualRow) => {
-            const item = filteredCollection[virtualRow.index];
-            if (!item) return null;
-            return (
-              <div
-                key={item.id}
-                ref={rowVirtualizer.measureElement}
-                className={styles.resultItemWrapper}
-                style={{
-                  transform: `translateY(${
-                    virtualRow.start - rowVirtualizer.options.scrollMargin
-                  }px)`,
+          <div
+            className={styles.filtersModal}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className={styles.filtersHeader}>
+              <h2 className={styles.filtersTitle}>Фільтри</h2>
+              <button
+                type="button"
+                className={styles.filtersClose}
+                onClick={() => setIsFiltersOpen(false)}
+                aria-label="Закрити"
+              >
+                ✕
+              </button>
+            </div>
+            <label className={styles.filtersField}>
+              Пошук
+              <input
+                className={styles.filtersInput}
+                value={pendingFilters.query}
+                onChange={(event) =>
+                  setPendingFilters((prev) => ({
+                    ...prev,
+                    query: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <div className={styles.rangeBlock}>
+              <div className={styles.rangeHeader}>
+                <span>Рік</span>
+                <span className={styles.rangeValues}>
+                  {pendingFilters.yearRange[0]}–{pendingFilters.yearRange[1]}
+                </span>
+              </div>
+              {yearBounds[0] === yearBounds[1] ? (
+                <div className={styles.rangeTrack}>
+                  <div className={styles.rangeTrackInner} />
+                </div>
+              ) : (
+                <Range
+                  values={pendingFilters.yearRange}
+                  step={1}
+                  min={yearBounds[0]}
+                  max={yearBounds[1]}
+                  onChange={(values) =>
+                    setPendingFilters((prev) => ({
+                      ...prev,
+                      yearRange: values as [number, number],
+                    }))
+                  }
+                  renderTrack={({ props, children }) => (
+                    <div
+                      onMouseDown={props.onMouseDown}
+                      onTouchStart={props.onTouchStart}
+                      className={styles.rangeTrack}
+                    >
+                      <div
+                        ref={props.ref}
+                        className={styles.rangeTrackInner}
+                        style={{
+                          background: getTrackBackground({
+                            values: pendingFilters.yearRange,
+                            colors: [
+                              "var(--color-border)",
+                              "var(--color-accent)",
+                              "var(--color-border)",
+                            ],
+                            min: yearBounds[0],
+                            max: yearBounds[1],
+                          }),
+                        }}
+                      >
+                        {children}
+                      </div>
+                    </div>
+                  )}
+                  renderThumb={({ props }) => {
+                    const { key, ...restProps } = props;
+                    return (
+                      <div
+                        key={key}
+                        {...restProps}
+                        className={styles.rangeThumb}
+                      />
+                    );
+                  }}
+                />
+              )}
+            </div>
+            <div className={styles.filtersControls}>
+              <label className={styles.filtersOption}>
+                <input
+                  className={styles.filtersCheckbox}
+                  type="checkbox"
+                  checked={pendingFilters.viewed}
+                  onChange={(event) =>
+                    setPendingFilters((prev) => ({
+                      ...prev,
+                      viewed: event.target.checked,
+                    }))
+                  }
+                />
+                Переглянуто
+              </label>
+              <label className={styles.filtersOption}>
+                <input
+                  className={styles.filtersCheckbox}
+                  type="checkbox"
+                  checked={pendingFilters.planned}
+                  onChange={(event) =>
+                    setPendingFilters((prev) => ({
+                      ...prev,
+                      planned: event.target.checked,
+                    }))
+                  }
+                />
+                Заплановано
+              </label>
+            </div>
+            <div className={styles.filtersActions}>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
+                onClick={() => setIsFiltersOpen(false)}
+              >
+                Скасувати
+              </button>
+              <button
+                type="button"
+                className="btnBase btnPrimary"
+                onClick={() => {
+                  setAppliedFilters(pendingFilters);
+                  setHasApplied(true);
+                  setIsFiltersOpen(false);
                 }}
               >
-                <button
-                  type="button"
-                  className={`${styles.resultItem} ${styles.resultButton}`}
-                  onClick={() => setSelectedView(item)}
-                >
-            <div className={styles.posterWrapper}>
-              {item.items.poster_url ? (
-                <Image
-                  className={styles.poster}
-                  src={item.items.poster_url}
-                  alt={`Постер ${item.items.title}`}
-                  width={120}
-                  height={180}
-                  sizes="(max-width: 600px) 100vw, 120px"
-                  loading="lazy"
-                  unoptimized
-                />
-              ) : (
-                <div className={styles.posterPlaceholder}>No image</div>
-              )}
+                Відобразити
+              </button>
             </div>
-            <div className={styles.resultContent}>
-              <div className={styles.titleRow}>
-                <h2 className={styles.resultTitle}>{item.items.title}</h2>
-                <div className={styles.ratingRow}>
-                  <span className={styles.resultRating}>
-                    Загальний: {item.items.imdb_rating ?? "—"}
-                  </span>
-                  <span className={styles.resultRating}>
-                    Мій: {item.rating ?? "—"}
-                  </span>
-                </div>
-              </div>
-              {item.items.description ? (
-                <div className={styles.plotBlock}>
-                  <p
-                    className={`${styles.resultPlot} ${
-                      expandedDescriptions.has(item.id)
-                        ? ""
-                        : styles.resultPlotClamp
-                    }`}
-                    ref={(node) => {
-                      if (node) {
-                        descriptionRefs.current.set(item.id, node);
-                      } else {
-                        descriptionRefs.current.delete(item.id);
-                      }
-                    }}
-                  >
-                    {item.items.description}
-                  </p>
-                  {!expandedDescriptions.has(item.id) &&
-                  overflowDescriptions.has(item.id) ? (
-                    <span
-                      className={styles.plotToggle}
-                      role="button"
-                      tabIndex={0}
-                      onClick={(event) =>
-                        handleExpandDescription(event, item.id)
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          handleExpandDescription(event, item.id);
-                        }
-                      }}
-                    >
-                      детальніше...
-                    </span>
-                  ) : null}
-                </div>
-              ) : (
-                <p className={styles.resultPlot}>Опис недоступний.</p>
-              )}
-              <div className={styles.userMeta}>
-                <span>
-                  Переглянуто:{" "}
-                  {item.is_viewed
-                    ? `${formatViewedDate(item.viewed_at)} (${item.view_percent}%)`
-                    : "ні"}
-                </span>
-                {recommendedItemIds.has(item.items.id) ? (
-                  <span>Рекомендовано друзям</span>
-                ) : null}
-                {item.comment ? <span>Коментар: {item.comment}</span> : null}
-              </div>
-            </div>
-                </button>
-              </div>
-            );
-          })}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {isAddOpen ? (
         <CatalogSearchModal
           title="Додати фільм"
           onSearch={handleFilmSearch}
           getKey={(film) => film.id}
-          initialQuery={filterQuery}
+          initialQuery={appliedFilters.query}
           onSelect={async (film) => {
             try {
               const detailResponse = await fetch(`/api/tmdb/${film.id}`);
@@ -633,8 +1017,8 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
                     className={styles.poster}
                     src={film.poster}
                     alt={`Постер ${film.title}`}
-                    width={120}
-                    height={180}
+                        width={180}
+                        height={270}
                     unoptimized
                   />
                 ) : (
@@ -649,7 +1033,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
                   </h2>
                   {film.imdbRating ? (
                     <span className={styles.resultRating}>
-                      Загальний: {film.imdbRating}
+                      IMDb: {film.imdbRating}
                     </span>
                   ) : null}
                 </div>
@@ -681,18 +1065,14 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
         >
           <div className={styles.resultContent}>
             <div className={styles.titleRow}>
-              <h2 className={styles.resultTitle}>
-                {selectedFilm.title}{" "}
-                <span className={styles.resultYear}>({selectedFilm.year})</span>
-              </h2>
               {selectedFilm.imdbRating ? (
                 <span className={styles.resultRating}>
-                  Загальний: {selectedFilm.imdbRating}
+                  IMDb: {selectedFilm.imdbRating}
                 </span>
               ) : null}
             </div>
-            {selectedFilm.genres ? (
-              <p className={styles.resultMeta}>{selectedFilm.genres}</p>
+            {selectedFilm.year ? (
+              <p className={styles.resultMeta}>Рік: {selectedFilm.year}</p>
             ) : null}
             {selectedFilm.director ? (
               <p className={styles.resultMeta}>
@@ -701,6 +1081,9 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
             ) : null}
             {selectedFilm.actors ? (
               <p className={styles.resultMeta}>Актори: {selectedFilm.actors}</p>
+            ) : null}
+            {selectedFilm.genres ? (
+              <p className={styles.resultMeta}>Жанри: {selectedFilm.genres}</p>
             ) : null}
             <p className={styles.resultPlot}>
               {selectedFilm.plot ? selectedFilm.plot : "Опис недоступний."}
@@ -742,8 +1125,33 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
         >
           <div className={styles.resultContent}>
             <div className={styles.titleRow}>
-              <h2 className={styles.resultTitle}>{selectedView.items.title}</h2>
+              <span className={styles.resultRating}>
+                IMDb: {selectedView.items.imdb_rating ?? "—"}
+              </span>
+              <span className={styles.resultRating}>
+                Мій: {selectedView.rating ?? "—"}
+              </span>
             </div>
+            {filmDetails[selectedView.items.id]?.year ? (
+              <p className={styles.resultMeta}>
+                Рік: {filmDetails[selectedView.items.id]?.year}
+              </p>
+            ) : null}
+            {filmDetails[selectedView.items.id]?.director ? (
+              <p className={styles.resultMeta}>
+                Режисер: {filmDetails[selectedView.items.id]?.director}
+              </p>
+            ) : null}
+            {filmDetails[selectedView.items.id]?.actors ? (
+              <p className={styles.resultMeta}>
+                Актори: {filmDetails[selectedView.items.id]?.actors}
+              </p>
+            ) : null}
+            {filmDetails[selectedView.items.id]?.genres ? (
+              <p className={styles.resultMeta}>
+                Жанри: {filmDetails[selectedView.items.id]?.genres}
+              </p>
+            ) : null}
             {selectedView.items.description ? (
               <p className={styles.resultPlot}>{selectedView.items.description}</p>
             ) : (

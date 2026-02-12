@@ -71,6 +71,14 @@
 
 @media (max-width: 800px) {
   .modal {
-    max-height: 90vh;
+    max-height: 100vh;
+    height: 100vh;
+    width: 100vw;
+    max-width: 100vw;
+    border-radius: 0;
+  }
+
+  .results {
+    max-height: none;
   }
 }

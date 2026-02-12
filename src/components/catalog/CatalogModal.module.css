@@ -23,6 +23,25 @@
   position: relative;
 }
 
+.modalWide {
+  max-width: 1280px;
+}
+
+.modalWide .content {
+  grid-template-columns: 560px 1fr;
+}
+
+.modalWide .poster {
+  object-fit: contain;
+  height: auto;
+  aspect-ratio: 16 / 9;
+}
+
+.modalWide .posterPlaceholder {
+  height: auto;
+  aspect-ratio: 16 / 9;
+}
+
 .header {
   display: flex;
   align-items: flex-start;
@@ -269,11 +288,20 @@
   display: flex;
   gap: 12px;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .actionsGroup {
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.actionsPrimary {
+  display: inline-flex;
+  gap: 12px;
+  flex-wrap: nowrap;
 }
 
 .confirmOverlay {
@@ -318,8 +346,16 @@
 }
 
 @media (max-width: 800px) {
+  .overlay {
+    padding: 0;
+  }
+
   .modal {
-    max-height: 90vh;
+    max-height: 100vh;
+    height: 100vh;
+    width: 100vw;
+    max-width: 100vw;
+    border-radius: 0;
     overflow-y: auto;
   }
 
@@ -327,8 +363,23 @@
     grid-template-columns: 1fr;
   }
 
+  .posterBlock {
+    height: 440px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
   .poster,
   .posterPlaceholder {
-    height: 320px;
+    height: 440px;
+  }
+
+  .poster {
+    display: block;
+    width: auto;
+    height: 100%;
+    max-width: 100%;
+    object-fit: contain;
   }
 }

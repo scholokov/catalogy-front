@@ -9,6 +9,7 @@ type CatalogModalProps = {
   posterUrl?: string;
   imageUrls?: string[];
   onClose: () => void;
+  size?: "default" | "wide";
   onAdd?: (payload: {
     viewedAt: string;
     comment: string;
@@ -42,6 +43,7 @@ export default function CatalogModal({
   onDelete,
   extraActions,
   initialValues,
+  size = "default",
   submitLabel = "Додати",
   children,
 }: CatalogModalProps) {
@@ -193,7 +195,10 @@ export default function CatalogModal({
       aria-modal="true"
       onClick={onClose}
     >
-      <div className={styles.modal} onClick={(event) => event.stopPropagation()}>
+      <div
+        className={`${styles.modal} ${size === "wide" ? styles.modalWide : ""}`}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className={styles.header}>
           <h2 className={styles.title}>{title}</h2>
           <div className={styles.headerActions}>
@@ -364,22 +369,24 @@ export default function CatalogModal({
           {extraActions ? (
             <div className={styles.actionsGroup}>{extraActions}</div>
           ) : null}
-          <button
-            type="button"
-            className="btnBase btnSecondary"
-            onClick={onClose}
-            disabled={isSaving || isDeleting}
-          >
-            Відмінити
-          </button>
-          <button
-            type="button"
-            className="btnBase btnPrimary"
-            onClick={handleAdd}
-            disabled={isSaving || isDeleting}
-          >
-            {isSaving ? "Збереження..." : submitLabel}
-          </button>
+          <div className={styles.actionsPrimary}>
+            <button
+              type="button"
+              className="btnBase btnSecondary"
+              onClick={onClose}
+              disabled={isSaving || isDeleting}
+            >
+              Відмінити
+            </button>
+            <button
+              type="button"
+              className="btnBase btnPrimary"
+              onClick={handleAdd}
+              disabled={isSaving || isDeleting}
+            >
+              {isSaving ? "Збереження..." : submitLabel}
+            </button>
+          </div>
         </div>
         {isConfirmOpen ? (
           <div

@@ -41,6 +41,117 @@
   flex-wrap: wrap;
 }
 
+.filtersWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.filtersOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 18, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 70;
+}
+
+.filtersModal {
+  width: 100%;
+  max-width: 520px;
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.filtersHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.filtersClose {
+  height: 32px;
+  width: 32px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.filtersField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+.filtersInput {
+  height: 40px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--control-text);
+  padding: 0 12px;
+}
+
+.filtersActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rangeBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rangeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+.rangeValues {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.rangeTrack {
+  height: 32px;
+  display: flex;
+  align-items: center;
+}
+
+.rangeTrackInner {
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.rangeThumb {
+  height: 18px;
+  width: 18px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  border: 2px solid var(--color-accent);
+  box-shadow: var(--shadow-soft);
+}
+
 .filtersOption {
   display: inline-flex;
   align-items: center;
@@ -61,8 +172,9 @@
 }
 
 .results {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
 }
 
 .resultsVirtual {
@@ -85,13 +197,70 @@
 
 .resultItem {
   display: grid;
-  grid-template-columns: 120px 1fr;
+  grid-template-columns: 180px 1fr;
   gap: 16px;
   padding: 16px;
   border-radius: 12px;
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.collectionItem {
+  grid-template-areas:
+    "poster header"
+    "poster content";
+  height: 300px;
+  overflow: hidden;
+}
+
+.gameCollectionItem {
+  grid-template-columns: 324px 1fr;
+  height: 210px;
+  width: calc(100% - 20px);
+  margin: 0 auto;
+}
+
+.gameCollectionItem .posterWrapper {
+  width: 324px;
+  height: 180px;
+}
+
+.resultHeader {
+  grid-area: header;
+}
+
+.collectionItem .posterWrapper {
+  grid-area: poster;
+}
+
+.collectionItem .resultContent {
+  grid-area: content;
+}
+
+.collectionItem .plotBlock,
+.collectionItem .resultPlot {
+  display: none;
+}
+
+.collectionItem .resultContent {
+  overflow: hidden;
+}
+
+.collectionItem .userMeta {
+  overflow: hidden;
+}
+
+.collectionItem .userMeta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collectionItem .resultMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .resultButton {
@@ -125,8 +294,8 @@
 }
 
 .posterWrapper {
-  width: 120px;
-  height: 180px;
+  width: 180px;
+  height: 270px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -164,6 +333,8 @@
   align-items: center;
   gap: 12px;
   margin-left: auto;
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 
 .resultTitle {
@@ -195,6 +366,7 @@
 
 .resultPlotClamp {
   display: -webkit-box;
+  line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
@@ -231,22 +403,6 @@
   margin-top: 12px;
 }
 
-@media (max-width: 600px) {
-  .resultItem {
-    grid-template-columns: 1fr;
-  }
-
-  .titleRow {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .posterWrapper {
-    width: 100%;
-    height: 200px;
-  }
-}
-
 @media (prefers-color-scheme: dark) {
   .posterWrapper {
     background: var(--color-surface-muted);
@@ -258,5 +414,55 @@
 
   .plotBlock {
     color: var(--color-text-subtle);
+  }
+}
+
+@media (max-width: 1440px) {
+  .results {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .resultItem {
+    grid-template-columns: 120px 1fr;
+  }
+
+  .posterWrapper {
+    width: 120px;
+    height: 180px;
+  }
+
+  .collectionItem {
+    grid-template-areas:
+      "header header"
+      "poster content";
+    height: 360px;
+  }
+
+  .gameCollectionItem {
+    grid-template-columns: 224px 1fr;
+    height: 300px;
+    width: calc(100% - 20px);
+    margin: 0 auto;
+  }
+
+  .gameCollectionItem .posterWrapper {
+    width: 224px;
+    height: 120px;
+  }
+
+  .filtersWrapper {
+    padding: 0 8px;
+  }
+
+  .filtersOverlay {
+    padding: 0;
+  }
+
+  .filtersModal {
+    max-width: 100vw;
+    height: 100vh;
+    border-radius: 0;
   }
 }
