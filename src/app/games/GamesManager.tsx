@@ -59,14 +59,28 @@ type GamesManagerProps = {
 };
 
 type Filters = {
+  availabilityAll: boolean;
   query: string;
+  viewAll: boolean;
   viewed: boolean;
   planned: boolean;
   yearRange: [number, number];
+  availability: string[];
+  genres: string;
+  externalRatingRange: [number, number];
+  personalRatingRange: [number, number];
+  favoriteAll: boolean;
+  recommendSimilarOnly: boolean;
+  viewedDateFrom: string;
+  viewedDateTo: string;
 };
 
 const MIN_YEAR = 1950;
 const MAX_YEAR = new Date().getFullYear();
+const EXTERNAL_MIN = 0;
+const EXTERNAL_MAX = 5;
+const PERSONAL_MIN = -3;
+const PERSONAL_MAX = 3;
 const GAME_PLATFORM_OPTIONS = ["PS", "Steam", "PC", "Android", "iOS", "Xbox"];
 const AVAILABILITY_OPTIONS = [
   "В колекції",
@@ -76,10 +90,20 @@ const AVAILABILITY_OPTIONS = [
 ];
 const PAGE_SIZE = 20;
 const DEFAULT_FILTERS: Filters = {
+  availabilityAll: true,
   query: "",
+  viewAll: true,
   viewed: true,
   planned: true,
   yearRange: [MIN_YEAR, MAX_YEAR],
+  availability: [],
+  genres: "",
+  externalRatingRange: [EXTERNAL_MIN, EXTERNAL_MAX],
+  personalRatingRange: [PERSONAL_MIN, PERSONAL_MAX],
+  favoriteAll: true,
+  recommendSimilarOnly: false,
+  viewedDateFrom: "",
+  viewedDateTo: "",
 };
 
 const clampRange = (range: [number, number], bounds: [number, number]) => {
@@ -99,6 +123,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     MAX_YEAR,
   ]);
   const [message, setMessage] = useState("");
+  const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -178,6 +203,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       setCollection([]);
       setMessage("Потрібна авторизація.");
       setRecommendedItemIds(new Set());
+      setTotalCount(0);
       setHasMore(false);
       setIsLoading(false);
       setIsLoadingMore(false);
@@ -186,10 +212,13 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     }
 
     const trimmedQuery = filters.query.trim();
-    if (!filters.viewed && !filters.planned) {
+    const effectiveViewed = filters.viewAll ? true : filters.viewed;
+    const effectivePlanned = filters.viewAll ? true : filters.planned;
+    if (!effectiveViewed && !effectivePlanned) {
       if (pageIndex === 0) {
         setCollection([]);
         setHasMore(false);
+        setTotalCount(0);
         setMessage("Оберіть фільтри.");
       }
       loadingPagesRef.current.delete(pageIndex);
@@ -216,8 +245,8 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       .eq("items.type", "game")
       .order("viewed_at", { ascending: false });
 
-    if (filters.viewed !== filters.planned) {
-      query = query.eq("is_viewed", filters.viewed);
+    if (effectiveViewed !== effectivePlanned) {
+      query = query.eq("is_viewed", effectiveViewed);
     }
 
     if (trimmedQuery) {
@@ -227,11 +256,98 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       );
     }
 
+    if (!filters.availabilityAll && filters.availability.length > 0) {
+      query = query.in("availability", filters.availability);
+    }
+
+    if (!filters.favoriteAll && filters.recommendSimilarOnly) {
+      query = query.eq("recommend_similar", true);
+    }
+
     const [minYear, maxYear] = yearBounds;
     const [fromYear, toYear] = clampRange(filters.yearRange, yearBounds);
     const isYearFilterActive = fromYear !== minYear || toYear !== maxYear;
     if (isYearFilterActive) {
       query = query.gte("items.year", fromYear).lte("items.year", toYear);
+    }
+
+    const [externalMin, externalMax] = filters.externalRatingRange;
+    const isExternalFilterActive =
+      externalMin !== EXTERNAL_MIN || externalMax !== EXTERNAL_MAX;
+    if (isExternalFilterActive) {
+      query = query
+        .gte("items.imdb_rating", String(externalMin))
+        .lte("items.imdb_rating", String(externalMax));
+    }
+
+    const [personalMin, personalMax] = filters.personalRatingRange;
+    const isPersonalFilterActive =
+      personalMin !== PERSONAL_MIN || personalMax !== PERSONAL_MAX;
+    if (isPersonalFilterActive) {
+      query = query.gte("rating", personalMin).lte("rating", personalMax);
+    }
+
+    if (filters.viewedDateFrom) {
+      query = query.gte("viewed_at", `${filters.viewedDateFrom}T00:00:00.000Z`);
+    }
+    if (filters.viewedDateTo) {
+      query = query.lte("viewed_at", `${filters.viewedDateTo}T23:59:59.999Z`);
+    }
+
+    if (pageIndex === 0) {
+      let countQuery = supabase
+        .from("user_views")
+        .select("id, items:items!inner(id)", { count: "exact", head: true })
+        .eq("items.type", "game");
+
+      if (effectiveViewed !== effectivePlanned) {
+        countQuery = countQuery.eq("is_viewed", effectiveViewed);
+      }
+
+      if (trimmedQuery) {
+        const escaped = trimmedQuery.replaceAll("%", "\\%");
+        countQuery = countQuery.or(
+          `items.title.ilike.%${escaped}%,items.description.ilike.%${escaped}%`,
+        );
+      }
+
+      if (isYearFilterActive) {
+        countQuery = countQuery.gte("items.year", fromYear).lte("items.year", toYear);
+      }
+
+      if (!filters.availabilityAll && filters.availability.length > 0) {
+        countQuery = countQuery.in("availability", filters.availability);
+      }
+
+      if (!filters.favoriteAll && filters.recommendSimilarOnly) {
+        countQuery = countQuery.eq("recommend_similar", true);
+      }
+
+      if (isExternalFilterActive) {
+        countQuery = countQuery
+          .gte("items.imdb_rating", String(externalMin))
+          .lte("items.imdb_rating", String(externalMax));
+      }
+
+      if (isPersonalFilterActive) {
+        countQuery = countQuery.gte("rating", personalMin).lte("rating", personalMax);
+      }
+
+      if (filters.viewedDateFrom) {
+        countQuery = countQuery.gte(
+          "viewed_at",
+          `${filters.viewedDateFrom}T00:00:00.000Z`,
+        );
+      }
+      if (filters.viewedDateTo) {
+        countQuery = countQuery.lte(
+          "viewed_at",
+          `${filters.viewedDateTo}T23:59:59.999Z`,
+        );
+      }
+
+      const { count, error: countError } = await countQuery;
+      setTotalCount(countError ? 0 : (count ?? 0));
     }
 
     const from = pageIndex * PAGE_SIZE;
@@ -365,9 +481,21 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     return () => observer.disconnect();
   }, [appliedFilters, fetchPage, hasApplied, hasMore, isLoading, isLoadingMore, page]);
 
+  const displayedCollection = useMemo(() => {
+    const genresFilter = appliedFilters.genres.trim().toLowerCase();
+    if (!genresFilter) return collection;
+    return collection.filter((item) => {
+      const genres = gameDetails[item.items.id]?.genres?.toLowerCase();
+      if (genres) return genres.includes(genresFilter);
+      const description = item.items.description?.toLowerCase() ?? "";
+      return description.includes(genresFilter);
+    });
+  }, [appliedFilters.genres, collection, gameDetails]);
+
   useEffect(() => {
-    onCountChange?.(collection.length);
-  }, [collection.length, onCountChange]);
+    const countToShow = appliedFilters.genres.trim() ? displayedCollection.length : totalCount;
+    onCountChange?.(countToShow);
+  }, [appliedFilters.genres, displayedCollection.length, onCountChange, totalCount]);
 
   useEffect(() => {
     if (!isFiltersOpen) return;
@@ -875,10 +1003,9 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
         </p>
       ) : null}
       {message ? <p className={styles.message}>{message}</p> : null}
-      {isLoading ? <p className={styles.message}>Завантаження...</p> : null}
 
       <div className={styles.results}>
-        {collection.map((item) => {
+        {displayedCollection.map((item) => {
           const details = gameDetails[item.items.id];
           const releasedYear = details?.released ? details.released.slice(0, 4) : "";
           return (
@@ -982,7 +1109,11 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
         })}
       </div>
       {hasApplied && hasMore ? <div ref={loadMoreRef} /> : null}
-      {isLoadingMore ? <p className={styles.message}>Завантаження...</p> : null}
+      {isLoading || isLoadingMore ? (
+        <div className={styles.loadingOverlay} aria-live="polite">
+          <span className={styles.loadingOverlayText}>Завантаження...</span>
+        </div>
+      ) : null}
 
       {isFiltersOpen ? (
         <div
@@ -1015,6 +1146,20 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
                   setPendingFilters((prev) => ({
                     ...prev,
                     query: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className={styles.filtersField}>
+              Жанри
+              <input
+                className={styles.filtersInput}
+                value={pendingFilters.genres}
+                placeholder="Напр. Action"
+                onChange={(event) =>
+                  setPendingFilters((prev) => ({
+                    ...prev,
+                    genres: event.target.value,
                   }))
                 }
               />
@@ -1081,35 +1226,296 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
                 />
               )}
             </div>
-            <div className={styles.filtersControls}>
-              <label className={styles.filtersOption}>
+            <div className={styles.rangeBlock}>
+              <div className={styles.rangeHeader}>
+                <span>RAWG</span>
+                <span className={styles.rangeValues}>
+                  {pendingFilters.externalRatingRange[0]}–
+                  {pendingFilters.externalRatingRange[1]}
+                </span>
+              </div>
+              <Range
+                values={pendingFilters.externalRatingRange}
+                step={1}
+                min={EXTERNAL_MIN}
+                max={EXTERNAL_MAX}
+                onChange={(values) =>
+                  setPendingFilters((prev) => ({
+                    ...prev,
+                    externalRatingRange: values as [number, number],
+                  }))
+                }
+                renderTrack={({ props, children }) => (
+                  <div
+                    onMouseDown={props.onMouseDown}
+                    onTouchStart={props.onTouchStart}
+                    className={styles.rangeTrack}
+                  >
+                    <div
+                      ref={props.ref}
+                      className={styles.rangeTrackInner}
+                      style={{
+                        background: getTrackBackground({
+                          values: pendingFilters.externalRatingRange,
+                          colors: [
+                            "var(--color-border)",
+                            "var(--color-accent)",
+                            "var(--color-border)",
+                          ],
+                          min: EXTERNAL_MIN,
+                          max: EXTERNAL_MAX,
+                        }),
+                      }}
+                    >
+                      {children}
+                    </div>
+                  </div>
+                )}
+                renderThumb={({ props }) => {
+                  const { key, ...restProps } = props;
+                  return (
+                    <div
+                      key={key}
+                      {...restProps}
+                      className={styles.rangeThumb}
+                    />
+                  );
+                }}
+              />
+            </div>
+            <div className={styles.rangeBlock}>
+              <div className={styles.rangeHeader}>
+                <span>Мій рейтинг</span>
+                <span className={styles.rangeValues}>
+                  {pendingFilters.personalRatingRange[0]}–
+                  {pendingFilters.personalRatingRange[1]}
+                </span>
+              </div>
+              <Range
+                values={pendingFilters.personalRatingRange}
+                step={1}
+                min={PERSONAL_MIN}
+                max={PERSONAL_MAX}
+                onChange={(values) =>
+                  setPendingFilters((prev) => ({
+                    ...prev,
+                    personalRatingRange: values as [number, number],
+                  }))
+                }
+                renderTrack={({ props, children }) => (
+                  <div
+                    onMouseDown={props.onMouseDown}
+                    onTouchStart={props.onTouchStart}
+                    className={styles.rangeTrack}
+                  >
+                    <div
+                      ref={props.ref}
+                      className={styles.rangeTrackInner}
+                      style={{
+                        background: getTrackBackground({
+                          values: pendingFilters.personalRatingRange,
+                          colors: [
+                            "var(--color-border)",
+                            "var(--color-accent)",
+                            "var(--color-border)",
+                          ],
+                          min: PERSONAL_MIN,
+                          max: PERSONAL_MAX,
+                        }),
+                      }}
+                    >
+                      {children}
+                    </div>
+                  </div>
+                )}
+                renderThumb={({ props }) => {
+                  const { key, ...restProps } = props;
+                  return (
+                    <div
+                      key={key}
+                      {...restProps}
+                      className={styles.rangeThumb}
+                    />
+                  );
+                }}
+              />
+            </div>
+            <div className={styles.filtersDates}>
+              <label className={styles.filtersField}>
+                Дата перегляду: від
                 <input
-                  className={styles.filtersCheckbox}
-                  type="checkbox"
-                  checked={pendingFilters.viewed}
+                  className={styles.filtersInput}
+                  type="date"
+                  value={pendingFilters.viewedDateFrom}
                   onChange={(event) =>
                     setPendingFilters((prev) => ({
                       ...prev,
-                      viewed: event.target.checked,
+                      viewedDateFrom: event.target.value,
                     }))
                   }
                 />
-                Переглянуто
               </label>
-              <label className={styles.filtersOption}>
+              <label className={styles.filtersField}>
+                до
                 <input
-                  className={styles.filtersCheckbox}
-                  type="checkbox"
-                  checked={pendingFilters.planned}
+                  className={styles.filtersInput}
+                  type="date"
+                  value={pendingFilters.viewedDateTo}
                   onChange={(event) =>
                     setPendingFilters((prev) => ({
                       ...prev,
-                      planned: event.target.checked,
+                      viewedDateTo: event.target.value,
                     }))
                   }
                 />
-                Заплановано
               </label>
+            </div>
+            <div className={styles.filtersGroup}>
+              <p className={styles.filtersGroupTitle}>Доступність</p>
+              <div className={styles.filtersControls}>
+                <label className={styles.filtersOption}>
+                  <input
+                    className={styles.filtersCheckbox}
+                    type="checkbox"
+                    checked={pendingFilters.availabilityAll}
+                    onChange={(event) =>
+                      setPendingFilters((prev) => ({
+                        ...prev,
+                        availabilityAll: event.target.checked,
+                      }))
+                    }
+                  />
+                  Все
+                </label>
+                {AVAILABILITY_OPTIONS.map((option) => (
+                  <label
+                    key={option}
+                    className={`${styles.filtersOption} ${
+                      pendingFilters.availabilityAll ? styles.filtersOptionDisabled : ""
+                    }`}
+                  >
+                    <input
+                      className={styles.filtersCheckbox}
+                      type="checkbox"
+                      checked={pendingFilters.availability.includes(option)}
+                      disabled={pendingFilters.availabilityAll}
+                      onChange={(event) =>
+                        setPendingFilters((prev) => ({
+                          ...prev,
+                          availabilityAll: false,
+                          availability: event.target.checked
+                            ? [...prev.availability, option]
+                            : prev.availability.filter((value) => value !== option),
+                        }))
+                      }
+                    />
+                    {option}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className={styles.filtersGroup}>
+              <p className={styles.filtersGroupTitle}>Перегляд</p>
+              <div className={styles.filtersControls}>
+                <label className={styles.filtersOption}>
+                  <input
+                    className={styles.filtersCheckbox}
+                    type="checkbox"
+                    checked={pendingFilters.viewAll}
+                    onChange={(event) =>
+                      setPendingFilters((prev) => ({
+                        ...prev,
+                        viewAll: event.target.checked,
+                        viewed: event.target.checked ? true : prev.viewed,
+                        planned: event.target.checked ? true : prev.planned,
+                      }))
+                    }
+                  />
+                  Все
+                </label>
+                <label
+                  className={`${styles.filtersOption} ${
+                    pendingFilters.viewAll ? styles.filtersOptionDisabled : ""
+                  }`}
+                >
+                  <input
+                    className={styles.filtersCheckbox}
+                    type="checkbox"
+                    checked={pendingFilters.viewed}
+                    disabled={pendingFilters.viewAll}
+                    onChange={(event) =>
+                      setPendingFilters((prev) => ({
+                        ...prev,
+                        viewAll: false,
+                        viewed: event.target.checked,
+                      }))
+                    }
+                  />
+                  Переглянуто
+                </label>
+                <label
+                  className={`${styles.filtersOption} ${
+                    pendingFilters.viewAll ? styles.filtersOptionDisabled : ""
+                  }`}
+                >
+                  <input
+                    className={styles.filtersCheckbox}
+                    type="checkbox"
+                    checked={pendingFilters.planned}
+                    disabled={pendingFilters.viewAll}
+                    onChange={(event) =>
+                      setPendingFilters((prev) => ({
+                        ...prev,
+                        viewAll: false,
+                        planned: event.target.checked,
+                      }))
+                    }
+                  />
+                  Заплановано
+                </label>
+              </div>
+            </div>
+            <div className={styles.filtersGroup}>
+              <p className={styles.filtersGroupTitle}>Улюблене</p>
+              <div className={styles.filtersControls}>
+                <label className={styles.filtersOption}>
+                  <input
+                    className={styles.filtersCheckbox}
+                    type="checkbox"
+                    checked={pendingFilters.favoriteAll}
+                    onChange={(event) =>
+                      setPendingFilters((prev) => ({
+                        ...prev,
+                        favoriteAll: event.target.checked,
+                        recommendSimilarOnly: event.target.checked
+                          ? false
+                          : prev.recommendSimilarOnly,
+                      }))
+                    }
+                  />
+                  Все
+                </label>
+                <label
+                  className={`${styles.filtersOption} ${
+                    pendingFilters.favoriteAll ? styles.filtersOptionDisabled : ""
+                  }`}
+                >
+                  <input
+                    className={styles.filtersCheckbox}
+                    type="checkbox"
+                    checked={pendingFilters.recommendSimilarOnly}
+                    disabled={pendingFilters.favoriteAll}
+                    onChange={(event) =>
+                      setPendingFilters((prev) => ({
+                        ...prev,
+                        favoriteAll: false,
+                        recommendSimilarOnly: event.target.checked,
+                      }))
+                    }
+                  />
+                  Рекомендувати подібне
+                </label>
+              </div>
             </div>
             <div className={styles.filtersActions}>
               <button

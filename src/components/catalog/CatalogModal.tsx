@@ -57,6 +57,18 @@ export default function CatalogModal({
 }: CatalogModalProps) {
   const viewedAtId = useId();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const initialPlatformsKey = useMemo(
+    () => (initialValues?.platforms ?? []).join("|"),
+    [initialValues?.platforms],
+  );
+  const isEditMode = initialValues !== undefined;
+  const initialViewedAt = initialValues?.viewedAt;
+  const initialComment = initialValues?.comment;
+  const initialRecommendSimilar = initialValues?.recommendSimilar;
+  const initialIsViewed = initialValues?.isViewed;
+  const initialRating = initialValues?.rating;
+  const initialViewPercent = initialValues?.viewPercent;
+  const initialAvailability = initialValues?.availability;
   const images = useMemo(() => {
     if (imageUrls && imageUrls.length > 0) {
       const unique = Array.from(new Set(imageUrls.filter(Boolean)));
@@ -87,7 +99,7 @@ export default function CatalogModal({
   const availabilityRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!initialValues) {
+    if (!isEditMode) {
       setViewedAt(today);
       setComment("");
       setRecommendSimilar(false);
@@ -106,15 +118,26 @@ export default function CatalogModal({
       return date.toISOString().slice(0, 10);
     };
 
-    setViewedAt(normalizeDate(initialValues.viewedAt));
-    setComment(initialValues.comment ?? "");
-    setRecommendSimilar(Boolean(initialValues.recommendSimilar));
-    setIsViewed(initialValues.isViewed ?? true);
-    setRating(initialValues.rating ?? 0);
-    setViewPercent(initialValues.viewPercent ?? 100);
-    setPlatforms(initialValues.platforms ?? []);
-    setAvailability(initialValues.availability ?? null);
-  }, [initialValues, today]);
+    setViewedAt(normalizeDate(initialViewedAt));
+    setComment(initialComment ?? "");
+    setRecommendSimilar(Boolean(initialRecommendSimilar));
+    setIsViewed(initialIsViewed ?? true);
+    setRating(initialRating ?? 0);
+    setViewPercent(initialViewPercent ?? 100);
+    setPlatforms(initialPlatformsKey ? initialPlatformsKey.split("|") : []);
+    setAvailability(initialAvailability ?? null);
+  }, [
+    isEditMode,
+    today,
+    initialAvailability,
+    initialComment,
+    initialIsViewed,
+    initialRating,
+    initialRecommendSimilar,
+    initialViewPercent,
+    initialViewedAt,
+    initialPlatformsKey,
+  ]);
 
   useEffect(() => {
     if (platformOptions.length === 0) {
@@ -122,7 +145,7 @@ export default function CatalogModal({
       return;
     }
     setIsPlatformsOpen(false);
-  }, [initialValues, platformOptions.length]);
+  }, [isEditMode, platformOptions.length]);
 
   useEffect(() => {
     if (availabilityOptions.length === 0) {
@@ -130,7 +153,7 @@ export default function CatalogModal({
       return;
     }
     setIsAvailabilityOpen(false);
-  }, [availabilityOptions.length, initialValues]);
+  }, [availabilityOptions.length, isEditMode]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;

@@ -1,4 +1,5 @@
 .searchBlock {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -41,6 +42,24 @@
   flex-wrap: wrap;
 }
 
+.filtersGroup {
+  display: grid;
+  gap: 8px;
+}
+
+.filtersGroupTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.filtersDates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .filtersWrapper {
   display: flex;
   flex-direction: column;
@@ -60,7 +79,7 @@
 
 .filtersModal {
   width: 100%;
-  max-width: 520px;
+  max-width: 640px;
   background: var(--color-surface-elevated);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
@@ -160,6 +179,10 @@
   color: var(--color-text-secondary);
 }
 
+.filtersOptionDisabled {
+  opacity: 0.45;
+}
+
 .filtersCheckbox {
   accent-color: var(--color-accent);
   width: 16px;
@@ -169,6 +192,26 @@
 .message {
   font-size: 14px;
   color: var(--color-text-muted);
+}
+
+.loadingOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 18, 0.28);
+  backdrop-filter: blur(1px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+}
+
+.loadingOverlayText {
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  font-size: 14px;
 }
 
 .results {
@@ -493,6 +536,10 @@
 
   .filtersWrapper {
     padding: 0 8px;
+  }
+
+  .filtersDates {
+    grid-template-columns: 1fr;
   }
 
   .filtersOverlay {
