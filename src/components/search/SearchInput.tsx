@@ -6,6 +6,7 @@ type SearchInputProps = {
   ariaLabel?: string;
   value?: string;
   onChange?: (value: string) => void;
+  autoFocus?: boolean;
 };
 
 export default function SearchInput({
@@ -14,6 +15,7 @@ export default function SearchInput({
   ariaLabel = "Пошук",
   value,
   onChange,
+  autoFocus = false,
 }: SearchInputProps) {
   return (
     <input
@@ -23,6 +25,7 @@ export default function SearchInput({
       placeholder={placeholder}
       aria-label={ariaLabel}
       autoComplete="off"
+      autoFocus={autoFocus}
       value={value}
       onChange={onChange ? (event) => onChange(event.target.value) : undefined}
     />

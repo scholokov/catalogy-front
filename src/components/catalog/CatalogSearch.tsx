@@ -21,6 +21,8 @@ type CatalogSearchProps<T> = {
       isViewed: boolean;
       rating: number | null;
       viewPercent: number;
+      platforms: string[];
+      availability: string | null;
     },
   ) => Promise<void>;
   emptyQueryMessage?: string;

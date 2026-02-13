@@ -34,6 +34,8 @@ type GameCollectionItem = {
   view_percent: number;
   recommend_similar: boolean;
   is_viewed: boolean;
+  availability: string | null;
+  platforms: string[] | null;
   items: {
     id: string;
     title: string;
@@ -65,6 +67,13 @@ type Filters = {
 
 const MIN_YEAR = 1950;
 const MAX_YEAR = new Date().getFullYear();
+const GAME_PLATFORM_OPTIONS = ["PS", "Steam", "PC", "Android", "iOS", "Xbox"];
+const AVAILABILITY_OPTIONS = [
+  "В колекції",
+  "Тимчасовий доступ",
+  "У друзів",
+  "Відсутній",
+];
 const PAGE_SIZE = 20;
 const DEFAULT_FILTERS: Filters = {
   query: "",
@@ -202,7 +211,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     let query = supabase
       .from("user_views")
       .select(
-        "id, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
+        "id, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
       )
       .eq("items.type", "game")
       .order("viewed_at", { ascending: false });
@@ -455,6 +464,8 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       isViewed: boolean;
       rating: number | null;
       viewPercent: number;
+      platforms: string[];
+      availability: string | null;
     },
   ) => {
     const {
@@ -530,6 +541,8 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       is_viewed: payload.isViewed,
       view_percent: payload.viewPercent,
       recommend_similar: payload.recommendSimilar,
+      platforms: payload.platforms,
+      availability: payload.availability,
     });
 
     if (viewError) {
@@ -550,6 +563,8 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       isViewed: boolean;
       rating: number | null;
       viewPercent: number;
+      platforms: string[];
+      availability: string | null;
     },
   ) => {
     const { error } = await supabase
@@ -561,6 +576,8 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
         is_viewed: payload.isViewed,
         view_percent: payload.viewPercent,
         recommend_similar: payload.recommendSimilar,
+        platforms: payload.platforms,
+        availability: payload.availability,
       })
       .eq("id", viewId);
 
@@ -615,6 +632,55 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     const [year, month, day] = value.slice(0, 10).split("-");
     if (!year || !month || !day) return value.slice(0, 10);
     return `${day}.${month}.${year}`;
+  };
+
+  const ModalDescription = ({ text }: { text: string }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [isOverflow, setIsOverflow] = useState(false);
+    const descriptionRef = useRef<HTMLParagraphElement | null>(null);
+
+    useEffect(() => {
+      const node = descriptionRef.current;
+      if (!node) {
+        setIsOverflow(false);
+        return;
+      }
+      setIsOverflow(node.scrollHeight > node.clientHeight + 1);
+    }, [isExpanded, text]);
+
+    const handleExpand = (event: MouseEvent | KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsExpanded(true);
+    };
+
+    return (
+      <div className={styles.plotBlock}>
+        <p
+          ref={descriptionRef}
+          className={`${styles.resultPlot} ${
+            isExpanded ? "" : styles.modalPlotClamp
+          }`}
+        >
+          {text}
+        </p>
+        {!isExpanded && isOverflow ? (
+          <span
+            className={styles.plotToggle}
+            role="button"
+            tabIndex={0}
+            onClick={handleExpand}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                handleExpand(event);
+              }
+            }}
+          >
+            Детальніше
+          </span>
+        ) : null}
+      </div>
+    );
   };
 
   useEffect(() => {
@@ -676,22 +742,43 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
   }, [searchDescriptions]);
 
   const GameSearchItem = ({ game }: { game: GameResult }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [isOverflow, setIsOverflow] = useState(false);
+    const descriptionRef = useRef<HTMLParagraphElement | null>(null);
+
     useEffect(() => {
       void ensureSearchDescription(game.id);
     }, [game.id]);
 
     const description = searchDescriptions[game.id];
 
+    useEffect(() => {
+      const node = descriptionRef.current;
+      if (!node || !description) {
+        setIsOverflow(false);
+        return;
+      }
+      setIsOverflow(node.scrollHeight > node.clientHeight + 1);
+    }, [description, isExpanded]);
+
+    const handleExpandSearchDescription = (
+      event: MouseEvent | KeyboardEvent,
+    ) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsExpanded(true);
+    };
+
     return (
       <>
-        <div className={styles.posterWrapper}>
+        <div className={`${styles.posterWrapper} ${styles.gameSearchPosterWrapper}`}>
           {game.poster ? (
             <Image
-              className={styles.poster}
+              className={`${styles.poster} ${styles.gameSearchPoster}`}
               src={game.poster}
               alt={`Обкладинка ${game.title}`}
-              width={180}
-              height={270}
+              width={305}
+              height={204}
               unoptimized
             />
           ) : (
@@ -705,12 +792,38 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
               <span className={styles.resultRating}>RAWG: {game.rating ?? "—"}</span>
             </div>
           </div>
-          {game.genres ? <p className={styles.resultMeta}>{game.genres}</p> : null}
+          {game.genres ? (
+            <p className={styles.resultMeta}>Жанри: {game.genres}</p>
+          ) : null}
           {game.released ? (
             <p className={styles.resultMeta}>Реліз: {game.released}</p>
           ) : null}
           {description ? (
-            <p className={styles.resultPlot}>{description}</p>
+            <div className={styles.plotBlock}>
+              <p
+                ref={descriptionRef}
+                className={`${styles.resultPlot} ${
+                  isExpanded ? "" : styles.gameSearchPlotClamp
+                }`}
+              >
+                {description}
+              </p>
+              {!isExpanded && isOverflow ? (
+                <span
+                  className={styles.plotToggle}
+                  role="button"
+                  tabIndex={0}
+                  onClick={handleExpandSearchDescription}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      handleExpandSearchDescription(event);
+                    }
+                  }}
+                >
+                  Детальніше
+                </span>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </>
@@ -1027,6 +1140,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
           title="Додати гру"
           onSearch={handleGameSearch}
           getKey={(game) => game.id}
+          resultItemClassName={styles.gameSearchResultItem}
           initialQuery={appliedFilters.query}
           onSelect={(game) => {
             setSelectedGame(game);
@@ -1042,6 +1156,8 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
           title={selectedGame.title}
           posterUrl={selectedGame.poster}
           size="wide"
+          platformOptions={GAME_PLATFORM_OPTIONS}
+          availabilityOptions={AVAILABILITY_OPTIONS}
           onClose={() => setSelectedGame(null)}
           onAdd={(payload) => handleAddGame(selectedGame, payload)}
         >
@@ -1059,6 +1175,9 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
             {selectedGame.genres ? (
               <p className={styles.resultMeta}>Жанри: {selectedGame.genres}</p>
             ) : null}
+            {searchDescriptions[selectedGame.id] ? (
+              <ModalDescription text={searchDescriptions[selectedGame.id]} />
+            ) : null}
           </div>
         </CatalogModal>
       ) : null}
@@ -1068,6 +1187,8 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
           title={selectedView.items.title}
           posterUrl={selectedView.items.poster_url ?? undefined}
           size="wide"
+          platformOptions={GAME_PLATFORM_OPTIONS}
+          availabilityOptions={AVAILABILITY_OPTIONS}
           onClose={() => setSelectedView(null)}
           submitLabel="Зберегти"
           extraActions={
@@ -1088,6 +1209,8 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
             isViewed: selectedView.is_viewed,
             rating: selectedView.rating,
             viewPercent: selectedView.view_percent,
+            platforms: selectedView.platforms ?? [],
+            availability: selectedView.availability,
           }}
           onAdd={(payload) => handleUpdateView(selectedView.id, payload)}
           onDelete={() => handleDeleteView(selectedView.id)}
@@ -1112,7 +1235,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
               </p>
             ) : null}
             {selectedView.items.description ? (
-              <p className={styles.resultPlot}>{selectedView.items.description}</p>
+              <ModalDescription text={selectedView.items.description} />
             ) : (
               <p className={styles.resultPlot}>Опис недоступний.</p>
             )}

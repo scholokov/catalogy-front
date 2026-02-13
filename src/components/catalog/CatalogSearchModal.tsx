@@ -12,6 +12,7 @@ type CatalogSearchModalProps<T> = {
   getKey: (item: T) => string;
   onSelect: (item: T) => void;
   onClose: () => void;
+  resultItemClassName?: string;
   initialQuery?: string;
   emptyQueryMessage?: string;
   emptyResultsMessage?: string;
@@ -25,6 +26,7 @@ export default function CatalogSearchModal<T>({
   getKey,
   onSelect,
   onClose,
+  resultItemClassName,
   initialQuery,
   emptyQueryMessage = "Введіть запит для пошуку.",
   emptyResultsMessage = "Нічого не знайдено.",
@@ -95,6 +97,7 @@ export default function CatalogSearchModal<T>({
             onSearch={handleSearch}
             isLoading={isLoading}
             initialValue={initialQuery}
+            autoFocus
           />
           {message ? <p className={listStyles.message}>{message}</p> : null}
           <div className={`${listStyles.results} ${styles.results}`}>
@@ -102,7 +105,7 @@ export default function CatalogSearchModal<T>({
               <button
                 key={getKey(item)}
                 type="button"
-                className={`${listStyles.resultItem} ${listStyles.resultButton}`}
+                className={`${listStyles.resultItem} ${listStyles.resultButton} ${resultItemClassName ?? ""}`}
                 onClick={() => onSelect(item)}
               >
                 {renderItem(item)}

@@ -39,6 +39,7 @@ type FilmCollectionItem = {
   view_percent: number;
   recommend_similar: boolean;
   is_viewed: boolean;
+  availability: string | null;
   items: {
     id: string;
     title: string;
@@ -70,6 +71,12 @@ type Filters = {
 
 const MIN_YEAR = 1950;
 const MAX_YEAR = new Date().getFullYear();
+const AVAILABILITY_OPTIONS = [
+  "В колекції",
+  "Тимчасовий доступ",
+  "У друзів",
+  "Відсутній",
+];
 const PAGE_SIZE = 20;
 const DEFAULT_FILTERS: Filters = {
   query: "",
@@ -203,7 +210,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     let query = supabase
       .from("user_views")
       .select(
-        "id, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
+        "id, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
       )
       .eq("items.type", "film")
       .order("viewed_at", { ascending: false });
@@ -279,14 +286,12 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       skipNextApplyRef.current = false;
       return;
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchPage(0, appliedFilters);
   }, [appliedFilters, fetchPage, hasApplied]);
 
   useEffect(() => {
     if (hasApplied) return;
     skipNextApplyRef.current = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAppliedFilters(DEFAULT_FILTERS);
     setHasApplied(true);
     void (async () => {
@@ -344,7 +349,6 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadYearBounds();
   }, [loadYearBounds]);
 
@@ -453,12 +457,14 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   const handleAddFilm = async (
     film: FilmResult,
     payload: {
-    viewedAt: string;
-    comment: string;
-    recommendSimilar: boolean;
-    isViewed: boolean;
-    rating: number | null;
-    viewPercent: number;
+      viewedAt: string;
+      comment: string;
+      recommendSimilar: boolean;
+      isViewed: boolean;
+      rating: number | null;
+      viewPercent: number;
+      platforms: string[];
+      availability: string | null;
     },
   ) => {
     const {
@@ -536,6 +542,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       is_viewed: payload.isViewed,
       view_percent: payload.viewPercent,
       recommend_similar: payload.recommendSimilar,
+      availability: payload.availability,
     });
 
     if (viewError) {
@@ -556,6 +563,8 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       isViewed: boolean;
       rating: number | null;
       viewPercent: number;
+      platforms: string[];
+      availability: string | null;
     },
   ) => {
     const { error } = await supabase
@@ -567,6 +576,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
         is_viewed: payload.isViewed,
         view_percent: payload.viewPercent,
         recommend_similar: payload.recommendSimilar,
+        availability: payload.availability,
       })
       .eq("id", viewId);
 
@@ -622,6 +632,55 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     return `${day}.${month}.${year}`;
   };
 
+  const ModalDescription = ({ text }: { text: string }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [isOverflow, setIsOverflow] = useState(false);
+    const descriptionRef = useRef<HTMLParagraphElement | null>(null);
+
+    useEffect(() => {
+      const node = descriptionRef.current;
+      if (!node) {
+        setIsOverflow(false);
+        return;
+      }
+      setIsOverflow(node.scrollHeight > node.clientHeight + 1);
+    }, [isExpanded, text]);
+
+    const handleExpand = (event: MouseEvent | KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsExpanded(true);
+    };
+
+    return (
+      <div className={styles.plotBlock}>
+        <p
+          ref={descriptionRef}
+          className={`${styles.resultPlot} ${
+            isExpanded ? "" : styles.modalPlotClamp
+          }`}
+        >
+          {text}
+        </p>
+        {!isExpanded && isOverflow ? (
+          <span
+            className={styles.plotToggle}
+            role="button"
+            tabIndex={0}
+            onClick={handleExpand}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                handleExpand(event);
+              }
+            }}
+          >
+            Детальніше
+          </span>
+        ) : null}
+      </div>
+    );
+  };
+
   useEffect(() => {
     collection.forEach((item) => {
       const externalId = item.items.external_id;
@@ -671,7 +730,6 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
         next.add(id);
       }
     });
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOverflowDescriptions(next);
   }, [expandedDescriptions, collection]);
 
@@ -1061,6 +1119,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
           posterUrl={selectedFilm.poster}
           imageUrls={selectedFilm.imageUrls}
           onClose={() => setSelectedFilm(null)}
+          availabilityOptions={AVAILABILITY_OPTIONS}
           onAdd={(payload) => handleAddFilm(selectedFilm, payload)}
         >
           <div className={styles.resultContent}>
@@ -1085,9 +1144,11 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
             {selectedFilm.genres ? (
               <p className={styles.resultMeta}>Жанри: {selectedFilm.genres}</p>
             ) : null}
-            <p className={styles.resultPlot}>
-              {selectedFilm.plot ? selectedFilm.plot : "Опис недоступний."}
-            </p>
+            {selectedFilm.plot ? (
+              <ModalDescription text={selectedFilm.plot} />
+            ) : (
+              <p className={styles.resultPlot}>Опис недоступний.</p>
+            )}
           </div>
         </CatalogModal>
       ) : null}
@@ -1119,7 +1180,9 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
             isViewed: selectedView.is_viewed,
             rating: selectedView.rating,
             viewPercent: selectedView.view_percent,
+            availability: selectedView.availability,
           }}
+          availabilityOptions={AVAILABILITY_OPTIONS}
           onAdd={(payload) => handleUpdateView(selectedView.id, payload)}
           onDelete={() => handleDeleteView(selectedView.id)}
         >
@@ -1153,7 +1216,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
               </p>
             ) : null}
             {selectedView.items.description ? (
-              <p className={styles.resultPlot}>{selectedView.items.description}</p>
+              <ModalDescription text={selectedView.items.description} />
             ) : (
               <p className={styles.resultPlot}>Опис недоступний.</p>
             )}

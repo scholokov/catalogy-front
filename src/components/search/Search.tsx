@@ -14,6 +14,7 @@ type SearchProps = {
   mode?: "submit" | "instant";
   onButtonClick?: () => void;
   initialValue?: string;
+  autoFocus?: boolean;
 };
 
 export default function Search({
@@ -26,6 +27,7 @@ export default function Search({
   mode = "submit",
   onButtonClick,
   initialValue,
+  autoFocus = false,
 }: SearchProps) {
   const inputId = useId();
   const [value, setValue] = useState(initialValue ?? "");
@@ -59,6 +61,7 @@ export default function Search({
           id={inputId}
           placeholder={placeholder}
           ariaLabel={label || placeholder}
+          autoFocus={autoFocus}
           value={value}
           onChange={setValue}
         />

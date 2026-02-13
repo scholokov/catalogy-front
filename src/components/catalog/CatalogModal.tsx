@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import styles from "./CatalogModal.module.css";
 
@@ -10,6 +10,8 @@ type CatalogModalProps = {
   imageUrls?: string[];
   onClose: () => void;
   size?: "default" | "wide";
+  platformOptions?: string[];
+  availabilityOptions?: string[];
   onAdd?: (payload: {
     viewedAt: string;
     comment: string;
@@ -17,6 +19,8 @@ type CatalogModalProps = {
     isViewed: boolean;
     rating: number | null;
     viewPercent: number;
+    platforms: string[];
+    availability: string | null;
   }) => Promise<void>;
   onDelete?: () => Promise<void>;
   extraActions?: React.ReactNode;
@@ -27,6 +31,8 @@ type CatalogModalProps = {
     isViewed?: boolean;
     rating?: number | null;
     viewPercent?: number | null;
+    platforms?: string[] | null;
+    availability?: string | null;
   };
   submitLabel?: string;
   children: React.ReactNode;
@@ -43,6 +49,8 @@ export default function CatalogModal({
   onDelete,
   extraActions,
   initialValues,
+  platformOptions = [],
+  availabilityOptions = [],
   size = "default",
   submitLabel = "Додати",
   children,
@@ -67,10 +75,16 @@ export default function CatalogModal({
   const [isViewed, setIsViewed] = useState(true);
   const [rating, setRating] = useState(0);
   const [viewPercent, setViewPercent] = useState(100);
+  const [platforms, setPlatforms] = useState<string[]>([]);
+  const [availability, setAvailability] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>("");
   const [isDeleting, setIsDeleting] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [isPlatformsOpen, setIsPlatformsOpen] = useState(false);
+  const [isAvailabilityOpen, setIsAvailabilityOpen] = useState(false);
+  const platformsRef = useRef<HTMLDivElement | null>(null);
+  const availabilityRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!initialValues) {
@@ -80,6 +94,8 @@ export default function CatalogModal({
       setIsViewed(true);
       setRating(0);
       setViewPercent(100);
+      setPlatforms([]);
+      setAvailability(null);
       return;
     }
 
@@ -96,7 +112,25 @@ export default function CatalogModal({
     setIsViewed(initialValues.isViewed ?? true);
     setRating(initialValues.rating ?? 0);
     setViewPercent(initialValues.viewPercent ?? 100);
+    setPlatforms(initialValues.platforms ?? []);
+    setAvailability(initialValues.availability ?? null);
   }, [initialValues, today]);
+
+  useEffect(() => {
+    if (platformOptions.length === 0) {
+      setIsPlatformsOpen(false);
+      return;
+    }
+    setIsPlatformsOpen(false);
+  }, [initialValues, platformOptions.length]);
+
+  useEffect(() => {
+    if (availabilityOptions.length === 0) {
+      setIsAvailabilityOpen(false);
+      return;
+    }
+    setIsAvailabilityOpen(false);
+  }, [availabilityOptions.length, initialValues]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -105,6 +139,26 @@ export default function CatalogModal({
       document.body.style.overflow = previousOverflow;
     };
   }, []);
+
+  useEffect(() => {
+    if (!isPlatformsOpen && !isAvailabilityOpen) return;
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (
+        platformsRef.current &&
+        !platformsRef.current.contains(event.target as Node)
+      ) {
+        setIsPlatformsOpen(false);
+      }
+      if (
+        availabilityRef.current &&
+        !availabilityRef.current.contains(event.target as Node)
+      ) {
+        setIsAvailabilityOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handleOutsideClick);
+    return () => window.removeEventListener("mousedown", handleOutsideClick);
+  }, [isAvailabilityOpen, isPlatformsOpen]);
 
   useEffect(() => {
     setActiveImageIndex(0);
@@ -138,6 +192,8 @@ export default function CatalogModal({
         isViewed,
         rating: isViewed ? rating : null,
         viewPercent: isViewed ? viewPercent : 0,
+        platforms,
+        availability,
       });
       onClose();
     } catch (error) {
@@ -195,6 +251,9 @@ export default function CatalogModal({
   };
 
   const viewedAtDisplay = isViewed ? viewedAt : "";
+  const selectedPlatformsLabel =
+    platforms.length > 0 ? platforms.join(", ") : "Оберіть платформу";
+  const selectedAvailabilityLabel = availability ?? "Оберіть наявність";
 
   return (
     <div
@@ -280,6 +339,87 @@ export default function CatalogModal({
             {children}
 
             <div className={styles.formBlock}>
+              {platformOptions.length > 0 ? (
+                <div className={`${styles.label} ${styles.platformsField}`} ref={platformsRef}>
+                  Платформа
+                  <button
+                    type="button"
+                    className={styles.multiSelectTrigger}
+                    onClick={() => setIsPlatformsOpen((prev) => !prev)}
+                    disabled={isSaving}
+                  >
+                    <span className={styles.multiSelectText}>
+                      {selectedPlatformsLabel}
+                    </span>
+                    <span className={styles.multiSelectChevron}>▾</span>
+                  </button>
+                  {isPlatformsOpen ? (
+                    <div className={styles.multiSelectMenu}>
+                      {platformOptions.map((option) => {
+                        const checked = platforms.includes(option);
+                        return (
+                          <label key={option} className={styles.multiSelectOption}>
+                            <input
+                              className={styles.checkbox}
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setPlatforms((prev) =>
+                                  checked
+                                    ? prev.filter((value) => value !== option)
+                                    : [...prev, option],
+                                );
+                              }}
+                            />
+                            {option}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {availabilityOptions.length > 0 ? (
+                <div className={`${styles.label} ${styles.platformsField}`} ref={availabilityRef}>
+                  Наявність
+                  <button
+                    type="button"
+                    className={styles.multiSelectTrigger}
+                    onClick={() => {
+                      setIsPlatformsOpen(false);
+                      setIsAvailabilityOpen((prev) => !prev);
+                    }}
+                    disabled={isSaving}
+                  >
+                    <span className={styles.multiSelectText}>
+                      {selectedAvailabilityLabel}
+                    </span>
+                    <span className={styles.multiSelectChevron}>▾</span>
+                  </button>
+                  {isAvailabilityOpen ? (
+                    <div className={styles.multiSelectMenu}>
+                      {availabilityOptions.map((option) => (
+                        <button
+                          key={option}
+                          type="button"
+                          className={styles.singleSelectOption}
+                          onClick={() => {
+                            setAvailability(option);
+                            setIsAvailabilityOpen(false);
+                          }}
+                        >
+                          <span>{option}</span>
+                          {availability === option ? (
+                            <span className={styles.singleSelectCheck}>✓</span>
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
               <div className={styles.formRow}>
                 <label className={styles.label}>
                   Коментар
