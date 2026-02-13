@@ -68,6 +68,14 @@ export default function CatalogSearchModal<T>({
     void handleSearch(trimmed);
   }, [initialQuery, handleSearch]);
 
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
   return (
     <div className={styles.overlay} role="dialog" aria-modal="true" onClick={onClose}>
       <div className={styles.modal} onClick={(event) => event.stopPropagation()}>

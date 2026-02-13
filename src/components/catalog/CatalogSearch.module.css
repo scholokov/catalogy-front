@@ -423,7 +423,7 @@
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 720px) {
   .resultItem {
     grid-template-columns: 120px 1fr;
   }
@@ -442,7 +442,7 @@
 
   .gameCollectionItem {
     grid-template-columns: 224px 1fr;
-    height: 300px;
+    height: 200px;
     width: calc(100% - 20px);
     margin: 0 auto;
   }
@@ -464,5 +464,37 @@
     max-width: 100vw;
     height: 100vh;
     border-radius: 0;
+  }
+}
+
+@media (max-width: 500px) {
+  .gameCollectionItem {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "header"
+      "poster"
+      "content";
+    height: 370px;
+  }
+
+  .gameCollectionItem .posterWrapper {
+    width: 100%;
+    height: 160px;
+  }
+}
+
+@media (max-width: 400px) {
+  .gameCollectionItem {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "header"
+      "poster"
+      "content";
+    height: 390px;
+  }
+
+  .gameCollectionItem .posterWrapper {
+    width: 100%;
+    height: 160px;
   }
 }

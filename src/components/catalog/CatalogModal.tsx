@@ -99,6 +99,14 @@ export default function CatalogModal({
   }, [initialValues, today]);
 
   useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  useEffect(() => {
     setActiveImageIndex(0);
   }, [posterUrl, imageUrls]);
 
