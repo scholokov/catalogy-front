@@ -71,6 +71,7 @@ type Filters = {
   yearRange: [number, number];
   availability: string[];
   genres: string;
+  director: string;
   externalRatingRange: [number, number];
   personalRatingRange: [number, number];
   favoriteAll: boolean;
@@ -92,6 +93,7 @@ const AVAILABILITY_OPTIONS = [
   "Відсутній",
 ];
 const PAGE_SIZE = 20;
+const LOAD_AHEAD_PX = 700;
 const DEFAULT_FILTERS: Filters = {
   availabilityAll: true,
   query: "",
@@ -101,6 +103,7 @@ const DEFAULT_FILTERS: Filters = {
   yearRange: [MIN_YEAR, MAX_YEAR],
   availability: [],
   genres: "",
+  director: "",
   externalRatingRange: [EXTERNAL_MIN, EXTERNAL_MAX],
   personalRatingRange: [PERSONAL_MIN, PERSONAL_MAX],
   favoriteAll: true,
@@ -472,29 +475,54 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     if (!hasApplied || isLoading || isLoadingMore || !hasMore) return;
     const node = loadMoreRef.current;
     if (!node) return;
-    const observer = new IntersectionObserver(([entry]) => {
-      if (!entry.isIntersecting) return;
-      void fetchPage(page + 1, appliedFilters);
-    });
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) return;
+        void fetchPage(page + 1, appliedFilters);
+      },
+      {
+        root: null,
+        rootMargin: `0px 0px ${LOAD_AHEAD_PX}px 0px`,
+        threshold: 0,
+      },
+    );
     observer.observe(node);
     return () => observer.disconnect();
   }, [appliedFilters, fetchPage, hasApplied, hasMore, isLoading, isLoadingMore, page]);
 
   const displayedCollection = useMemo(() => {
     const genresFilter = appliedFilters.genres.trim().toLowerCase();
-    if (!genresFilter) return collection;
+    const directorFilter = appliedFilters.director.trim().toLowerCase();
+    if (!genresFilter && !directorFilter) return collection;
     return collection.filter((item) => {
-      const genres = filmDetails[item.items.id]?.genres?.toLowerCase();
-      if (genres) return genres.includes(genresFilter);
       const description = item.items.description?.toLowerCase() ?? "";
-      return description.includes(genresFilter);
+      const genres = filmDetails[item.items.id]?.genres?.toLowerCase() ?? "";
+      const director = filmDetails[item.items.id]?.director?.toLowerCase() ?? "";
+
+      const genresMatches = genresFilter
+        ? (genres ? genres.includes(genresFilter) : description.includes(genresFilter))
+        : true;
+      const directorMatches = directorFilter
+        ? (director ? director.includes(directorFilter) : description.includes(directorFilter))
+        : true;
+
+      return genresMatches && directorMatches;
     });
-  }, [appliedFilters.genres, collection, filmDetails]);
+  }, [appliedFilters.director, appliedFilters.genres, collection, filmDetails]);
 
   useEffect(() => {
-    const countToShow = appliedFilters.genres.trim() ? displayedCollection.length : totalCount;
+    const hasClientFilters = Boolean(
+      appliedFilters.genres.trim() || appliedFilters.director.trim(),
+    );
+    const countToShow = hasClientFilters ? displayedCollection.length : totalCount;
     onCountChange?.(countToShow);
-  }, [appliedFilters.genres, displayedCollection.length, onCountChange, totalCount]);
+  }, [
+    appliedFilters.director,
+    appliedFilters.genres,
+    displayedCollection.length,
+    onCountChange,
+    totalCount,
+  ]);
 
   useEffect(() => {
     if (!isFiltersOpen) return;
@@ -637,10 +665,23 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
         .single();
 
       if (createError) {
-        throw new Error("Не вдалося створити запис у каталозі.");
+        if (createError.code === "23505") {
+          const { data: conflictedItem, error: conflictedItemError } = await supabase
+            .from("items")
+            .select("id")
+            .eq("type", "film")
+            .eq("external_id", film.id)
+            .maybeSingle();
+          if (conflictedItemError || !conflictedItem?.id) {
+            throw new Error("Не вдалося створити запис у каталозі.");
+          }
+          itemId = conflictedItem.id;
+        } else {
+          throw new Error("Не вдалося створити запис у каталозі.");
+        }
+      } else {
+        itemId = createdItem.id;
       }
-
-      itemId = createdItem.id;
     }
 
     const itemUpdates: { imdb_rating?: string | null; year?: number | null } = {};
@@ -674,12 +715,34 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     });
 
     if (viewError) {
-      throw new Error("Не вдалося зберегти у колекцію.");
+      if (viewError.code === "23505") {
+        const { error: updateExistingError } = await supabase
+          .from("user_views")
+          .update({
+            rating: payload.rating,
+            comment: payload.comment,
+            viewed_at: payload.viewedAt,
+            is_viewed: payload.isViewed,
+            view_percent: payload.viewPercent,
+            recommend_similar: payload.recommendSimilar,
+            availability: payload.availability,
+          })
+          .eq("user_id", user.id)
+          .eq("item_id", itemId);
+
+        if (updateExistingError) {
+          throw new Error("Не вдалося зберегти у колекцію.");
+        }
+      } else {
+        throw new Error("Не вдалося зберегти у колекцію.");
+      }
     }
 
-    await loadYearBounds();
     setHasApplied(true);
-    await fetchPage(0, appliedFilters);
+    void (async () => {
+      await loadYearBounds();
+      await fetchPage(0, appliedFilters);
+    })();
   };
 
   const handleUpdateView = async (
@@ -713,7 +776,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     }
 
     setHasApplied(true);
-    await fetchPage(0, appliedFilters);
+    void fetchPage(0, appliedFilters);
   };
 
   const handleDeleteView = async (viewId: string) => {
@@ -724,7 +787,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     }
 
     setHasApplied(true);
-    await fetchPage(0, appliedFilters);
+    void fetchPage(0, appliedFilters);
   };
 
   const handleTmdbSearch = async (query: string) => {
@@ -1018,10 +1081,15 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       {hasApplied && hasMore ? (
         <div ref={loadMoreRef} />
       ) : null}
-      {isLoading || isLoadingMore ? (
+      {isLoading ? (
         <div className={styles.loadingOverlay} aria-live="polite">
           <span className={styles.loadingOverlayText}>Завантаження...</span>
         </div>
+      ) : null}
+      {isLoadingMore && !isLoading ? (
+        <p className={styles.message} aria-live="polite">
+          Підвантаження...
+        </p>
       ) : null}
 
       {isFiltersOpen ? (
@@ -1031,9 +1099,15 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
           aria-modal="true"
           onClick={() => setIsFiltersOpen(false)}
         >
-          <div
+          <form
             className={styles.filtersModal}
             onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              setAppliedFilters(pendingFilters);
+              setHasApplied(true);
+              setIsFiltersOpen(false);
+            }}
           >
             <div className={styles.filtersHeader}>
               <h2 className={styles.filtersTitle}>Фільтри</h2>
@@ -1050,6 +1124,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
               Пошук
               <input
                 className={styles.filtersInput}
+                autoFocus
                 value={pendingFilters.query}
                 onChange={(event) =>
                   setPendingFilters((prev) => ({
@@ -1069,6 +1144,20 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
                   setPendingFilters((prev) => ({
                     ...prev,
                     genres: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className={styles.filtersField}>
+              Режисер
+              <input
+                className={styles.filtersInput}
+                value={pendingFilters.director}
+                placeholder="Напр. Nolan"
+                onChange={(event) =>
+                  setPendingFilters((prev) => ({
+                    ...prev,
+                    director: event.target.value,
                   }))
                 }
               />
@@ -1430,23 +1519,27 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
               <button
                 type="button"
                 className="btnBase btnSecondary"
+                onClick={() =>
+                  setPendingFilters({
+                    ...DEFAULT_FILTERS,
+                    yearRange: clampRange(DEFAULT_FILTERS.yearRange, yearBounds),
+                  })
+                }
+              >
+                Очищення
+              </button>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
                 onClick={() => setIsFiltersOpen(false)}
               >
                 Скасувати
               </button>
-              <button
-                type="button"
-                className="btnBase btnPrimary"
-                onClick={() => {
-                  setAppliedFilters(pendingFilters);
-                  setHasApplied(true);
-                  setIsFiltersOpen(false);
-                }}
-              >
+              <button type="submit" className="btnBase btnPrimary">
                 Відобразити
               </button>
             </div>
-          </div>
+          </form>
         </div>
       ) : null}
 

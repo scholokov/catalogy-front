@@ -38,7 +38,7 @@ type CatalogModalProps = {
   children: React.ReactNode;
 };
 
-const ratingOptions = [-3, -2, -1, 0, 1, 2, 3];
+const ratingOptions = [3, 2, 1, 0, -1, -2, -3];
 
 export default function CatalogModal({
   title,
@@ -460,9 +460,15 @@ export default function CatalogModal({
                   <input
                     className={styles.checkbox}
                     type="checkbox"
-                  checked={isViewed}
-                  onChange={(event) => setIsViewed(event.target.checked)}
-                  disabled={isSaving}
+                    checked={isViewed}
+                    onChange={(event) => {
+                      const nextIsViewed = event.target.checked;
+                      setIsViewed(nextIsViewed);
+                      if (nextIsViewed && viewPercent <= 0) {
+                        setViewPercent(100);
+                      }
+                    }}
+                    disabled={isSaving}
                   />
                   Переглянуто
                 </label>

@@ -89,6 +89,7 @@ const AVAILABILITY_OPTIONS = [
   "Відсутній",
 ];
 const PAGE_SIZE = 20;
+const LOAD_AHEAD_PX = 700;
 const DEFAULT_FILTERS: Filters = {
   availabilityAll: true,
   query: "",
@@ -473,10 +474,17 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     if (!hasApplied || isLoading || isLoadingMore || !hasMore) return;
     const node = loadMoreRef.current;
     if (!node) return;
-    const observer = new IntersectionObserver(([entry]) => {
-      if (!entry.isIntersecting) return;
-      void fetchPage(page + 1, appliedFilters);
-    });
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) return;
+        void fetchPage(page + 1, appliedFilters);
+      },
+      {
+        root: null,
+        rootMargin: `0px 0px ${LOAD_AHEAD_PX}px 0px`,
+        threshold: 0,
+      },
+    );
     observer.observe(node);
     return () => observer.disconnect();
   }, [appliedFilters, fetchPage, hasApplied, hasMore, isLoading, isLoadingMore, page]);
@@ -677,9 +685,11 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       throw new Error("Не вдалося зберегти у колекцію.");
     }
 
-    await loadYearBounds();
     setHasApplied(true);
-    await fetchPage(0, appliedFilters);
+    void (async () => {
+      await loadYearBounds();
+      await fetchPage(0, appliedFilters);
+    })();
   };
 
   const handleUpdateView = async (
@@ -714,7 +724,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     }
 
     setHasApplied(true);
-    await fetchPage(0, appliedFilters);
+    void fetchPage(0, appliedFilters);
   };
 
   const handleDeleteView = async (viewId: string) => {
@@ -725,7 +735,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     }
 
     setHasApplied(true);
-    await fetchPage(0, appliedFilters);
+    void fetchPage(0, appliedFilters);
   };
 
   const handleGameSearch = async (query: string) => {
@@ -1109,10 +1119,15 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
         })}
       </div>
       {hasApplied && hasMore ? <div ref={loadMoreRef} /> : null}
-      {isLoading || isLoadingMore ? (
+      {isLoading ? (
         <div className={styles.loadingOverlay} aria-live="polite">
           <span className={styles.loadingOverlayText}>Завантаження...</span>
         </div>
+      ) : null}
+      {isLoadingMore && !isLoading ? (
+        <p className={styles.message} aria-live="polite">
+          Підвантаження...
+        </p>
       ) : null}
 
       {isFiltersOpen ? (
@@ -1122,9 +1137,15 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
           aria-modal="true"
           onClick={() => setIsFiltersOpen(false)}
         >
-          <div
+          <form
             className={styles.filtersModal}
             onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              setAppliedFilters(pendingFilters);
+              setHasApplied(true);
+              setIsFiltersOpen(false);
+            }}
           >
             <div className={styles.filtersHeader}>
               <h2 className={styles.filtersTitle}>Фільтри</h2>
@@ -1141,6 +1162,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
               Пошук
               <input
                 className={styles.filtersInput}
+                autoFocus
                 value={pendingFilters.query}
                 onChange={(event) =>
                   setPendingFilters((prev) => ({
@@ -1521,23 +1543,27 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
               <button
                 type="button"
                 className="btnBase btnSecondary"
+                onClick={() =>
+                  setPendingFilters({
+                    ...DEFAULT_FILTERS,
+                    yearRange: clampRange(DEFAULT_FILTERS.yearRange, yearBounds),
+                  })
+                }
+              >
+                Очищення
+              </button>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
                 onClick={() => setIsFiltersOpen(false)}
               >
                 Скасувати
               </button>
-              <button
-                type="button"
-                className="btnBase btnPrimary"
-                onClick={() => {
-                  setAppliedFilters(pendingFilters);
-                  setHasApplied(true);
-                  setIsFiltersOpen(false);
-                }}
-              >
+              <button type="submit" className="btnBase btnPrimary">
                 Відобразити
               </button>
             </div>
-          </div>
+          </form>
         </div>
       ) : null}
 
