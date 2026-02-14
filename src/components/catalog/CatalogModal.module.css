@@ -274,6 +274,17 @@
   cursor: pointer;
 }
 
+.multiSelectTrigger:disabled {
+  color: var(--color-text-muted);
+  -webkit-text-fill-color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+.multiSelectTrigger:disabled .multiSelectChevron {
+  color: var(--color-text-muted);
+  opacity: 0.8;
+}
+
 .multiSelectText {
   overflow: hidden;
   text-overflow: ellipsis;

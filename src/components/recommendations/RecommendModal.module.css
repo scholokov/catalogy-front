@@ -69,10 +69,15 @@
 
 .contactRow {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+
+.hintText {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
 }
 
 .checkbox {

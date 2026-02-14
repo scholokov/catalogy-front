@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
+import { getDisplayName } from "@/lib/users/displayName";
 import styles from "./FriendsManager.module.css";
 
 type Profile = {
   id: string;
   username: string | null;
+  views_visible_to_friends?: boolean;
   avatar_url: string | null;
 };
 
@@ -45,30 +48,59 @@ type Recommendation = {
   toProfile?: Profile;
 };
 
-type TabKey = "inbox" | "sent" | "contacts" | "invites";
+type TabKey = "recommendations" | "contacts" | "settings";
+type RecommendationTabKey = "inbox" | "archive" | "sent";
 
 const tabLabels: Record<TabKey, string> = {
-  inbox: "Вхідні",
-  sent: "Надіслані",
+  recommendations: "Рекомендації",
   contacts: "Контакти",
-  invites: "Запрошення",
+  settings: "Налаштування",
+};
+
+const recommendationTabLabels: Record<RecommendationTabKey, string> = {
+  inbox: "Вхідні",
+  archive: "Архів",
+  sent: "Ваші",
 };
 
 const formatDate = (value: string) =>
   new Date(value).toLocaleDateString("uk-UA");
+const NICKNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
 
 export default function FriendsManager() {
-  const [activeTab, setActiveTab] = useState<TabKey>("inbox");
+  const router = useRouter();
+  const [activeTab, setActiveTab] = useState<TabKey>("recommendations");
+  const [activeRecommendationTab, setActiveRecommendationTab] =
+    useState<RecommendationTabKey>("inbox");
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [invites, setInvites] = useState<Invite[]>([]);
   const [inbox, setInbox] = useState<Recommendation[]>([]);
   const [sent, setSent] = useState<Recommendation[]>([]);
   const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [referenceTime, setReferenceTime] = useState(() => Date.now());
+  const [currentUserId, setCurrentUserId] = useState("");
+  const [currentUsername, setCurrentUsername] = useState<string | null>(null);
+  const [isNicknamePromptDismissed, setIsNicknamePromptDismissed] = useState(false);
+  const [isNicknameModalOpen, setIsNicknameModalOpen] = useState(false);
+  const [nicknameValue, setNicknameValue] = useState("");
+  const [nicknameError, setNicknameError] = useState("");
+  const [isSavingNickname, setIsSavingNickname] = useState(false);
+  const [isUpdatingVisibility, setIsUpdatingVisibility] = useState(false);
+  const [currentUserViewsVisible, setCurrentUserViewsVisible] = useState(false);
+  const [postNicknameAction, setPostNicknameAction] = useState<"createInvite" | null>(
+    null,
+  );
 
   const pendingCount = useMemo(
     () => inbox.filter((item) => item.status === "pending").length,
+    [inbox],
+  );
+  const inboxItems = useMemo(
+    () => inbox.filter((item) => item.status === "pending" || item.status === "saved"),
+    [inbox],
+  );
+  const archiveItems = useMemo(
+    () => inbox.filter((item) => item.status === "accepted" || item.status === "dismissed"),
     [inbox],
   );
 
@@ -76,7 +108,7 @@ export default function FriendsManager() {
     if (ids.length === 0) return new Map<string, Profile>();
     const { data } = await supabase
       .from("profiles")
-      .select("id, username, avatar_url")
+      .select("id, username, avatar_url, views_visible_to_friends")
       .in("id", ids);
     const map = new Map<string, Profile>();
     (data ?? []).forEach((profile) => map.set(profile.id, profile));
@@ -92,11 +124,17 @@ export default function FriendsManager() {
       setMessage("Потрібна авторизація.");
       return;
     }
+    setCurrentUserId(user.id);
 
     setIsLoading(true);
     setMessage("");
 
-    const [contactsRes, invitesRes, inboxRes, sentRes] = await Promise.all([
+    const [profileRes, contactsRes, invitesRes, inboxRes, sentRes] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("username, views_visible_to_friends")
+        .eq("id", user.id)
+        .maybeSingle(),
       supabase
         .from("contacts")
         .select("other_user_id, status, created_at")
@@ -123,14 +161,48 @@ export default function FriendsManager() {
         .order("created_at", { ascending: false }),
     ]);
 
-    if (contactsRes.error || invitesRes.error || inboxRes.error || sentRes.error) {
+    if (
+      profileRes.error ||
+      contactsRes.error ||
+      invitesRes.error ||
+      inboxRes.error ||
+      sentRes.error
+    ) {
       setMessage("Не вдалося завантажити дані.");
       setIsLoading(false);
       return;
     }
+    setCurrentUsername(profileRes.data?.username ?? null);
+    setCurrentUserViewsVisible(Boolean(profileRes.data?.views_visible_to_friends));
+    if (profileRes.data?.username) {
+      setNicknameValue(profileRes.data.username);
+      setIsNicknamePromptDismissed(false);
+    } else {
+      setActiveTab("settings");
+    }
 
     const contactRows = (contactsRes.data ?? []) as Contact[];
     const inviteRows = (invitesRes.data ?? []) as Invite[];
+    const nowTs = Date.now();
+    const staleInviteIds = inviteRows
+      .filter(
+        (invite) =>
+          Boolean(invite.revoked_at) ||
+          invite.used_count >= invite.max_uses ||
+          new Date(invite.expires_at).getTime() <= nowTs,
+      )
+      .map((invite) => invite.id);
+    const activeInviteRows = inviteRows.filter(
+      (invite) => !staleInviteIds.includes(invite.id),
+    );
+
+    if (staleInviteIds.length > 0) {
+      await supabase
+        .from("invites")
+        .delete()
+        .eq("creator_user_id", user.id)
+        .in("id", staleInviteIds);
+    }
     const inboxRows = (inboxRes.data ?? []) as unknown as Recommendation[];
     const sentRows = (sentRes.data ?? []) as unknown as Recommendation[];
 
@@ -141,14 +213,13 @@ export default function FriendsManager() {
 
     const profileMap = await loadProfiles([...profileIds]);
 
-    setReferenceTime(Date.now());
     setContacts(
       contactRows.map((contact) => ({
         ...contact,
         profile: profileMap.get(contact.other_user_id),
       })),
     );
-    setInvites(inviteRows);
+    setInvites(activeInviteRows);
     setInbox(
       inboxRows.map((item) => ({
         ...item,
@@ -164,7 +235,7 @@ export default function FriendsManager() {
 
     if (
       contactRows.length === 0 &&
-      inviteRows.length === 0 &&
+      activeInviteRows.length === 0 &&
       inboxRows.length === 0 &&
       sentRows.length === 0
     ) {
@@ -179,19 +250,62 @@ export default function FriendsManager() {
     loadAll();
   }, [loadAll]);
 
-  const inviteStatus = (invite: Invite, referenceTime: number) => {
-    if (invite.revoked_at) return "Відкликаний";
-    if (new Date(invite.expires_at).getTime() < referenceTime)
-      return "Прострочений";
-    if (invite.used_count >= invite.max_uses) return "Використаний";
-    return "Активний";
+  const validateNickname = (value: string) => {
+    if (!NICKNAME_PATTERN.test(value)) {
+      return "3-24 символи: літери, цифри, _, -";
+    }
+    return "";
   };
 
-  const handleCreateInvite = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
+  const openNicknameModal = (nextAction: "createInvite" | null) => {
+    setPostNicknameAction(nextAction);
+    setNicknameError("");
+    setNicknameValue((prev) => prev || "");
+    setIsNicknameModalOpen(true);
+  };
+
+  const saveNickname = async (continueAction = false) => {
+    if (!currentUserId) {
+      setNicknameError("Потрібна авторизація.");
+      return false;
+    }
+    const normalized = nicknameValue.trim();
+    const validationError = validateNickname(normalized);
+    if (validationError) {
+      setNicknameError(validationError);
+      return false;
+    }
+    setIsSavingNickname(true);
+    setNicknameError("");
+    const { error } = await supabase
+      .from("profiles")
+      .update({ username: normalized })
+      .eq("id", currentUserId);
+    setIsSavingNickname(false);
+    if (error) {
+      if (error.code === "23505") {
+        setNicknameError("Нікнейм зайнятий.");
+      } else {
+        setNicknameError("Не вдалося зберегти.");
+      }
+      return false;
+    }
+    setCurrentUsername(normalized);
+    setIsNicknamePromptDismissed(false);
+    setIsNicknameModalOpen(false);
+    setMessage("Нікнейм збережено.");
+
+    if (continueAction && postNicknameAction === "createInvite") {
+      setPostNicknameAction(null);
+      await createInvite(currentUserId);
+    } else {
+      setPostNicknameAction(null);
+    }
+    return true;
+  };
+
+  const createInvite = async (userId: string) => {
+    if (!userId) {
       setMessage("Потрібна авторизація.");
       return;
     }
@@ -202,7 +316,7 @@ export default function FriendsManager() {
     ).toISOString();
 
     const { error } = await supabase.from("invites").insert({
-      creator_user_id: user.id,
+      creator_user_id: userId,
       token,
       max_uses: 1,
       expires_at: expiresAt,
@@ -214,6 +328,41 @@ export default function FriendsManager() {
     }
 
     await loadAll();
+  };
+
+  const handleCreateInvite = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      setMessage("Потрібна авторизація.");
+      return;
+    }
+    setCurrentUserId(user.id);
+    if (!currentUsername?.trim()) {
+      openNicknameModal("createInvite");
+      return;
+    }
+    await createInvite(user.id);
+  };
+
+  const handleToggleLibraryVisibility = async (nextValue: boolean) => {
+    if (!currentUserId) {
+      setMessage("Потрібна авторизація.");
+      return;
+    }
+    setIsUpdatingVisibility(true);
+    const { error } = await supabase
+      .from("profiles")
+      .update({ views_visible_to_friends: nextValue })
+      .eq("id", currentUserId);
+    setIsUpdatingVisibility(false);
+    if (error) {
+      setMessage("Не вдалося оновити налаштування доступу.");
+      return;
+    }
+    setCurrentUserViewsVisible(nextValue);
+    setMessage("Налаштування доступу оновлено.");
   };
 
   const handleCopyInvite = async (invite: Invite) => {
@@ -260,6 +409,7 @@ export default function FriendsManager() {
       return;
     }
     await loadAll();
+    window.dispatchEvent(new CustomEvent("friends:pending-count-refresh"));
   };
 
   const handleAddToCollection = async (itemId: string) => {
@@ -301,155 +451,189 @@ export default function FriendsManager() {
 
   return (
     <div className={styles.wrapper}>
-      <div className={styles.tabs}>
-        {(Object.keys(tabLabels) as TabKey[]).map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            className={`${styles.tabButton} ${
-              activeTab === tab ? styles.tabActive : ""
-            }`}
-            onClick={() => setActiveTab(tab)}
-          >
-            {tabLabels[tab]}
-            {tab === "inbox" && pendingCount > 0 ? (
-              <span className={styles.badge}>{pendingCount}</span>
-            ) : null}
-          </button>
-        ))}
+      <div className={styles.topRow}>
+        <div className={styles.tabs}>
+          {(Object.keys(tabLabels) as TabKey[]).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              className={`${styles.tabButton} ${
+                activeTab === tab ? styles.tabActive : ""
+              }`}
+              onClick={() => {
+                if (!currentUsername?.trim() && tab !== "settings") {
+                  setActiveTab("settings");
+                  setMessage("Спочатку задайте нікнейм у налаштуваннях.");
+                  return;
+                }
+                setActiveTab(tab);
+              }}
+            >
+              {tabLabels[tab]}
+              {tab === "recommendations" && pendingCount > 0 ? (
+                <span className={styles.badge}>{pendingCount}</span>
+              ) : null}
+            </button>
+          ))}
+        </div>
       </div>
 
       {message ? <p className={styles.message}>{message}</p> : null}
       {isLoading ? <p className={styles.message}>Завантаження...</p> : null}
 
-      {activeTab === "inbox" ? (
-        <div className={styles.list}>
-          {inbox.map((item) => (
-            <div key={item.id} className={styles.card}>
-              {item.items.poster_url ? (
-                <Image
-                  className={styles.poster}
-                  src={item.items.poster_url}
-                  alt={`Постер ${item.items.title}`}
-                  width={96}
-                  height={140}
-                  unoptimized
-                />
-              ) : (
-                <div className={styles.posterPlaceholder}>No image</div>
-              )}
-              <div className={styles.cardBody}>
-                <div className={styles.cardHeader}>
-                  <h3>{item.items.title}</h3>
-                  <span className={styles.meta}>{formatDate(item.created_at)}</span>
-                </div>
-                <p className={styles.meta}>
-                  Рекомендує:{" "}
-                  {item.fromProfile?.username ?? item.from_user_id.slice(0, 8)}
-                </p>
-                {item.comment ? <p className={styles.comment}>{item.comment}</p> : null}
-                <div className={styles.actionsRow}>
-                  <button
-                    type="button"
-                    className="btnBase btnPrimary"
-                    onClick={() => {
-                      handleAddToCollection(item.items.id);
-                      updateRecommendationStatus(item.id, "accepted");
-                    }}
-                  >
-                    Додати до колекції
-                  </button>
-                  <button
-                    type="button"
-                    className="btnBase btnSecondary"
-                    onClick={() => updateRecommendationStatus(item.id, "saved")}
-                  >
-                    Відкласти
-                  </button>
-                  <button
-                    type="button"
-                    className="btnBase btnSecondary"
-                    onClick={() => updateRecommendationStatus(item.id, "dismissed")}
-                  >
-                    Не цікаво
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      {activeTab === "recommendations" ? (
+        <div className={styles.recommendationsBlock}>
+          <div className={styles.subTabs}>
+            {(Object.keys(recommendationTabLabels) as RecommendationTabKey[]).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                className={`${styles.subTabButton} ${
+                  activeRecommendationTab === tab ? styles.subTabActive : ""
+                }`}
+                onClick={() => setActiveRecommendationTab(tab)}
+              >
+                {recommendationTabLabels[tab]}
+                {tab === "inbox" && pendingCount > 0 ? (
+                  <span className={styles.badge}>{pendingCount}</span>
+                ) : null}
+              </button>
+            ))}
+          </div>
 
-      {activeTab === "sent" ? (
-        <div className={styles.list}>
-          {sent.map((item) => (
-            <div key={item.id} className={styles.card}>
-              {item.items.poster_url ? (
-                <Image
-                  className={styles.poster}
-                  src={item.items.poster_url}
-                  alt={`Постер ${item.items.title}`}
-                  width={96}
-                  height={140}
-                  unoptimized
-                />
-              ) : (
-                <div className={styles.posterPlaceholder}>No image</div>
-              )}
-              <div className={styles.cardBody}>
-                <div className={styles.cardHeader}>
-                  <h3>{item.items.title}</h3>
-                  <span className={styles.meta}>{formatDate(item.created_at)}</span>
-                </div>
-                <p className={styles.meta}>
-                  Кому: {item.toProfile?.username ?? item.to_user_id.slice(0, 8)}
-                </p>
-                <p className={styles.meta}>Статус: {item.status}</p>
-                {item.comment ? <p className={styles.comment}>{item.comment}</p> : null}
+          <div className={styles.recommendationContent}>
+            {activeRecommendationTab === "inbox" ? (
+              <div className={styles.list}>
+                {inboxItems.map((item) => (
+                  <div key={item.id} className={styles.card}>
+                    {item.items.poster_url ? (
+                      <Image
+                        className={styles.poster}
+                        src={item.items.poster_url}
+                        alt={`Постер ${item.items.title}`}
+                        width={96}
+                        height={140}
+                        unoptimized
+                      />
+                    ) : (
+                      <div className={styles.posterPlaceholder}>No image</div>
+                    )}
+                    <div className={styles.cardBody}>
+                      <div className={styles.cardHeader}>
+                        <h3>{item.items.title}</h3>
+                        <span className={styles.meta}>{formatDate(item.created_at)}</span>
+                      </div>
+                      <p className={styles.meta}>
+                        Рекомендує:{" "}
+                        {getDisplayName(item.fromProfile?.username, item.from_user_id)}
+                      </p>
+                      {item.comment ? <p className={styles.comment}>{item.comment}</p> : null}
+                      {item.status === "saved" ? (
+                        <p className={styles.meta}>Статус: Прочитано (відкладено)</p>
+                      ) : null}
+                      <div className={styles.actionsRow}>
+                        <button
+                          type="button"
+                          className="btnBase btnPrimary"
+                          onClick={async () => {
+                            await handleAddToCollection(item.items.id);
+                            await updateRecommendationStatus(item.id, "accepted");
+                          }}
+                        >
+                          Додати до колекції
+                        </button>
+                        <button
+                          type="button"
+                          className="btnBase btnSecondary"
+                          onClick={() => updateRecommendationStatus(item.id, "saved")}
+                        >
+                          Відкласти
+                        </button>
+                        <button
+                          type="button"
+                          className="btnBase btnSecondary"
+                          onClick={() => updateRecommendationStatus(item.id, "dismissed")}
+                        >
+                          Не цікаво
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          ))}
+            ) : null}
+
+            {activeRecommendationTab === "archive" ? (
+              <div className={styles.list}>
+                {archiveItems.map((item) => (
+                  <div key={item.id} className={styles.card}>
+                    {item.items.poster_url ? (
+                      <Image
+                        className={styles.poster}
+                        src={item.items.poster_url}
+                        alt={`Постер ${item.items.title}`}
+                        width={96}
+                        height={140}
+                        unoptimized
+                      />
+                    ) : (
+                      <div className={styles.posterPlaceholder}>No image</div>
+                    )}
+                    <div className={styles.cardBody}>
+                      <div className={styles.cardHeader}>
+                        <h3>{item.items.title}</h3>
+                        <span className={styles.meta}>{formatDate(item.created_at)}</span>
+                      </div>
+                      <p className={styles.meta}>
+                        Рекомендує:{" "}
+                        {getDisplayName(item.fromProfile?.username, item.from_user_id)}
+                      </p>
+                      <p className={styles.meta}>
+                        Статус: {item.status === "accepted" ? "Додано до колекції" : "Не цікаво"}
+                      </p>
+                      {item.comment ? <p className={styles.comment}>{item.comment}</p> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {activeRecommendationTab === "sent" ? (
+              <div className={styles.list}>
+                {sent.map((item) => (
+                  <div key={item.id} className={styles.card}>
+                    {item.items.poster_url ? (
+                      <Image
+                        className={styles.poster}
+                        src={item.items.poster_url}
+                        alt={`Постер ${item.items.title}`}
+                        width={96}
+                        height={140}
+                        unoptimized
+                      />
+                    ) : (
+                      <div className={styles.posterPlaceholder}>No image</div>
+                    )}
+                    <div className={styles.cardBody}>
+                      <div className={styles.cardHeader}>
+                        <h3>{item.items.title}</h3>
+                        <span className={styles.meta}>{formatDate(item.created_at)}</span>
+                      </div>
+                      <p className={styles.meta}>
+                        Кому: {getDisplayName(item.toProfile?.username, item.to_user_id)}
+                      </p>
+                      <p className={styles.meta}>Статус: {item.status}</p>
+                      {item.comment ? <p className={styles.comment}>{item.comment}</p> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
       {activeTab === "contacts" ? (
-        <div className={styles.list}>
-          {contacts.map((contact) => (
-            <div key={contact.other_user_id} className={styles.rowCard}>
-              <div className={styles.contactInfo}>
-                {contact.profile?.avatar_url ? (
-                  <Image
-                    className={styles.avatar}
-                    src={contact.profile.avatar_url}
-                    alt={contact.profile.username ?? "avatar"}
-                    width={28}
-                    height={28}
-                    unoptimized
-                  />
-                ) : (
-                  <div className={styles.avatarPlaceholder} />
-                )}
-                <div>
-                  <p className={styles.contactName}>
-                    {contact.profile?.username ??
-                      contact.other_user_id.slice(0, 8)}
-                  </p>
-                  <p className={styles.meta}>Статус: {contact.status}</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="btnBase btnSecondary"
-                onClick={() => handleRemoveContact(contact.other_user_id)}
-              >
-                Видалити контакт
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      {activeTab === "invites" ? (
         <div className={styles.invites}>
           <div className={styles.inviteForm}>
             <button
@@ -461,39 +645,192 @@ export default function FriendsManager() {
             </button>
           </div>
 
-          <div className={styles.list}>
-            {invites.map((invite) => (
-              <div key={invite.id} className={styles.rowCard}>
-                <div>
-                  <p className={styles.contactName}>
-                    {inviteStatus(invite, referenceTime)}
-                  </p>
-                  <p className={styles.meta}>
-                    Використано: {invite.used_count}/{invite.max_uses}
-                  </p>
-                  <p className={styles.meta}>
-                    Діє до: {formatDate(invite.expires_at)}
-                  </p>
+          {invites.length > 0 ? (
+            <div className={styles.list}>
+              {invites.map((invite) => (
+                <div key={invite.id} className={styles.rowCard}>
+                  <div>
+                    <p className={styles.contactName}>Активне запрошення</p>
+                    <p className={styles.meta}>
+                      Використано: {invite.used_count}/{invite.max_uses}
+                    </p>
+                    <p className={styles.meta}>
+                      Діє до: {formatDate(invite.expires_at)}
+                    </p>
+                  </div>
+                  <div className={styles.actionsRow}>
+                    <button
+                      type="button"
+                      className="btnBase btnSecondary"
+                      onClick={() => handleCopyInvite(invite)}
+                    >
+                      Скопіювати
+                    </button>
+                    <button
+                      type="button"
+                      className="btnBase btnSecondary"
+                      onClick={() => handleRevokeInvite(invite.id)}
+                    >
+                      Відкликати
+                    </button>
+                  </div>
                 </div>
-                <div className={styles.actionsRow}>
+              ))}
+            </div>
+          ) : null}
+
+          <div className={styles.list}>
+            {contacts.map((contact) => (
+              <div key={contact.other_user_id} className={styles.rowCard}>
+                <div className={styles.contactInfo}>
+                  {contact.profile?.avatar_url ? (
+                    <Image
+                      className={styles.avatar}
+                      src={contact.profile.avatar_url}
+                      alt={contact.profile.username ?? "avatar"}
+                      width={28}
+                      height={28}
+                      unoptimized
+                    />
+                  ) : (
+                    <div className={styles.avatarPlaceholder} />
+                  )}
+                  <div>
+                    <p className={styles.contactName}>
+                      {getDisplayName(contact.profile?.username, contact.other_user_id)}
+                    </p>
+                    <p className={styles.meta}>Статус: {contact.status}</p>
+                    {!contact.profile?.views_visible_to_friends ? (
+                      <p className={styles.meta}>Друг закрив доступ до бібліотеки.</p>
+                    ) : null}
+                  </div>
+                </div>
+                <div className={styles.contactActions}>
                   <button
                     type="button"
                     className="btnBase btnSecondary"
-                    onClick={() => handleCopyInvite(invite)}
+                    onClick={() => router.push(`/friends/${contact.other_user_id}/films`)}
+                    disabled={!contact.profile?.views_visible_to_friends}
                   >
-                    Скопіювати
+                    Фільми
                   </button>
                   <button
                     type="button"
                     className="btnBase btnSecondary"
-                    onClick={() => handleRevokeInvite(invite.id)}
-                    disabled={Boolean(invite.revoked_at)}
+                    onClick={() => router.push(`/friends/${contact.other_user_id}/games`)}
+                    disabled={!contact.profile?.views_visible_to_friends}
                   >
-                    Відкликати
+                    Ігри
+                  </button>
+                  <button
+                    type="button"
+                    className="btnBase btnSecondary"
+                    onClick={() => handleRemoveContact(contact.other_user_id)}
+                  >
+                    Видалити контакт
                   </button>
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === "settings" ? (
+        <div className={styles.list}>
+          <div className={styles.nicknamePrompt}>
+            <p className={styles.nicknamePromptText}>
+              {currentUsername?.trim()
+                ? `Поточний нікнейм: ${currentUsername}`
+                : "Додайте нікнейм, щоб друзі бачили вас по імені."}
+            </p>
+            <div className={styles.actionsRow}>
+              <button
+                type="button"
+                className="btnBase btnPrimary"
+                onClick={() => openNicknameModal(null)}
+              >
+                {currentUsername?.trim() ? "Змінити нікнейм" : "Задати нікнейм"}
+              </button>
+              {!currentUsername?.trim() && !isNicknamePromptDismissed ? (
+                <button
+                  type="button"
+                  className="btnBase btnSecondary"
+                  onClick={() => setIsNicknamePromptDismissed(true)}
+                >
+                  Пізніше
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className={styles.visibilityCard}>
+            <label className={styles.visibilityLabel}>
+              <input
+                className={styles.visibilityCheckbox}
+                type="checkbox"
+                checked={currentUserViewsVisible}
+                onChange={(event) => void handleToggleLibraryVisibility(event.target.checked)}
+                disabled={isUpdatingVisibility}
+              />
+              Дозволити друзям переглядати мою бібліотеку
+            </label>
+          </div>
+        </div>
+      ) : null}
+
+      {isNicknameModalOpen ? (
+        <div
+          className={styles.modalOverlay}
+          role="dialog"
+          aria-modal="true"
+          onClick={() => {
+            if (!isSavingNickname) {
+              setIsNicknameModalOpen(false);
+              setPostNicknameAction(null);
+            }
+          }}
+        >
+          <div className={styles.modalCard} onClick={(event) => event.stopPropagation()}>
+            <h3 className={styles.modalTitle}>Задайте нікнейм</h3>
+            <p className={styles.meta}>3-24 символи: літери, цифри, _, -</p>
+            <label className={styles.modalField}>
+              Нікнейм
+              <input
+                className={styles.modalInput}
+                value={nicknameValue}
+                maxLength={24}
+                onChange={(event) => setNicknameValue(event.target.value)}
+                disabled={isSavingNickname}
+                autoFocus
+              />
+            </label>
+            {nicknameError ? <p className={styles.errorText}>{nicknameError}</p> : null}
+            <div className={styles.actionsRow}>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
+                onClick={() => {
+                  setIsNicknameModalOpen(false);
+                  setPostNicknameAction(null);
+                }}
+                disabled={isSavingNickname}
+              >
+                Скасувати
+              </button>
+              <button
+                type="button"
+                className="btnBase btnPrimary"
+                onClick={() => void saveNickname(Boolean(postNicknameAction))}
+                disabled={isSavingNickname}
+              >
+                {isSavingNickname
+                  ? "Збереження..."
+                  : postNicknameAction
+                    ? "Зберегти і продовжити"
+                    : "Зберегти"}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

@@ -3,6 +3,14 @@
   gap: 20px;
 }
 
+.topRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .tabs {
   display: flex;
   flex-wrap: wrap;
@@ -39,9 +47,111 @@
   font-size: var(--font-size-xs);
 }
 
+.recommendationsBlock {
+  display: grid;
+  gap: 12px;
+}
+
+.recommendationContent {
+  min-height: 220px;
+}
+
+.subTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.subTabButton {
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.subTabButton:hover {
+  border-color: var(--color-accent);
+  transform: translateY(-1px);
+}
+
+.subTabActive {
+  border-color: var(--color-accent);
+  background: var(--color-surface-muted);
+}
+
 .message {
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
+}
+
+.nicknamePrompt {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+}
+
+.visibilityCard {
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+}
+
+.visibilityLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.visibilityCheckbox {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 2px solid var(--control-border);
+  background: var(--control-bg);
+  display: grid;
+  place-content: center;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.visibilityCheckbox::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-right: 2px solid var(--color-accent-contrast);
+  border-bottom: 2px solid var(--color-accent-contrast);
+  transform: rotate(45deg) scale(0);
+  transition: transform 0.12s ease;
+}
+
+.visibilityCheckbox:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.visibilityCheckbox:checked::after {
+  transform: rotate(45deg) scale(1);
+}
+
+.visibilityCheckbox:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.nicknamePromptText {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 
 .list {
@@ -122,6 +232,13 @@
   gap: 12px;
 }
 
+.contactActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .avatar,
 .avatarPlaceholder {
   width: 40px;
@@ -150,7 +267,59 @@
   align-items: flex-end;
 }
 
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 18, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 90;
+}
+
+.modalCard {
+  width: 100%;
+  max-width: 440px;
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-elevated);
+}
+
+.modalTitle {
+  margin: 0;
+}
+
+.modalField {
+  display: grid;
+  gap: 6px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.modalInput {
+  height: 40px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--control-text);
+  padding: 0 12px;
+}
+
+.errorText {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
 @media (max-width: 800px) {
+  .topRow {
+    align-items: stretch;
+  }
+
   .card {
     grid-template-columns: 1fr;
   }
@@ -158,5 +327,9 @@
   .rowCard {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .contactActions {
+    justify-content: flex-start;
   }
 }

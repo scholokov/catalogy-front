@@ -10,6 +10,7 @@ type CatalogModalProps = {
   imageUrls?: string[];
   onClose: () => void;
   size?: "default" | "wide";
+  readOnly?: boolean;
   platformOptions?: string[];
   availabilityOptions?: string[];
   onAdd?: (payload: {
@@ -35,6 +36,7 @@ type CatalogModalProps = {
     availability?: string | null;
   };
   submitLabel?: string;
+  onReadOnlyPrimaryAction?: () => Promise<void> | void;
   children: React.ReactNode;
 };
 
@@ -52,7 +54,9 @@ export default function CatalogModal({
   platformOptions = [],
   availabilityOptions = [],
   size = "default",
+  readOnly = false,
   submitLabel = "Додати",
+  onReadOnlyPrimaryAction,
   children,
 }: CatalogModalProps) {
   const viewedAtId = useId();
@@ -199,6 +203,27 @@ export default function CatalogModal({
   }, [onClose]);
 
   const handleAdd = async () => {
+    if (readOnly) {
+      if (!onReadOnlyPrimaryAction) {
+        onClose();
+        return;
+      }
+      setIsSaving(true);
+      setSaveError("");
+      try {
+        await onReadOnlyPrimaryAction();
+        onClose();
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : "Не вдалося виконати дію.";
+        setSaveError(message);
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
     if (!onAdd) {
       onClose();
       return;
@@ -369,7 +394,7 @@ export default function CatalogModal({
                     type="button"
                     className={styles.multiSelectTrigger}
                     onClick={() => setIsPlatformsOpen((prev) => !prev)}
-                    disabled={isSaving}
+                    disabled={readOnly || isSaving}
                   >
                     <span className={styles.multiSelectText}>
                       {selectedPlatformsLabel}
@@ -413,7 +438,7 @@ export default function CatalogModal({
                       setIsPlatformsOpen(false);
                       setIsAvailabilityOpen((prev) => !prev);
                     }}
-                    disabled={isSaving}
+                    disabled={readOnly || isSaving}
                   >
                     <span className={styles.multiSelectText}>
                       {selectedAvailabilityLabel}
@@ -450,7 +475,7 @@ export default function CatalogModal({
                     className={styles.textarea}
                   value={comment}
                   onChange={(event) => setComment(event.target.value)}
-                  disabled={isSaving}
+                  disabled={readOnly || isSaving}
                   />
                 </label>
               </div>
@@ -468,7 +493,7 @@ export default function CatalogModal({
                         setViewPercent(100);
                       }
                     }}
-                    disabled={isSaving}
+                    disabled={readOnly || isSaving}
                   />
                   Переглянуто
                 </label>
@@ -481,7 +506,7 @@ export default function CatalogModal({
                   onChange={(event) =>
                     setViewPercent(Number(event.target.value))
                   }
-                  disabled={!isViewed || isSaving}
+                  disabled={readOnly || !isViewed || isSaving}
                   aria-label="Відсоток перегляду"
                 />
                 <span className={styles.percentLabel}>%</span>
@@ -499,7 +524,7 @@ export default function CatalogModal({
                   type="date"
                   value={viewedAtDisplay}
                   onChange={(event) => setViewedAt(event.target.value)}
-                  disabled={!isViewed || isSaving}
+                  disabled={readOnly || !isViewed || isSaving}
                 />
               </label>
 
@@ -513,7 +538,7 @@ export default function CatalogModal({
                   className={`${styles.select} ${styles.inlineSelect}`}
                   value={rating}
                   onChange={(event) => setRating(Number(event.target.value))}
-                  disabled={!isViewed || isSaving}
+                  disabled={readOnly || !isViewed || isSaving}
                 >
                   {ratingOptions.map((value) => (
                     <option key={value} value={value}>
@@ -533,7 +558,7 @@ export default function CatalogModal({
                   type="checkbox"
                   checked={recommendSimilar}
                   onChange={(event) => setRecommendSimilar(event.target.checked)}
-                  disabled={!isViewed || isSaving}
+                  disabled={readOnly || !isViewed || isSaving}
                 />
                 Рекомендувати подібне
               </label>
@@ -553,7 +578,7 @@ export default function CatalogModal({
               onClick={onClose}
               disabled={isSaving || isDeleting}
             >
-              Відмінити
+              Закрити
             </button>
             <button
               type="button"

@@ -3,9 +3,31 @@ create extension if not exists "pgcrypto";
 create table if not exists profiles (
   id uuid primary key references auth.users on delete cascade,
   username text,
+  views_visible_to_friends boolean not null default false,
   avatar_url text,
   created_at timestamptz not null default now()
 );
+
+alter table profiles
+add column if not exists views_visible_to_friends boolean not null default false;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'profiles_username_format_chk'
+  ) then
+    alter table profiles
+      add constraint profiles_username_format_chk
+      check (username is null or username ~ '^[A-Za-z0-9_-]{3,24}$');
+  end if;
+end;
+$$;
+
+create unique index if not exists profiles_username_lower_unique_idx
+  on profiles ((lower(username)))
+  where username is not null and btrim(username) <> '';
 
 create table if not exists items (
   id uuid primary key default gen_random_uuid(),
@@ -62,6 +84,9 @@ create index if not exists recommendations_to_user_id_idx
 
 create index if not exists recommendations_from_user_id_idx
   on recommendations (from_user_id);
+
+create index if not exists recommendations_from_to_item_idx
+  on recommendations (from_user_id, to_user_id, item_id);
 
 create table if not exists invites (
   id uuid primary key default gen_random_uuid(),
@@ -158,6 +183,25 @@ drop policy if exists "User views are readable by owner" on user_views;
 create policy "User views are readable by owner"
   on user_views for select
   using (auth.uid() = user_id);
+
+drop policy if exists "User views are readable by friends when allowed" on user_views;
+create policy "User views are readable by friends when allowed"
+  on user_views for select
+  using (
+    exists (
+      select 1
+      from profiles
+      where id = user_views.user_id
+        and views_visible_to_friends = true
+    )
+    and exists (
+      select 1
+      from contacts
+      where user_id = auth.uid()
+        and other_user_id = user_views.user_id
+        and status = 'accepted'
+    )
+  );
 
 drop policy if exists "User views are insertable by owner" on user_views;
 create policy "User views are insertable by owner"
@@ -332,6 +376,7 @@ set search_path = public
 as $$
 declare
   current_user_id uuid := auth.uid();
+  input_item_id alias for $2;
   target_user_id uuid;
   sent_count int := 0;
   recent_count int := 0;
@@ -341,7 +386,7 @@ begin
     raise exception 'Not authenticated';
   end if;
 
-  if item_id is null then
+  if input_item_id is null then
     raise exception 'Missing item';
   end if;
 
@@ -373,6 +418,25 @@ begin
       continue;
     end if;
 
+    if exists (
+      select 1
+      from user_views uv
+      where uv.user_id = target_user_id
+        and uv.item_id = input_item_id
+    ) then
+      continue;
+    end if;
+
+    if exists (
+      select 1
+      from recommendations r
+      where r.from_user_id = current_user_id
+        and r.to_user_id = target_user_id
+        and r.item_id = input_item_id
+    ) then
+      continue;
+    end if;
+
     insert into recommendations (
       from_user_id,
       to_user_id,
@@ -383,7 +447,7 @@ begin
     values (
       current_user_id,
       target_user_id,
-      item_id,
+      input_item_id,
       safe_comment,
       'pending'
     );

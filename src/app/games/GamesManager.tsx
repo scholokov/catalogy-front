@@ -15,6 +15,7 @@ import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
 import { supabase } from "@/lib/supabase/client";
+import { getDisplayName } from "@/lib/users/displayName";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
 type GameResult = {
@@ -53,10 +54,13 @@ type ContactOption = {
   id: string;
   name: string;
   avatarUrl?: string | null;
+  disabledReason?: string;
 };
 
 type GamesManagerProps = {
   onCountChange?: (count: number) => void;
+  ownerUserId?: string;
+  readOnly?: boolean;
 };
 
 type Filters = {
@@ -91,6 +95,7 @@ const AVAILABILITY_OPTIONS = [
 ];
 const PAGE_SIZE = 20;
 const LOAD_AHEAD_PX = 700;
+const NICKNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
 const DEFAULT_FILTERS: Filters = {
   availabilityAll: true,
   query: "",
@@ -130,7 +135,11 @@ const reconcileRangeWithNewBounds = (
   return clampRange([from, to], nextBounds);
 };
 
-export default function GamesManager({ onCountChange }: GamesManagerProps) {
+export default function GamesManager({
+  onCountChange,
+  ownerUserId,
+  readOnly = false,
+}: GamesManagerProps) {
   const [collection, setCollection] = useState<GameCollectionItem[]>([]);
   const [appliedFilters, setAppliedFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [pendingFilters, setPendingFilters] = useState<Filters>(DEFAULT_FILTERS);
@@ -180,6 +189,18 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     title: string;
   } | null>(null);
   const [contacts, setContacts] = useState<ContactOption[]>([]);
+  const [isNicknameModalOpen, setIsNicknameModalOpen] = useState(false);
+  const [nicknameValue, setNicknameValue] = useState("");
+  const [nicknameError, setNicknameError] = useState("");
+  const [isSavingNickname, setIsSavingNickname] = useState(false);
+  const [pendingRecommendItem, setPendingRecommendItem] = useState<{
+    itemId: string;
+    title: string;
+  } | null>(null);
+  const [friendAccessState, setFriendAccessState] = useState<
+    "checking" | "allowed" | "unauthenticated" | "not_friends" | "closed"
+  >(readOnly && ownerUserId ? "checking" : "allowed");
+  const [friendOwnerName, setFriendOwnerName] = useState("");
 
   const loadRecommendations = useCallback(
     async (itemIds: string[], shouldReset: boolean) => {
@@ -216,6 +237,58 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     yearBoundsRef.current = yearBounds;
   }, [yearBounds]);
 
+  useEffect(() => {
+    if (!readOnly || !ownerUserId) {
+      setFriendAccessState("allowed");
+      setFriendOwnerName("");
+      return;
+    }
+    let isCancelled = false;
+    setFriendAccessState("checking");
+    void (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (isCancelled) return;
+      if (!user) {
+        setFriendAccessState("unauthenticated");
+        return;
+      }
+      if (user.id === ownerUserId) {
+        setFriendAccessState("allowed");
+        return;
+      }
+      const [{ data: ownerProfile }, { data: contact }] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select("id, username, views_visible_to_friends")
+          .eq("id", ownerUserId)
+          .maybeSingle(),
+        supabase
+          .from("contacts")
+          .select("other_user_id")
+          .eq("user_id", user.id)
+          .eq("other_user_id", ownerUserId)
+          .eq("status", "accepted")
+          .maybeSingle(),
+      ]);
+      if (isCancelled) return;
+      setFriendOwnerName(getDisplayName(ownerProfile?.username ?? null, ownerUserId));
+      if (!contact?.other_user_id) {
+        setFriendAccessState("not_friends");
+        return;
+      }
+      if (!ownerProfile?.views_visible_to_friends) {
+        setFriendAccessState("closed");
+        return;
+      }
+      setFriendAccessState("allowed");
+    })();
+    return () => {
+      isCancelled = true;
+    };
+  }, [ownerUserId, readOnly]);
+
   const fetchPage = useCallback(async (pageIndex: number, filters: Filters) => {
     const {
       data: { user },
@@ -232,6 +305,17 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       loadingPagesRef.current.delete(pageIndex);
       return false;
     }
+
+    if (readOnly && ownerUserId && friendAccessState !== "allowed") {
+      setCollection([]);
+      setHasMore(false);
+      setTotalCount(0);
+      setIsLoading(false);
+      setIsLoadingMore(false);
+      loadingPagesRef.current.delete(pageIndex);
+      return false;
+    }
+    const effectiveOwnerId = ownerUserId ?? user.id;
 
     const trimmedQuery = filters.query.trim();
     const effectiveViewed = filters.viewAll ? true : filters.viewed;
@@ -264,6 +348,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       .select(
         "id, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
       )
+      .eq("user_id", effectiveOwnerId)
       .eq("items.type", "game")
       .order("updated_at", { ascending: false })
       .order("id", { ascending: false });
@@ -321,6 +406,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       let countQuery = supabase
         .from("user_views")
         .select("id, items:items!inner(id)", { count: "exact", head: true })
+        .eq("user_id", effectiveOwnerId)
         .eq("items.type", "game");
 
       if (effectiveViewed !== effectivePlanned) {
@@ -437,18 +523,20 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       loadingPagesRef.current.delete(pageIndex);
       return nextHasMore;
     }
-  }, [loadRecommendations, yearBounds]);
+  }, [friendAccessState, loadRecommendations, ownerUserId, readOnly, yearBounds]);
 
   useEffect(() => {
+    if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (!hasApplied) return;
     if (skipNextApplyRef.current) {
       skipNextApplyRef.current = false;
       return;
     }
     void fetchPage(0, appliedFilters);
-  }, [appliedFilters, fetchPage, hasApplied]);
+  }, [appliedFilters, fetchPage, friendAccessState, hasApplied, ownerUserId, readOnly]);
 
   useEffect(() => {
+    if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (hasApplied) return;
     skipNextApplyRef.current = true;
     setAppliedFilters(DEFAULT_FILTERS);
@@ -459,7 +547,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
         await fetchPage(1, DEFAULT_FILTERS);
       }
     })();
-  }, [fetchPage, hasApplied]);
+  }, [fetchPage, friendAccessState, hasApplied, ownerUserId, readOnly]);
 
   const loadYearBounds = useCallback(async () => {
     const { data: minRows } = await supabase
@@ -513,6 +601,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
   }, [loadYearBounds]);
 
   useEffect(() => {
+    if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (!hasApplied || isLoading || isLoadingMore || !hasMore) return;
     const node = loadMoreRef.current;
     if (!node) return;
@@ -529,7 +618,18 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [appliedFilters, fetchPage, hasApplied, hasMore, isLoading, isLoadingMore, page]);
+  }, [
+    appliedFilters,
+    fetchPage,
+    friendAccessState,
+    hasApplied,
+    hasMore,
+    isLoading,
+    isLoadingMore,
+    ownerUserId,
+    page,
+    readOnly,
+  ]);
 
   const displayedCollection = useMemo(() => {
     const genresFilter = appliedFilters.genres.trim().toLowerCase();
@@ -571,7 +671,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     );
   }, [collection]);
 
-  const loadContacts = async () => {
+  const loadContacts = async (itemIdForCheck?: string) => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -598,19 +698,114 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       .select("id, username, avatar_url")
       .in("id", ids);
 
+    let ownedByFriend = new Set<string>();
+    let alreadyRecommended = new Set<string>();
+    if (itemIdForCheck) {
+      const [{ data: ownedRows }, { data: sentRows }] = await Promise.all([
+        supabase
+          .from("user_views")
+          .select("user_id")
+          .eq("item_id", itemIdForCheck)
+          .in("user_id", ids),
+        supabase
+          .from("recommendations")
+          .select("to_user_id")
+          .eq("from_user_id", user.id)
+          .eq("item_id", itemIdForCheck)
+          .in("to_user_id", ids),
+      ]);
+      ownedByFriend = new Set((ownedRows ?? []).map((row) => row.user_id));
+      alreadyRecommended = new Set((sentRows ?? []).map((row) => row.to_user_id));
+    }
+
     const mapped =
       profiles?.map((profile) => ({
         id: profile.id,
-        name: profile.username ?? profile.id.slice(0, 8),
+        name: getDisplayName(profile.username, profile.id),
         avatarUrl: profile.avatar_url,
+        disabledReason: ownedByFriend.has(profile.id)
+          ? `У ${getDisplayName(profile.username, profile.id)} уже є ця гра у колекції`
+          : alreadyRecommended.has(profile.id)
+            ? `Ви вже рекомендували ${getDisplayName(profile.username, profile.id)} цю гру`
+            : undefined,
       })) ?? [];
 
     setContacts(mapped);
   };
 
+  const ensureNickname = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      setMessage("Потрібна авторизація.");
+      return { ok: false as const, requiresNickname: false };
+    }
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("username")
+      .eq("id", user.id)
+      .maybeSingle();
+    const username = profile?.username?.trim() ?? "";
+    if (username) {
+      return { ok: true as const, requiresNickname: false };
+    }
+    setNicknameValue("");
+    setNicknameError("");
+    setIsNicknameModalOpen(true);
+    return { ok: false as const, requiresNickname: true };
+  };
+
+  const saveNicknameAndContinue = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      setNicknameError("Потрібна авторизація.");
+      return;
+    }
+    const normalized = nicknameValue.trim();
+    if (!NICKNAME_PATTERN.test(normalized)) {
+      setNicknameError("3-24 символи: літери, цифри, _, -");
+      return;
+    }
+    setIsSavingNickname(true);
+    setNicknameError("");
+    const { error } = await supabase
+      .from("profiles")
+      .update({ username: normalized })
+      .eq("id", user.id);
+    setIsSavingNickname(false);
+    if (error) {
+      if (error.code === "23505") {
+        setNicknameError("Нікнейм зайнятий.");
+      } else {
+        setNicknameError("Не вдалося зберегти.");
+      }
+      return;
+    }
+    setIsNicknameModalOpen(false);
+    setMessage("Нікнейм збережено.");
+    if (pendingRecommendItem) {
+      await loadContacts(pendingRecommendItem.itemId);
+      setRecommendItem(pendingRecommendItem);
+      setPendingRecommendItem(null);
+    }
+  };
+
   const openRecommend = async (itemId: string, title: string) => {
-    await loadContacts();
+    if (readOnly) return;
+    setPendingRecommendItem({ itemId, title });
+    const check = await ensureNickname();
+    if (!check.ok) {
+      if (!check.requiresNickname) {
+        setPendingRecommendItem(null);
+      }
+      return;
+    }
+    await loadContacts(itemId);
     setRecommendItem({ itemId, title });
+    setPendingRecommendItem(null);
   };
 
   const handleSendRecommendation = async (
@@ -783,6 +978,43 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
 
     setHasApplied(true);
     void fetchPage(0, appliedFilters);
+  };
+
+  const handleAddToOwnCollection = async (itemId: string) => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      throw new Error("Потрібна авторизація.");
+    }
+
+    const { data: existing } = await supabase
+      .from("user_views")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("item_id", itemId)
+      .maybeSingle();
+
+    if (existing?.id) {
+      throw new Error("Вже у твоїй колекції.");
+    }
+
+    const { error } = await supabase.from("user_views").insert({
+      user_id: user.id,
+      item_id: itemId,
+      is_viewed: false,
+      view_percent: 0,
+      rating: null,
+    });
+
+    if (error) {
+      if (error.code === "23505") {
+        throw new Error("Вже у твоїй колекції.");
+      }
+      throw new Error("Не вдалося додати у колекцію.");
+    }
+
+    setMessage("Додано до твоєї колекції.");
   };
 
   const handleGameSearch = async (query: string) => {
@@ -1034,6 +1266,18 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
     setOverflowDescriptions(next);
   }, [expandedDescriptions, collection]);
 
+  const isFriendView = Boolean(readOnly && ownerUserId);
+  const isFriendAccessAllowed = !isFriendView || friendAccessState === "allowed";
+  const friendAccessMessage = isFriendView
+    ? {
+        allowed: "",
+        checking: "Перевіряємо доступ до бібліотеки...",
+        unauthenticated: "Потрібна авторизація для перегляду бібліотеки друга.",
+        not_friends: "Доступ лише для друзів.",
+        closed: `${friendOwnerName || "Користувач"} закрив доступ до бібліотеки.`,
+      }[friendAccessState]
+    : "";
+
   return (
     <div className={styles.searchBlock}>
       <div className={styles.filtersWrapper}>
@@ -1051,25 +1295,30 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
             </button>
           </div>
           <div className={styles.toolbarActions}>
-            <button
-              type="button"
-              className="btnBase btnPrimary"
-              onClick={() => setIsAddOpen(true)}
-            >
-              Додати
-            </button>
+            {!readOnly ? (
+              <button
+                type="button"
+                className="btnBase btnPrimary"
+                onClick={() => setIsAddOpen(true)}
+              >
+                Додати
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
 
-      {!hasApplied ? (
+      {!hasApplied && isFriendAccessAllowed ? (
         <p className={styles.message}>
           Оберіть фільтри та натисніть &quot;Відобразити&quot;.
         </p>
       ) : null}
+      {friendAccessMessage && !isFriendAccessAllowed ? (
+        <p className={styles.message}>{friendAccessMessage}</p>
+      ) : null}
       {message ? <p className={styles.message}>{message}</p> : null}
 
-      <div className={styles.results}>
+      {isFriendAccessAllowed ? <div className={styles.results}>
         {displayedCollection.map((item) => {
           const details = gameDetails[item.items.id];
           const releasedYear = details?.released ? details.released.slice(0, 4) : "";
@@ -1172,8 +1421,8 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
             </button>
           );
         })}
-      </div>
-      {hasApplied && hasMore ? <div ref={loadMoreRef} /> : null}
+      </div> : null}
+      {hasApplied && hasMore && isFriendAccessAllowed ? <div ref={loadMoreRef} /> : null}
       {isLoading ? (
         <div className={styles.loadingOverlay} aria-live="polite">
           <span className={styles.loadingOverlayText}>Завантаження...</span>
@@ -1677,17 +1926,21 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
           platformOptions={GAME_PLATFORM_OPTIONS}
           availabilityOptions={AVAILABILITY_OPTIONS}
           onClose={() => setSelectedView(null)}
-          submitLabel="Зберегти"
+          readOnly={readOnly}
+          submitLabel={readOnly ? "Додати собі у колекцію" : "Зберегти"}
+          onReadOnlyPrimaryAction={() => handleAddToOwnCollection(selectedView.items.id)}
           extraActions={
-            <button
-              type="button"
-              className="btnBase btnSecondary"
-              onClick={() =>
-                openRecommend(selectedView.items.id, selectedView.items.title)
-              }
-            >
-              Порекомендувати другу
-            </button>
+            readOnly ? null : (
+              <button
+                type="button"
+                className="btnBase btnSecondary"
+                onClick={() =>
+                  openRecommend(selectedView.items.id, selectedView.items.title)
+                }
+              >
+                Порекомендувати другу
+              </button>
+            )
           }
           initialValues={{
             viewedAt: selectedView.viewed_at,
@@ -1699,8 +1952,8 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
             platforms: selectedView.platforms ?? [],
             availability: selectedView.availability,
           }}
-          onAdd={(payload) => handleUpdateView(selectedView.id, payload)}
-          onDelete={() => handleDeleteView(selectedView.id)}
+          onAdd={readOnly ? undefined : (payload) => handleUpdateView(selectedView.id, payload)}
+          onDelete={readOnly ? undefined : () => handleDeleteView(selectedView.id)}
         >
           <div className={styles.resultContent}>
             <div className={styles.titleRow}>
@@ -1737,6 +1990,60 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
           onClose={() => setRecommendItem(null)}
           onSend={handleSendRecommendation}
         />
+      ) : null}
+
+      {isNicknameModalOpen ? (
+        <div
+          className={styles.filtersOverlay}
+          role="dialog"
+          aria-modal="true"
+          onClick={() => {
+            if (!isSavingNickname) {
+              setIsNicknameModalOpen(false);
+              setPendingRecommendItem(null);
+            }
+          }}
+        >
+          <div className={styles.filtersModal} onClick={(event) => event.stopPropagation()}>
+            <div className={styles.filtersHeader}>
+              <h2 className={styles.filtersTitle}>Задайте нікнейм перед відправкою</h2>
+            </div>
+            <label className={styles.filtersField}>
+              Нікнейм
+              <input
+                className={styles.filtersInput}
+                value={nicknameValue}
+                maxLength={24}
+                onChange={(event) => setNicknameValue(event.target.value)}
+                disabled={isSavingNickname}
+                autoFocus
+              />
+            </label>
+            <p className={styles.message}>3-24 символи: літери, цифри, _, -</p>
+            {nicknameError ? <p className={styles.errorText}>{nicknameError}</p> : null}
+            <div className={styles.filtersActions}>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
+                onClick={() => {
+                  setIsNicknameModalOpen(false);
+                  setPendingRecommendItem(null);
+                }}
+                disabled={isSavingNickname}
+              >
+                Скасувати
+              </button>
+              <button
+                type="button"
+                className="btnBase btnPrimary"
+                onClick={() => void saveNicknameAndContinue()}
+                disabled={isSavingNickname}
+              >
+                {isSavingNickname ? "Збереження..." : "Зберегти і продовжити"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

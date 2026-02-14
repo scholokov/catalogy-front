@@ -2,12 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import { getDisplayName } from "@/lib/users/displayName";
 import styles from "./RecommendModal.module.css";
 
 type ContactOption = {
   id: string;
   name: string;
   avatarUrl?: string | null;
+  disabledReason?: string;
 };
 
 type RecommendModalProps = {
@@ -47,11 +49,22 @@ export default function RecommendModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  const toggleContact = (id: string) => {
+  const toggleContact = (id: string, disabledReason?: string) => {
+    if (disabledReason) return;
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
     );
   };
+
+  const selectableContacts = useMemo(
+    () => contacts.filter((contact) => !contact.disabledReason),
+    [contacts],
+  );
+
+  useEffect(() => {
+    const selectable = new Set(selectableContacts.map((contact) => contact.id));
+    setSelectedIds((prev) => prev.filter((id) => selectable.has(id)));
+  }, [selectableContacts]);
 
   const handleSend = async () => {
     if (selectedIds.length === 0) {
@@ -113,8 +126,8 @@ export default function RecommendModal({
                     className={styles.checkbox}
                     type="checkbox"
                     checked={selectedIds.includes(contact.id)}
-                    onChange={() => toggleContact(contact.id)}
-                    disabled={isSending}
+                    onChange={() => toggleContact(contact.id, contact.disabledReason)}
+                    disabled={isSending || Boolean(contact.disabledReason)}
                   />
                   {contact.avatarUrl ? (
                     <Image
@@ -128,7 +141,10 @@ export default function RecommendModal({
                   ) : (
                     <div className={styles.avatarPlaceholder} />
                   )}
-                  <span>{contact.name}</span>
+                  <span>{getDisplayName(contact.name, contact.id)}</span>
+                  {contact.disabledReason ? (
+                    <span className={styles.hintText}>{contact.disabledReason}</span>
+                  ) : null}
                 </label>
               ))}
             </div>
@@ -162,7 +178,7 @@ export default function RecommendModal({
             type="button"
             className="btnBase btnPrimary"
             onClick={handleSend}
-            disabled={isSending || contacts.length === 0}
+            disabled={isSending || selectableContacts.length === 0}
           >
             {isSending ? "Надсилання..." : "Надіслати"}
           </button>

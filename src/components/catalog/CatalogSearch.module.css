@@ -233,14 +233,50 @@
 }
 
 .filtersCheckbox {
-  accent-color: var(--color-accent);
+  appearance: none;
   width: 16px;
   height: 16px;
+  border-radius: 4px;
+  border: 2px solid var(--control-border);
+  background: var(--control-bg);
+  display: grid;
+  place-content: center;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.filtersCheckbox::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-right: 2px solid var(--color-accent-contrast);
+  border-bottom: 2px solid var(--color-accent-contrast);
+  transform: rotate(45deg) scale(0);
+  transition: transform 0.12s ease;
+}
+
+.filtersCheckbox:checked {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.filtersCheckbox:checked::after {
+  transform: rotate(45deg) scale(1);
+}
+
+.filtersCheckbox:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .message {
   font-size: 14px;
   color: var(--color-text-muted);
+}
+
+.errorText {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-danger);
 }
 
 .loadingOverlay {
