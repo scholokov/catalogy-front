@@ -8,11 +8,14 @@ type TmdbCredits = {
 type TmdbDetail = {
   id: number;
   title: string;
+  name?: string;
   release_date?: string;
+  first_air_date?: string;
   poster_path?: string | null;
   overview?: string | null;
   genres?: { name: string }[];
   vote_average?: number | null;
+  created_by?: { name: string }[];
   credits?: TmdbCredits;
   images?: {
     posters?: { file_path: string }[];
@@ -21,10 +24,12 @@ type TmdbDetail = {
 };
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const { searchParams } = new URL(request.url);
+  const requestedMediaType = searchParams.get("mediaType");
   const token = process.env.TMDB_READ_ACCESS_TOKEN;
   const apiKey = process.env.TMDB_API_KEY;
 
@@ -35,37 +40,59 @@ export async function GET(
     );
   }
 
-  const detailUrl = new URL(`https://api.themoviedb.org/3/movie/${id}`);
-  detailUrl.searchParams.set("append_to_response", "credits,images");
-  detailUrl.searchParams.set("include_image_language", "uk,en,null");
-  detailUrl.searchParams.set("language", "uk-UA");
-  detailUrl.searchParams.set("region", "UA");
-  if (apiKey) {
-    detailUrl.searchParams.set("api_key", apiKey);
+  const fallbackOrder: ("movie" | "tv")[] =
+    requestedMediaType === "movie" || requestedMediaType === "tv"
+      ? [requestedMediaType]
+      : ["movie", "tv"];
+
+  let detail: TmdbDetail | null = null;
+  let resolvedMediaType: "movie" | "tv" | null = null;
+  let lastError: { status: number; message: string } | null = null;
+
+  for (const mediaType of fallbackOrder) {
+    const detailUrl = new URL(`https://api.themoviedb.org/3/${mediaType}/${id}`);
+    detailUrl.searchParams.set("append_to_response", "credits,images");
+    detailUrl.searchParams.set("include_image_language", "uk,en,null");
+    detailUrl.searchParams.set("language", "uk-UA");
+    detailUrl.searchParams.set("region", "UA");
+    if (apiKey) {
+      detailUrl.searchParams.set("api_key", apiKey);
+    }
+
+    const response = await fetch(detailUrl.toString(), {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    const data = (await response.json()) as
+      | TmdbDetail
+      | { status_message?: string };
+
+    if (response.ok) {
+      detail = data as TmdbDetail;
+      resolvedMediaType = mediaType;
+      break;
+    }
+
+    lastError = {
+      status: response.status,
+      message:
+        "status_message" in data && data.status_message
+          ? data.status_message
+          : "TMDB error.",
+    };
   }
 
-  const response = await fetch(detailUrl.toString(), {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
-  const data = (await response.json()) as
-    | TmdbDetail
-    | { status_message?: string };
-
-  if (!response.ok) {
+  if (!detail || !resolvedMediaType) {
     return NextResponse.json(
-      {
-        error:
-          "status_message" in data && data.status_message
-            ? data.status_message
-            : "TMDB error.",
-      },
-      { status: response.status },
+      { error: lastError?.message ?? "TMDB error." },
+      { status: lastError?.status ?? 500 },
     );
   }
 
-  const detail = data as TmdbDetail;
+  const directorJobs =
+    resolvedMediaType === "tv" ? ["Series Director", "Director", "Creator"] : ["Director"];
   const director =
-    detail.credits?.crew?.find((member) => member.job === "Director")?.name ??
+    detail.credits?.crew?.find((member) => directorJobs.includes(member.job))?.name ??
+    detail.created_by?.[0]?.name ??
     "";
   const actors = (detail.credits?.cast ?? [])
     .slice(0, 5)
@@ -87,8 +114,8 @@ export async function GET(
 
   return NextResponse.json({
     id: String(detail.id),
-    title: detail.title,
-    year: detail.release_date ? detail.release_date.slice(0, 4) : "",
+    title: detail.title ?? detail.name ?? "",
+    year: (detail.release_date ?? detail.first_air_date ?? "").slice(0, 4),
     poster: primaryPoster,
     imageUrls,
     plot: detail.overview ?? "",
@@ -99,6 +126,7 @@ export async function GET(
       typeof detail.vote_average === "number"
         ? detail.vote_average.toFixed(1)
         : "",
+    mediaType: resolvedMediaType,
     source: "tmdb" as const,
   });
 }

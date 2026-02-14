@@ -28,6 +28,7 @@ type FilmResult = {
   director: string;
   actors: string;
   imdbRating: string;
+  mediaType?: "movie" | "tv";
   source: "tmdb";
 };
 
@@ -80,6 +81,9 @@ type Filters = {
   viewedDateFrom: string;
   viewedDateTo: string;
 };
+
+type FilmsViewMode = "default" | "directors" | "cards";
+const FILMS_VIEW_MODES: FilmsViewMode[] = ["default", "directors", "cards"];
 
 const MIN_YEAR = 1950;
 const MAX_YEAR = new Date().getFullYear();
@@ -152,6 +156,8 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   const [page, setPage] = useState(0);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<FilmsViewMode>("default");
+  const [isDirectorsHydrating, setIsDirectorsHydrating] = useState(false);
   const [selectedFilm, setSelectedFilm] = useState<FilmResult | null>(null);
   const [selectedView, setSelectedView] = useState<FilmCollectionItem | null>(
     null,
@@ -176,6 +182,9 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   const skipNextApplyRef = useRef(false);
   const loadingPagesRef = useRef<Set<number>>(new Set());
   const yearBoundsRef = useRef<[number, number]>([MIN_YEAR, MAX_YEAR]);
+  const viewModeStorageKeyRef = useRef("films:view-mode:guest");
+  const isViewModeStorageReadyRef = useRef(false);
+  const directorsHydrationRunRef = useRef(0);
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
     title: string;
@@ -216,6 +225,31 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   useEffect(() => {
     yearBoundsRef.current = yearBounds;
   }, [yearBounds]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    void (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (isCancelled) return;
+      const storageKey = `films:view-mode:${user?.id ?? "guest"}`;
+      viewModeStorageKeyRef.current = storageKey;
+      const rawValue = window.localStorage.getItem(storageKey);
+      if (rawValue && FILMS_VIEW_MODES.includes(rawValue as FilmsViewMode)) {
+        setViewMode(rawValue as FilmsViewMode);
+      }
+      isViewModeStorageReadyRef.current = true;
+    })();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isViewModeStorageReadyRef.current) return;
+    window.localStorage.setItem(viewModeStorageKeyRef.current, viewMode);
+  }, [viewMode]);
 
   const fetchPage = useCallback(async (pageIndex: number, filters: Filters) => {
     const {
@@ -275,9 +309,9 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
 
     if (trimmedQuery) {
       const escaped = trimmedQuery.replaceAll("%", "\\%");
-      query = query.or(
-        `items.title.ilike.%${escaped}%,items.description.ilike.%${escaped}%`,
-      );
+      query = query.or(`title.ilike.%${escaped}%,description.ilike.%${escaped}%`, {
+        foreignTable: "items",
+      });
     }
 
     if (!filters.availabilityAll && filters.availability.length > 0) {
@@ -331,7 +365,10 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       if (trimmedQuery) {
         const escaped = trimmedQuery.replaceAll("%", "\\%");
         countQuery = countQuery.or(
-          `items.title.ilike.%${escaped}%,items.description.ilike.%${escaped}%`,
+          `title.ilike.%${escaped}%,description.ilike.%${escaped}%`,
+          {
+            foreignTable: "items",
+          },
         );
       }
 
@@ -407,7 +444,24 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       setHasMore(nextHasMore);
       setPage(pageIndex);
       if (pageIndex === 0 && nextCollection.length === 0) {
-        setMessage("Колекція порожня.");
+        const hasActiveFilters = Boolean(
+          trimmedQuery ||
+            effectiveViewed !== effectivePlanned ||
+            !filters.availabilityAll ||
+            (!filters.favoriteAll && filters.recommendSimilarOnly) ||
+            isYearFilterActive ||
+            isExternalFilterActive ||
+            isPersonalFilterActive ||
+            filters.viewedDateFrom ||
+            filters.viewedDateTo ||
+            filters.genres.trim() ||
+            filters.director.trim(),
+        );
+        setMessage(
+          hasActiveFilters
+            ? "Нічого не знайдено за вашим запитом"
+            : "Колекція порожня.",
+        );
       }
 
       const itemIds = nextCollection
@@ -496,6 +550,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
 
   useEffect(() => {
     if (!hasApplied || isLoading || isLoadingMore || !hasMore) return;
+    if (viewMode === "directors") return;
     const node = loadMoreRef.current;
     if (!node) return;
     const observer = new IntersectionObserver(
@@ -511,7 +566,33 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [appliedFilters, fetchPage, hasApplied, hasMore, isLoading, isLoadingMore, page]);
+  }, [appliedFilters, fetchPage, hasApplied, hasMore, isLoading, isLoadingMore, page, viewMode]);
+
+  useEffect(() => {
+    if (!hasApplied || viewMode !== "directors" || !hasMore) return;
+    const runId = Date.now();
+    directorsHydrationRunRef.current = runId;
+    setIsDirectorsHydrating(true);
+    void (async () => {
+      let nextPage = page + 1;
+      let canLoadMore = true;
+      while (canLoadMore) {
+        if (directorsHydrationRunRef.current !== runId) return;
+        canLoadMore = await fetchPage(nextPage, appliedFilters);
+        if (!canLoadMore) break;
+        nextPage += 1;
+      }
+      if (directorsHydrationRunRef.current === runId) {
+        setIsDirectorsHydrating(false);
+      }
+    })();
+    return () => {
+      if (directorsHydrationRunRef.current === runId) {
+        directorsHydrationRunRef.current = 0;
+        setIsDirectorsHydrating(false);
+      }
+    };
+  }, [appliedFilters, fetchPage, hasApplied, hasMore, page, viewMode]);
 
   const displayedCollection = useMemo(() => {
     const genresFilter = appliedFilters.genres.trim().toLowerCase();
@@ -965,10 +1046,119 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       });
   };
 
+  const groupedByDirector = useMemo(() => {
+    const groups = new Map<string, FilmCollectionItem[]>();
+    displayedCollection.forEach((item) => {
+      const director = filmDetails[item.items.id]?.director?.trim() || "Без режисера";
+      const bucket = groups.get(director);
+      if (bucket) {
+        bucket.push(item);
+      } else {
+        groups.set(director, [item]);
+      }
+    });
+    return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right, "uk"));
+  }, [displayedCollection, filmDetails]);
+
+  const renderDefaultFilmItem = (
+    item: FilmCollectionItem,
+    keyPrefix = "",
+  ) => (
+    <button
+      key={`${keyPrefix}${item.id}`}
+      type="button"
+      className={`${styles.resultItem} ${styles.resultButton} ${styles.collectionItem}`}
+      onClick={() => setSelectedView(item)}
+    >
+      <div className={styles.resultHeader}>
+        <div className={styles.titleRow}>
+          <h2 className={styles.resultTitle}>{item.items.title}</h2>
+          <div className={styles.ratingRow}>
+            <span className={styles.resultRating}>IMDb: {item.items.imdb_rating ?? "—"}</span>
+            <span className={styles.resultRating}>Мій: {item.rating ?? "—"}</span>
+          </div>
+        </div>
+      </div>
+      <div className={styles.posterWrapper}>
+        {item.items.poster_url ? (
+          <Image
+            className={styles.poster}
+            src={item.items.poster_url}
+            alt={`Постер ${item.items.title}`}
+            width={180}
+            height={270}
+            sizes="(max-width: 600px) 100vw, 120px"
+            loading="lazy"
+            unoptimized
+          />
+        ) : (
+          <div className={styles.posterPlaceholder}>No image</div>
+        )}
+      </div>
+      <div className={styles.resultContent}>
+        {filmDetails[item.items.id]?.year ? (
+          <p className={styles.resultMeta}>Рік: {filmDetails[item.items.id]?.year}</p>
+        ) : null}
+        {filmDetails[item.items.id]?.director ? (
+          <p className={styles.resultMeta}>Режисер: {filmDetails[item.items.id]?.director}</p>
+        ) : null}
+        {filmDetails[item.items.id]?.actors ? (
+          <p className={styles.resultMeta}>Актори: {filmDetails[item.items.id]?.actors}</p>
+        ) : null}
+        {filmDetails[item.items.id]?.genres ? (
+          <p className={styles.resultMeta}>Жанри: {filmDetails[item.items.id]?.genres}</p>
+        ) : null}
+        {item.items.description ? (
+          <div className={styles.plotBlock}>
+            <p
+              className={`${styles.resultPlot} ${
+                expandedDescriptions.has(item.id) ? "" : styles.resultPlotClamp
+              }`}
+              ref={(node) => {
+                if (node) {
+                  descriptionRefs.current.set(item.id, node);
+                } else {
+                  descriptionRefs.current.delete(item.id);
+                }
+              }}
+            >
+              {item.items.description}
+            </p>
+            {!expandedDescriptions.has(item.id) && overflowDescriptions.has(item.id) ? (
+              <span
+                className={styles.plotToggle}
+                role="button"
+                tabIndex={0}
+                onClick={(event) => handleExpandDescription(event, item.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    handleExpandDescription(event, item.id);
+                  }
+                }}
+              >
+                детальніше...
+              </span>
+            ) : null}
+          </div>
+        ) : (
+          <p className={styles.resultPlot}>Опис недоступний.</p>
+        )}
+        <div className={styles.userMeta}>
+          <span>
+            Переглянуто:{" "}
+            {item.is_viewed ? `${formatViewedDate(item.viewed_at)} (${item.view_percent}%)` : "ні"}
+          </span>
+          {recommendedItemIds.has(item.items.id) ? <span>Рекомендовано друзям</span> : null}
+          {item.comment ? <span>Коментар: {item.comment}</span> : null}
+        </div>
+      </div>
+    </button>
+  );
+
   return (
     <div className={styles.searchBlock}>
       <div className={styles.filtersWrapper}>
-        <div className={styles.toolbar}>
+        <div className={`${styles.toolbar} ${styles.filmsToolbar}`}>
           <div className={styles.toolbarSearch}>
             <button
               type="button"
@@ -980,6 +1170,37 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
             >
               Фільтри
             </button>
+          </div>
+          <div className={styles.toolbarCenter}>
+            <div className={styles.viewSwitch}>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  viewMode === "default" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => setViewMode("default")}
+              >
+                Стандарт
+              </button>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  viewMode === "directors" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => setViewMode("directors")}
+              >
+                Режисери
+              </button>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  viewMode === "cards" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => setViewMode("cards")}
+              >
+                Картки
+              </button>
+            </div>
           </div>
           <div className={styles.toolbarActions}>
             <button
@@ -1000,120 +1221,60 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       ) : null}
       {message ? <p className={styles.message}>{message}</p> : null}
 
-      <div className={styles.results}>
-        {displayedCollection.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`${styles.resultItem} ${styles.resultButton} ${styles.collectionItem}`}
-            onClick={() => setSelectedView(item)}
-          >
-                  <div className={styles.resultHeader}>
-                    <div className={styles.titleRow}>
-                      <h2 className={styles.resultTitle}>{item.items.title}</h2>
-                      <div className={styles.ratingRow}>
-                        <span className={styles.resultRating}>
-                          IMDb: {item.items.imdb_rating ?? "—"}
-                        </span>
-                        <span className={styles.resultRating}>
-                          Мій: {item.rating ?? "—"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className={styles.posterWrapper}>
-                    {item.items.poster_url ? (
-                      <Image
-                        className={styles.poster}
-                        src={item.items.poster_url}
-                        alt={`Постер ${item.items.title}`}
-                        width={180}
-                        height={270}
-                        sizes="(max-width: 600px) 100vw, 120px"
-                        loading="lazy"
-                        unoptimized
-                      />
-                    ) : (
-                      <div className={styles.posterPlaceholder}>No image</div>
-                    )}
-                  </div>
-                  <div className={styles.resultContent}>
-                    {filmDetails[item.items.id]?.year ? (
-                      <p className={styles.resultMeta}>
-                        Рік: {filmDetails[item.items.id]?.year}
-                      </p>
-                    ) : null}
-                    {filmDetails[item.items.id]?.director ? (
-                      <p className={styles.resultMeta}>
-                        Режисер: {filmDetails[item.items.id]?.director}
-                      </p>
-                    ) : null}
-                    {filmDetails[item.items.id]?.actors ? (
-                      <p className={styles.resultMeta}>
-                        Актори: {filmDetails[item.items.id]?.actors}
-                      </p>
-                    ) : null}
-                    {filmDetails[item.items.id]?.genres ? (
-                      <p className={styles.resultMeta}>
-                        Жанри: {filmDetails[item.items.id]?.genres}
-                      </p>
-                    ) : null}
-                    {item.items.description ? (
-                      <div className={styles.plotBlock}>
-                        <p
-                          className={`${styles.resultPlot} ${
-                            expandedDescriptions.has(item.id)
-                              ? ""
-                              : styles.resultPlotClamp
-                          }`}
-                          ref={(node) => {
-                            if (node) {
-                              descriptionRefs.current.set(item.id, node);
-                            } else {
-                              descriptionRefs.current.delete(item.id);
-                            }
-                          }}
-                        >
-                          {item.items.description}
-                        </p>
-                        {!expandedDescriptions.has(item.id) &&
-                        overflowDescriptions.has(item.id) ? (
-                          <span
-                            className={styles.plotToggle}
-                            role="button"
-                            tabIndex={0}
-                            onClick={(event) =>
-                              handleExpandDescription(event, item.id)
-                            }
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                handleExpandDescription(event, item.id);
-                              }
-                            }}
-                          >
-                            детальніше...
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <p className={styles.resultPlot}>Опис недоступний.</p>
-                    )}
-                    <div className={styles.userMeta}>
-                      <span>
-                        Переглянуто:{" "}
-                        {item.is_viewed
-                          ? `${formatViewedDate(item.viewed_at)} (${item.view_percent}%)`
-                          : "ні"}
-                      </span>
-                      {recommendedItemIds.has(item.items.id) ? (
-                        <span>Рекомендовано друзям</span>
-                      ) : null}
-                      {item.comment ? <span>Коментар: {item.comment}</span> : null}
-                    </div>
-                  </div>
-          </button>
-        ))}
-      </div>
+      {viewMode === "default" ? (
+        <div className={styles.results}>{displayedCollection.map((item) => renderDefaultFilmItem(item))}</div>
+      ) : null}
+      {viewMode === "directors" ? (
+        <div className={styles.directorGroups}>
+          {isDirectorsHydrating ? (
+            <p className={styles.message}>Підготовка режиму &quot;Режисери&quot;... </p>
+          ) : (
+            groupedByDirector.map(([director, items]) => (
+              <section key={director} className={styles.directorGroup}>
+                <h3 className={styles.directorTitle}>{director}</h3>
+                <div className={styles.results}>
+                  {items.map((item) => renderDefaultFilmItem(item, `${director}-`))}
+                </div>
+              </section>
+            ))
+          )}
+        </div>
+      ) : null}
+      {viewMode === "cards" ? (
+        <div className={`${styles.results} ${styles.filmCardsGrid}`}>
+          {displayedCollection.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`${styles.resultButton} ${styles.filmCardViewItem}`}
+              onClick={() => setSelectedView(item)}
+            >
+              <div className={styles.filmCardPosterWrapper}>
+                {item.items.poster_url ? (
+                  <Image
+                    className={styles.poster}
+                    src={item.items.poster_url}
+                    alt={`Постер ${item.items.title}`}
+                    width={270}
+                    height={405}
+                    sizes="(max-width: 720px) 70vw, 270px"
+                    loading="lazy"
+                    unoptimized
+                  />
+                ) : (
+                  <div className={styles.posterPlaceholder}>No image</div>
+                )}
+              </div>
+              <div className={styles.filmCardFooter}>
+                <div className={styles.filmCardRatingsRow}>
+                  <span className={styles.resultRating}>IMDb: {item.items.imdb_rating ?? "—"}</span>
+                  <span className={styles.resultRating}>Мій: {item.rating ?? "—"}</span>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : null}
       {hasApplied && hasMore ? (
         <div ref={loadMoreRef} />
       ) : null}
@@ -1558,7 +1719,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
                 onClick={() =>
                   setPendingFilters({
                     ...DEFAULT_FILTERS,
-                    yearRange: clampRange(DEFAULT_FILTERS.yearRange, yearBounds),
+                    yearRange: yearBounds,
                   })
                 }
               >
@@ -1587,7 +1748,9 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
           initialQuery={appliedFilters.query}
           onSelect={async (film) => {
             try {
-              const detailResponse = await fetch(`/api/tmdb/${film.id}`);
+              const detailResponse = await fetch(
+                `/api/tmdb/${film.id}?mediaType=${film.mediaType ?? "movie"}`,
+              );
               if (detailResponse.ok) {
                 const detail = (await detailResponse.json()) as FilmResult;
                 setSelectedFilm(detail);

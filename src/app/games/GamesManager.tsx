@@ -274,9 +274,9 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
 
     if (trimmedQuery) {
       const escaped = trimmedQuery.replaceAll("%", "\\%");
-      query = query.or(
-        `items.title.ilike.%${escaped}%,items.description.ilike.%${escaped}%`,
-      );
+      query = query.or(`title.ilike.%${escaped}%,description.ilike.%${escaped}%`, {
+        foreignTable: "items",
+      });
     }
 
     if (!filters.availabilityAll && filters.availability.length > 0) {
@@ -330,7 +330,10 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       if (trimmedQuery) {
         const escaped = trimmedQuery.replaceAll("%", "\\%");
         countQuery = countQuery.or(
-          `items.title.ilike.%${escaped}%,items.description.ilike.%${escaped}%`,
+          `title.ilike.%${escaped}%,description.ilike.%${escaped}%`,
+          {
+            foreignTable: "items",
+          },
         );
       }
 
@@ -406,7 +409,23 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
       setHasMore(nextHasMore);
       setPage(pageIndex);
       if (pageIndex === 0 && nextCollection.length === 0) {
-        setMessage("Колекція порожня.");
+        const hasActiveFilters = Boolean(
+          trimmedQuery ||
+            effectiveViewed !== effectivePlanned ||
+            !filters.availabilityAll ||
+            (!filters.favoriteAll && filters.recommendSimilarOnly) ||
+            isYearFilterActive ||
+            isExternalFilterActive ||
+            isPersonalFilterActive ||
+            filters.viewedDateFrom ||
+            filters.viewedDateTo ||
+            filters.genres.trim(),
+        );
+        setMessage(
+          hasActiveFilters
+            ? "Нічого не знайдено за вашим запитом"
+            : "Колекція порожня.",
+        );
       }
 
       const itemIds = nextCollection
@@ -1582,7 +1601,7 @@ export default function GamesManager({ onCountChange }: GamesManagerProps) {
                 onClick={() =>
                   setPendingFilters({
                     ...DEFAULT_FILTERS,
-                    yearRange: clampRange(DEFAULT_FILTERS.yearRange, yearBounds),
+                    yearRange: yearBounds,
                   })
                 }
               >

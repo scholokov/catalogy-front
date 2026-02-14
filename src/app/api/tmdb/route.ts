@@ -2,8 +2,11 @@ import { NextResponse } from "next/server";
 
 type TmdbMovie = {
   id: number;
+  media_type: "movie" | "tv" | "person";
   title: string;
+  name?: string;
   release_date?: string;
+  first_air_date?: string;
   poster_path?: string | null;
   overview?: string | null;
   vote_average?: number | null;
@@ -35,7 +38,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const searchUrl = new URL("https://api.themoviedb.org/3/search/movie");
+  const searchUrl = new URL("https://api.themoviedb.org/3/search/multi");
   searchUrl.searchParams.set("query", query);
   searchUrl.searchParams.set("include_adult", "false");
   searchUrl.searchParams.set("language", "uk-UA");
@@ -64,9 +67,9 @@ export async function GET(request: Request) {
     );
   }
 
-  const fetchCredits = async (id: number) => {
+  const fetchCredits = async (id: number, mediaType: "movie" | "tv") => {
     const creditsUrl = new URL(
-      `https://api.themoviedb.org/3/movie/${id}/credits`,
+      `https://api.themoviedb.org/3/${mediaType}/${id}/credits`,
     );
     creditsUrl.searchParams.set("language", "uk-UA");
     if (apiKey) {
@@ -81,8 +84,13 @@ export async function GET(request: Request) {
         return { director: "", actors: "" };
       }
       const credits = (await creditsResponse.json()) as TmdbCredits;
+      const directorJobs =
+        mediaType === "tv"
+          ? ["Series Director", "Director", "Creator"]
+          : ["Director"];
       const director =
-        credits.crew?.find((member) => member.job === "Director")?.name ?? "";
+        credits.crew?.find((member) => directorJobs.includes(member.job))?.name ??
+        "";
       const actors = (credits.cast ?? [])
         .slice(0, 5)
         .map((member) => member.name)
@@ -94,24 +102,29 @@ export async function GET(request: Request) {
   };
 
   const payload = data as { results?: TmdbMovie[] };
+  const mediaResults = (payload.results ?? []).filter(
+    (item): item is TmdbMovie & { media_type: "movie" | "tv" } =>
+      item.media_type === "movie" || item.media_type === "tv",
+  );
   const results = await Promise.all(
-    (payload.results ?? []).map(async (movie) => {
-      const { director, actors } = await fetchCredits(movie.id);
+    mediaResults.map(async (item) => {
+      const { director, actors } = await fetchCredits(item.id, item.media_type);
       return {
-        id: String(movie.id),
-        title: movie.title,
-        year: movie.release_date ? movie.release_date.slice(0, 4) : "",
-        poster: movie.poster_path
-          ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
+        id: String(item.id),
+        title: item.title ?? item.name ?? "",
+        year: (item.release_date ?? item.first_air_date ?? "").slice(0, 4),
+        poster: item.poster_path
+          ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
           : "",
-        plot: movie.overview ?? "",
+        plot: item.overview ?? "",
         genres: "",
         director,
         actors,
         imdbRating:
-          typeof movie.vote_average === "number"
-            ? movie.vote_average.toFixed(1)
+          typeof item.vote_average === "number"
+            ? item.vote_average.toFixed(1)
             : "",
+        mediaType: item.media_type,
         source: "tmdb" as const,
       };
     }),
