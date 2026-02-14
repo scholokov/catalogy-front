@@ -33,6 +33,7 @@ type FilmResult = {
 
 type FilmCollectionItem = {
   id: string;
+  updated_at: string;
   viewed_at: string;
   rating: number | null;
   comment: string | null;
@@ -119,6 +120,21 @@ const clampRange = (range: [number, number], bounds: [number, number]) => {
   return start <= end ? ([start, end] as [number, number]) : ([min, max] as [number, number]);
 };
 
+const reconcileRangeWithNewBounds = (
+  range: [number, number],
+  prevBounds: [number, number],
+  nextBounds: [number, number],
+) => {
+  let [from, to] = range;
+  if (from <= prevBounds[0]) {
+    from = nextBounds[0];
+  }
+  if (to >= prevBounds[1]) {
+    to = nextBounds[1];
+  }
+  return clampRange([from, to], nextBounds);
+};
+
 export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   const [collection, setCollection] = useState<FilmCollectionItem[]>([]);
   const [appliedFilters, setAppliedFilters] = useState<Filters>(DEFAULT_FILTERS);
@@ -159,6 +175,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const skipNextApplyRef = useRef(false);
   const loadingPagesRef = useRef<Set<number>>(new Set());
+  const yearBoundsRef = useRef<[number, number]>([MIN_YEAR, MAX_YEAR]);
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
     title: string;
@@ -195,6 +212,10 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     },
     [],
   );
+
+  useEffect(() => {
+    yearBoundsRef.current = yearBounds;
+  }, [yearBounds]);
 
   const fetchPage = useCallback(async (pageIndex: number, filters: Filters) => {
     const {
@@ -242,10 +263,11 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     let query = supabase
       .from("user_views")
       .select(
-        "id, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
+        "id, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
       )
       .eq("items.type", "film")
-      .order("viewed_at", { ascending: false });
+      .order("updated_at", { ascending: false })
+      .order("id", { ascending: false });
 
     if (effectiveViewed !== effectivePlanned) {
       query = query.eq("is_viewed", effectiveViewed);
@@ -444,9 +466,10 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
     }
 
     const bounds: [number, number] = [min, max];
+    const prevBounds = yearBoundsRef.current;
     setYearBounds(bounds);
     setPendingFilters((prev) => {
-      const nextRange = clampRange(prev.yearRange, bounds);
+      const nextRange = reconcileRangeWithNewBounds(prev.yearRange, prevBounds, bounds);
       if (
         nextRange[0] === prev.yearRange[0] &&
         nextRange[1] === prev.yearRange[1]
@@ -456,7 +479,7 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
       return { ...prev, yearRange: nextRange };
     });
     setAppliedFilters((prev) => {
-      const nextRange = clampRange(prev.yearRange, bounds);
+      const nextRange = reconcileRangeWithNewBounds(prev.yearRange, prevBounds, bounds);
       if (
         nextRange[0] === prev.yearRange[0] &&
         nextRange[1] === prev.yearRange[1]
@@ -493,21 +516,26 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
   const displayedCollection = useMemo(() => {
     const genresFilter = appliedFilters.genres.trim().toLowerCase();
     const directorFilter = appliedFilters.director.trim().toLowerCase();
-    if (!genresFilter && !directorFilter) return collection;
-    return collection.filter((item) => {
-      const description = item.items.description?.toLowerCase() ?? "";
-      const genres = filmDetails[item.items.id]?.genres?.toLowerCase() ?? "";
-      const director = filmDetails[item.items.id]?.director?.toLowerCase() ?? "";
+    const filtered = (!genresFilter && !directorFilter)
+      ? collection
+      : collection.filter((item) => {
+          const description = item.items.description?.toLowerCase() ?? "";
+          const genres = filmDetails[item.items.id]?.genres?.toLowerCase() ?? "";
+          const director = filmDetails[item.items.id]?.director?.toLowerCase() ?? "";
 
-      const genresMatches = genresFilter
-        ? (genres ? genres.includes(genresFilter) : description.includes(genresFilter))
-        : true;
-      const directorMatches = directorFilter
-        ? (director ? director.includes(directorFilter) : description.includes(directorFilter))
-        : true;
+          const genresMatches = genresFilter
+            ? (genres ? genres.includes(genresFilter) : description.includes(genresFilter))
+            : true;
+          const directorMatches = directorFilter
+            ? (director ? director.includes(directorFilter) : description.includes(directorFilter))
+            : true;
 
-      return genresMatches && directorMatches;
-    });
+          return genresMatches && directorMatches;
+        });
+
+    return [...filtered].sort(
+      (left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at),
+    );
   }, [appliedFilters.director, appliedFilters.genres, collection, filmDetails]);
 
   useEffect(() => {
@@ -926,7 +954,15 @@ export default function FilmsManager({ onCountChange }: FilmsManagerProps) {
 
   const handleFilmSearch = async (query: string) => {
     const tmdbResults = await handleTmdbSearch(query);
-    return tmdbResults.filter((item) => !existingExternalIds.has(item.id));
+    return tmdbResults
+      .filter((item) => !existingExternalIds.has(item.id))
+      .sort((left, right) => {
+        const leftYear = Number.parseInt(left.year, 10);
+        const rightYear = Number.parseInt(right.year, 10);
+        const safeLeftYear = Number.isNaN(leftYear) ? -Infinity : leftYear;
+        const safeRightYear = Number.isNaN(rightYear) ? -Infinity : rightYear;
+        return safeRightYear - safeLeftYear;
+      });
   };
 
   return (
