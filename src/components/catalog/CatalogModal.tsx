@@ -40,7 +40,14 @@ type CatalogModalProps = {
   children: React.ReactNode;
 };
 
-const ratingOptions = [3, 2, 1, 0, -1, -2, -3];
+const ratingOptions: Array<{ value: number | null; label: string }> = [
+  { value: null, label: "-" },
+  { value: 5, label: "5" },
+  { value: 4, label: "4" },
+  { value: 3, label: "3" },
+  { value: 2, label: "2" },
+  { value: 1, label: "1" },
+];
 
 export default function CatalogModal({
   title,
@@ -89,7 +96,7 @@ export default function CatalogModal({
   const [comment, setComment] = useState("");
   const [recommendSimilar, setRecommendSimilar] = useState(false);
   const [isViewed, setIsViewed] = useState(true);
-  const [rating, setRating] = useState(0);
+  const [rating, setRating] = useState<number | null>(null);
   const [viewPercent, setViewPercent] = useState(100);
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [availability, setAvailability] = useState<string | null>(null);
@@ -108,7 +115,7 @@ export default function CatalogModal({
       setComment("");
       setRecommendSimilar(false);
       setIsViewed(true);
-      setRating(0);
+      setRating(null);
       setViewPercent(100);
       setPlatforms([]);
       setAvailability(null);
@@ -126,7 +133,7 @@ export default function CatalogModal({
     setComment(initialComment ?? "");
     setRecommendSimilar(Boolean(initialRecommendSimilar));
     setIsViewed(initialIsViewed ?? true);
-    setRating(initialRating ?? 0);
+    setRating(initialRating ?? null);
     setViewPercent(initialViewPercent ?? 100);
     setPlatforms(initialPlatformsKey ? initialPlatformsKey.split("|") : []);
     setAvailability(initialAvailability ?? null);
@@ -536,13 +543,22 @@ export default function CatalogModal({
                 <span>Особистий рейтинг</span>
                 <select
                   className={`${styles.select} ${styles.inlineSelect}`}
-                  value={rating}
-                  onChange={(event) => setRating(Number(event.target.value))}
+                  value={rating === null ? "none" : String(rating)}
+                  onChange={(event) =>
+                    setRating(
+                      event.target.value === "none"
+                        ? null
+                        : Number(event.target.value),
+                    )
+                  }
                   disabled={readOnly || !isViewed || isSaving}
                 >
-                  {ratingOptions.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
+                  {ratingOptions.map((option) => (
+                    <option
+                      key={option.value === null ? "none" : option.value}
+                      value={option.value === null ? "none" : option.value}
+                    >
+                      {option.label}
                     </option>
                   ))}
                 </select>

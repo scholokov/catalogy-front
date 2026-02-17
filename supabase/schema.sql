@@ -48,7 +48,8 @@ create table if not exists user_views (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users on delete cascade,
   item_id uuid not null references items on delete cascade,
-  rating int check (rating between -3 and 3),
+  created_at timestamptz not null default now(),
+  rating int check (rating between 1 and 5),
   comment text,
   viewed_at timestamptz not null default now(),
   is_viewed boolean not null default true,
@@ -65,8 +66,14 @@ add column if not exists platforms text[] not null default '{}';
 alter table user_views
 add column if not exists availability text;
 
+alter table user_views
+add column if not exists created_at timestamptz not null default now();
+
 create unique index if not exists user_views_user_item_idx
   on user_views (user_id, item_id);
+
+create index if not exists user_views_user_created_idx
+  on user_views (user_id, created_at desc, id desc);
 
 create table if not exists recommendations (
   id uuid primary key default gen_random_uuid(),

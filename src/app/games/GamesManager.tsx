@@ -29,6 +29,7 @@ type GameResult = {
 
 type GameCollectionItem = {
   id: string;
+  created_at: string;
   updated_at: string;
   viewed_at: string;
   rating: number | null;
@@ -84,8 +85,8 @@ const MIN_YEAR = 1950;
 const MAX_YEAR = new Date().getFullYear();
 const EXTERNAL_MIN = 0;
 const EXTERNAL_MAX = 5;
-const PERSONAL_MIN = -3;
-const PERSONAL_MAX = 3;
+const PERSONAL_MIN = 1;
+const PERSONAL_MAX = 5;
 const GAME_PLATFORM_OPTIONS = ["PS", "Steam", "PC", "Android", "iOS", "Xbox"];
 const AVAILABILITY_OPTIONS = [
   "В колекції",
@@ -346,11 +347,11 @@ export default function GamesManager({
     let query = supabase
       .from("user_views")
       .select(
-        "id, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
+        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "game")
-      .order("updated_at", { ascending: false })
+      .order("created_at", { ascending: false })
       .order("id", { ascending: false });
 
     if (effectiveViewed !== effectivePlanned) {
@@ -643,7 +644,7 @@ export default function GamesManager({
         });
 
     return [...filtered].sort(
-      (left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at),
+      (left, right) => Date.parse(right.created_at) - Date.parse(left.created_at),
     );
   }, [appliedFilters.genres, collection, gameDetails]);
 

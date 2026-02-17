@@ -35,6 +35,7 @@ type FilmResult = {
 
 type FilmCollectionItem = {
   id: string;
+  created_at: string;
   updated_at: string;
   viewed_at: string;
   rating: number | null;
@@ -93,8 +94,8 @@ const MIN_YEAR = 1950;
 const MAX_YEAR = new Date().getFullYear();
 const EXTERNAL_MIN = 0;
 const EXTERNAL_MAX = 10;
-const PERSONAL_MIN = -3;
-const PERSONAL_MAX = 3;
+const PERSONAL_MIN = 1;
+const PERSONAL_MAX = 5;
 const AVAILABILITY_OPTIONS = [
   "В колекції",
   "Тимчасовий доступ",
@@ -381,11 +382,11 @@ export default function FilmsManager({
     let query = supabase
       .from("user_views")
       .select(
-        "id, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
+        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "film")
-      .order("updated_at", { ascending: false })
+      .order("created_at", { ascending: false })
       .order("id", { ascending: false });
 
     if (effectiveViewed !== effectivePlanned) {
@@ -727,7 +728,7 @@ export default function FilmsManager({
         });
 
     return [...filtered].sort(
-      (left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at),
+      (left, right) => Date.parse(right.created_at) - Date.parse(left.created_at),
     );
   }, [appliedFilters.director, appliedFilters.genres, collection, filmDetails]);
 
