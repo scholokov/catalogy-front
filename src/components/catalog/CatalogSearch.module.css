@@ -259,6 +259,13 @@
   border-color: var(--color-accent);
 }
 
+.existingCollectionResult {
+  border: 1px solid var(--color-accent);
+  box-shadow:
+    0 0 0 1px rgba(123, 97, 255, 0.8),
+    0 0 18px rgba(123, 97, 255, 0.35);
+}
+
 .filtersCheckbox:checked::after {
   transform: rotate(45deg) scale(1);
 }

@@ -29,6 +29,8 @@ type GameResult = {
   released: string;
   poster: string;
   genres: string;
+  inCollection?: boolean;
+  existingViewId?: string;
 };
 
 type GameCollectionItem = {
@@ -693,12 +695,14 @@ export default function GamesManager({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isFiltersOpen]);
 
-  const existingExternalIds = useMemo(() => {
-    return new Set(
-      collection
-        .map((item) => item.items.external_id)
-        .filter((id): id is string => Boolean(id)),
-    );
+  const existingViewsByExternalId = useMemo(() => {
+    const map = new Map<string, GameCollectionItem>();
+    collection.forEach((item) => {
+      if (item.items.external_id) {
+        map.set(item.items.external_id, item);
+      }
+    });
+    return map;
   }, [collection]);
 
   const loadContacts = async (itemIdForCheck?: string) => {
@@ -1070,7 +1074,14 @@ export default function GamesManager({
 
     const results = data.results ?? [];
     return results
-      .filter((item) => !existingExternalIds.has(item.id))
+      .map((item) => {
+        const existingView = existingViewsByExternalId.get(item.id);
+        return {
+          ...item,
+          inCollection: Boolean(existingView),
+          existingViewId: existingView?.id,
+        };
+      })
       .sort((left, right) => {
         const leftYear = Number.parseInt(left.released?.slice(0, 4) ?? "", 10);
         const rightYear = Number.parseInt(right.released?.slice(0, 4) ?? "", 10);
@@ -1219,6 +1230,11 @@ export default function GamesManager({
           ) : null}
           {game.released ? (
             <p className={styles.resultMeta}>Реліз: {game.released}</p>
+          ) : null}
+          {game.inCollection ? (
+            <p className={styles.resultMeta}>
+              Вже у колекції — відкриється редагування
+            </p>
           ) : null}
           {description ? (
             <div className={styles.plotBlock}>
@@ -1898,8 +1914,21 @@ export default function GamesManager({
           onSearch={handleGameSearch}
           getKey={(game) => game.id}
           resultItemClassName={styles.gameSearchResultItem}
+          getResultItemClassName={(game) =>
+            game.inCollection ? styles.existingCollectionResult : ""
+          }
           initialQuery={appliedFilters.query}
           onSelect={(game) => {
+            if (game.existingViewId) {
+              const existingView =
+                collection.find((item) => item.id === game.existingViewId) ??
+                existingViewsByExternalId.get(game.id);
+              if (existingView) {
+                setSelectedView(existingView);
+                setIsAddOpen(false);
+                return;
+              }
+            }
             setSelectedGame(game);
             setIsAddOpen(false);
           }}

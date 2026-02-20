@@ -32,6 +32,8 @@ type FilmResult = {
   imdbRating: string;
   mediaType?: "movie" | "tv";
   source: "tmdb";
+  inCollection?: boolean;
+  existingViewId?: string;
 };
 
 type FilmCollectionItem = {
@@ -767,12 +769,14 @@ export default function FilmsManager({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isFiltersOpen]);
 
-  const existingExternalIds = useMemo(() => {
-    return new Set(
-      collection
-        .map((item) => item.items.external_id)
-        .filter((id): id is string => Boolean(id)),
-    );
+  const existingViewsByExternalId = useMemo(() => {
+    const map = new Map<string, FilmCollectionItem>();
+    collection.forEach((item) => {
+      if (item.items.external_id) {
+        map.set(item.items.external_id, item);
+      }
+    });
+    return map;
   }, [collection]);
 
   const loadContacts = async (itemIdForCheck?: string) => {
@@ -1250,7 +1254,14 @@ export default function FilmsManager({
   const handleFilmSearch = async (query: string) => {
     const tmdbResults = await handleTmdbSearch(query);
     return tmdbResults
-      .filter((item) => !existingExternalIds.has(item.id))
+      .map((item) => {
+        const existingView = existingViewsByExternalId.get(item.id);
+        return {
+          ...item,
+          inCollection: Boolean(existingView),
+          existingViewId: existingView?.id,
+        };
+      })
       .sort((left, right) => {
         const leftYear = Number.parseInt(left.year, 10);
         const rightYear = Number.parseInt(right.year, 10);
@@ -1970,8 +1981,21 @@ export default function FilmsManager({
           title="Додати фільм"
           onSearch={handleFilmSearch}
           getKey={(film) => film.id}
+          getResultItemClassName={(film) =>
+            film.inCollection ? styles.existingCollectionResult : ""
+          }
           initialQuery={appliedFilters.query}
           onSelect={async (film) => {
+            if (film.existingViewId) {
+              const existingView =
+                collection.find((item) => item.id === film.existingViewId) ??
+                existingViewsByExternalId.get(film.id);
+              if (existingView) {
+                setSelectedView(existingView);
+                setIsAddOpen(false);
+                return;
+              }
+            }
             try {
               const detailResponse = await fetch(
                 `/api/tmdb/${film.id}?mediaType=${film.mediaType ?? "movie"}`,
@@ -2026,6 +2050,11 @@ export default function FilmsManager({
                 ) : null}
                 {film.actors ? (
                   <p className={styles.resultMeta}>Актори: {film.actors}</p>
+                ) : null}
+                {film.inCollection ? (
+                  <p className={styles.resultMeta}>
+                    Вже у колекції — відкриється редагування
+                  </p>
                 ) : null}
                 <p className={styles.resultPlot}>
                   {film.plot ? film.plot : "Опис недоступний."}
