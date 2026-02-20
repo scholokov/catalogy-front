@@ -9,6 +9,13 @@ import {
 } from "@/lib/settings/displayPreferences";
 import styles from "./SettingsPage.module.css";
 
+const AVAILABILITY_OPTIONS = [
+  "В колекції",
+  "Тимчасовий доступ",
+  "У друзів",
+  "Відсутній",
+];
+
 export default function SettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -19,6 +26,14 @@ export default function SettingsPage() {
     [...DEFAULT_GAME_PLATFORM_OPTIONS],
   );
   const [defaultGamePlatform, setDefaultGamePlatform] = useState<string | null>(null);
+  const [defaultFilmAvailability, setDefaultFilmAvailability] = useState<string | null>(
+    null,
+  );
+  const [defaultGameAvailability, setDefaultGameAvailability] = useState<string | null>(
+    null,
+  );
+  const [defaultFilmIsViewed, setDefaultFilmIsViewed] = useState<boolean | null>(null);
+  const [defaultGameIsViewed, setDefaultGameIsViewed] = useState<boolean | null>(null);
 
   useEffect(() => {
     let isCancelled = false;
@@ -37,7 +52,7 @@ export default function SettingsPage() {
       const { data, error } = await supabase
         .from("profiles")
         .select(
-          "settings_show_film_availability, settings_show_game_availability, settings_visible_game_platforms, settings_default_game_platform",
+          "settings_show_film_availability, settings_show_game_availability, settings_visible_game_platforms, settings_default_game_platform, settings_default_film_availability, settings_default_game_availability, settings_default_film_is_viewed, settings_default_game_is_viewed",
         )
         .eq("id", user.id)
         .maybeSingle();
@@ -58,6 +73,18 @@ export default function SettingsPage() {
           : [...DEFAULT_GAME_PLATFORM_OPTIONS],
       );
       setDefaultGamePlatform(data?.settings_default_game_platform ?? null);
+      setDefaultFilmAvailability(data?.settings_default_film_availability ?? null);
+      setDefaultGameAvailability(data?.settings_default_game_availability ?? null);
+      setDefaultFilmIsViewed(
+        typeof data?.settings_default_film_is_viewed === "boolean"
+          ? data.settings_default_film_is_viewed
+          : null,
+      );
+      setDefaultGameIsViewed(
+        typeof data?.settings_default_game_is_viewed === "boolean"
+          ? data.settings_default_game_is_viewed
+          : null,
+      );
       writeDisplayPreferences({
         showFilmAvailability: data?.settings_show_film_availability ?? true,
         showGameAvailability: data?.settings_show_game_availability ?? true,
@@ -67,6 +94,16 @@ export default function SettingsPage() {
             ? (data.settings_visible_game_platforms as string[])
             : [...DEFAULT_GAME_PLATFORM_OPTIONS],
         defaultGamePlatform: data?.settings_default_game_platform ?? null,
+        defaultFilmAvailability: data?.settings_default_film_availability ?? null,
+        defaultGameAvailability: data?.settings_default_game_availability ?? null,
+        defaultFilmIsViewed:
+          typeof data?.settings_default_film_is_viewed === "boolean"
+            ? data.settings_default_film_is_viewed
+            : null,
+        defaultGameIsViewed:
+          typeof data?.settings_default_game_is_viewed === "boolean"
+            ? data.settings_default_game_is_viewed
+            : null,
       });
       setIsLoading(false);
     })();
@@ -115,6 +152,18 @@ export default function SettingsPage() {
         defaultGamePlatform && visibleGamePlatforms.includes(defaultGamePlatform)
           ? defaultGamePlatform
           : null,
+      settings_default_film_availability:
+        defaultFilmAvailability &&
+        AVAILABILITY_OPTIONS.includes(defaultFilmAvailability)
+          ? defaultFilmAvailability
+          : null,
+      settings_default_game_availability:
+        defaultGameAvailability &&
+        AVAILABILITY_OPTIONS.includes(defaultGameAvailability)
+          ? defaultGameAvailability
+          : null,
+      settings_default_film_is_viewed: defaultFilmIsViewed,
+      settings_default_game_is_viewed: defaultGameIsViewed,
     };
 
     const { error } = await supabase
@@ -138,6 +187,16 @@ export default function SettingsPage() {
         defaultGamePlatform && visibleGamePlatforms.includes(defaultGamePlatform)
           ? defaultGamePlatform
           : null,
+      defaultFilmAvailability:
+        defaultFilmAvailability && AVAILABILITY_OPTIONS.includes(defaultFilmAvailability)
+          ? defaultFilmAvailability
+          : null,
+      defaultGameAvailability:
+        defaultGameAvailability && AVAILABILITY_OPTIONS.includes(defaultGameAvailability)
+          ? defaultGameAvailability
+          : null,
+      defaultFilmIsViewed,
+      defaultGameIsViewed,
     });
     setMessage("Налаштування збережено.");
   };
@@ -192,6 +251,45 @@ export default function SettingsPage() {
               ))}
             </select>
           </label>
+          <label className={styles.field}>
+            Наявність за замовчанням
+            <select
+              className={styles.select}
+              value={defaultGameAvailability ?? ""}
+              onChange={(event) =>
+                setDefaultGameAvailability(event.target.value || null)
+              }
+              disabled={isLoading || isSaving}
+            >
+              <option value="">-</option>
+              {AVAILABILITY_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.field}>
+            Переглянуто за замовчанням
+            <select
+              className={styles.select}
+              value={
+                defaultGameIsViewed === null ? "" : defaultGameIsViewed ? "viewed" : "planned"
+              }
+              onChange={(event) =>
+                setDefaultGameIsViewed(
+                  event.target.value === ""
+                    ? null
+                    : event.target.value === "viewed",
+                )
+              }
+              disabled={isLoading || isSaving}
+            >
+              <option value="">-</option>
+              <option value="viewed">Переглянуто</option>
+              <option value="planned">Заплановано</option>
+            </select>
+          </label>
         </section>
 
         <section className={styles.section}>
@@ -205,6 +303,45 @@ export default function SettingsPage() {
               disabled={isLoading || isSaving}
             />
             Відображати &quot;Наявність&quot;
+          </label>
+          <label className={styles.field}>
+            Наявність за замовчанням
+            <select
+              className={styles.select}
+              value={defaultFilmAvailability ?? ""}
+              onChange={(event) =>
+                setDefaultFilmAvailability(event.target.value || null)
+              }
+              disabled={isLoading || isSaving}
+            >
+              <option value="">-</option>
+              {AVAILABILITY_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={styles.field}>
+            Переглянуто за замовчанням
+            <select
+              className={styles.select}
+              value={
+                defaultFilmIsViewed === null ? "" : defaultFilmIsViewed ? "viewed" : "planned"
+              }
+              onChange={(event) =>
+                setDefaultFilmIsViewed(
+                  event.target.value === ""
+                    ? null
+                    : event.target.value === "viewed",
+                )
+              }
+              disabled={isLoading || isSaving}
+            >
+              <option value="">-</option>
+              <option value="viewed">Переглянуто</option>
+              <option value="planned">Заплановано</option>
+            </select>
           </label>
         </section>
 

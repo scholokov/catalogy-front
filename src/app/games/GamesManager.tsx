@@ -206,6 +206,12 @@ export default function GamesManager({
   const [defaultGamePlatform, setDefaultGamePlatform] = useState<string | null>(
     null,
   );
+  const [defaultGameAvailability, setDefaultGameAvailability] = useState<string | null>(
+    null,
+  );
+  const [defaultGameIsViewed, setDefaultGameIsViewed] = useState<boolean | null>(
+    null,
+  );
   const [visiblePlatforms, setVisiblePlatforms] = useState<string[]>([
     ...GAME_PLATFORM_OPTIONS,
   ]);
@@ -216,6 +222,8 @@ export default function GamesManager({
       setShowAvailability(prefs.showGameAvailability);
       setVisiblePlatforms(prefs.visibleGamePlatforms);
       setDefaultGamePlatform(prefs.defaultGamePlatform);
+      setDefaultGameAvailability(prefs.defaultGameAvailability);
+      setDefaultGameIsViewed(prefs.defaultGameIsViewed);
     };
     applyPreferences();
     return undefined;
@@ -1905,10 +1913,14 @@ export default function GamesManager({
           title={selectedGame.title}
           posterUrl={selectedGame.poster}
           size="wide"
-          platformOptions={GAME_PLATFORM_OPTIONS}
-          availabilityOptions={AVAILABILITY_OPTIONS}
+          platformOptions={visiblePlatforms}
+          availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
           initialValues={
-            defaultGamePlatform ? { platforms: [defaultGamePlatform] } : undefined
+            {
+              platforms: defaultGamePlatform ? [defaultGamePlatform] : [],
+              availability: showAvailability ? defaultGameAvailability : null,
+              isViewed: defaultGameIsViewed ?? undefined,
+            }
           }
           onClose={() => setSelectedGame(null)}
           onAdd={(payload) => handleAddGame(selectedGame, payload)}
@@ -1939,8 +1951,8 @@ export default function GamesManager({
           title={selectedView.items.title}
           posterUrl={selectedView.items.poster_url ?? undefined}
           size="wide"
-          platformOptions={GAME_PLATFORM_OPTIONS}
-          availabilityOptions={AVAILABILITY_OPTIONS}
+          platformOptions={visiblePlatforms}
+          availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
           onClose={() => setSelectedView(null)}
           readOnly={readOnly}
           submitLabel={readOnly ? "Додати собі у колекцію" : "Зберегти"}

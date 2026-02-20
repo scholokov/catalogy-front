@@ -8,6 +8,10 @@ create table if not exists profiles (
   settings_show_game_availability boolean not null default true,
   settings_visible_game_platforms text[] not null default '{"PS","Steam","PC","Android","iOS","Xbox"}',
   settings_default_game_platform text,
+  settings_default_film_availability text,
+  settings_default_game_availability text,
+  settings_default_film_is_viewed boolean,
+  settings_default_game_is_viewed boolean,
   avatar_url text,
   created_at timestamptz not null default now()
 );
@@ -26,6 +30,18 @@ add column if not exists settings_visible_game_platforms text[] not null default
 
 alter table profiles
 add column if not exists settings_default_game_platform text;
+
+alter table profiles
+add column if not exists settings_default_film_availability text;
+
+alter table profiles
+add column if not exists settings_default_game_availability text;
+
+alter table profiles
+add column if not exists settings_default_film_is_viewed boolean;
+
+alter table profiles
+add column if not exists settings_default_game_is_viewed boolean;
 
 do $$
 begin

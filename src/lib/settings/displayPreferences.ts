@@ -12,6 +12,10 @@ export type DisplayPreferences = {
   showGameAvailability: boolean;
   visibleGamePlatforms: string[];
   defaultGamePlatform: string | null;
+  defaultFilmAvailability: string | null;
+  defaultGameAvailability: string | null;
+  defaultFilmIsViewed: boolean | null;
+  defaultGameIsViewed: boolean | null;
 };
 
 const STORAGE_KEY = "catalogy:display-preferences:v1";
@@ -21,6 +25,10 @@ export const getDefaultDisplayPreferences = (): DisplayPreferences => ({
   showGameAvailability: true,
   visibleGamePlatforms: [...DEFAULT_GAME_PLATFORM_OPTIONS],
   defaultGamePlatform: null,
+  defaultFilmAvailability: null,
+  defaultGameAvailability: null,
+  defaultFilmIsViewed: null,
+  defaultGameIsViewed: null,
 });
 
 export const readDisplayPreferences = (): DisplayPreferences => {
@@ -49,6 +57,16 @@ export const readDisplayPreferences = (): DisplayPreferences => {
       defaultGamePlatform:
         defaultPlatform && visible.includes(defaultPlatform)
           ? defaultPlatform
+          : null,
+      defaultFilmAvailability: parsed.defaultFilmAvailability ?? null,
+      defaultGameAvailability: parsed.defaultGameAvailability ?? null,
+      defaultFilmIsViewed:
+        typeof parsed.defaultFilmIsViewed === "boolean"
+          ? parsed.defaultFilmIsViewed
+          : null,
+      defaultGameIsViewed:
+        typeof parsed.defaultGameIsViewed === "boolean"
+          ? parsed.defaultGameIsViewed
           : null,
     };
   } catch {

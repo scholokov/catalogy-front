@@ -210,11 +210,17 @@ export default function FilmsManager({
   >(readOnly && ownerUserId ? "checking" : "allowed");
   const [friendOwnerName, setFriendOwnerName] = useState("");
   const [showAvailability, setShowAvailability] = useState(true);
+  const [defaultFilmAvailability, setDefaultFilmAvailability] = useState<string | null>(
+    null,
+  );
+  const [defaultFilmIsViewed, setDefaultFilmIsViewed] = useState<boolean | null>(null);
 
   useEffect(() => {
     const applyPreferences = () => {
       const prefs = readDisplayPreferences();
       setShowAvailability(prefs.showFilmAvailability);
+      setDefaultFilmAvailability(prefs.defaultFilmAvailability);
+      setDefaultFilmIsViewed(prefs.defaultFilmIsViewed);
     };
     applyPreferences();
     return undefined;
@@ -2036,7 +2042,11 @@ export default function FilmsManager({
           posterUrl={selectedFilm.poster}
           imageUrls={selectedFilm.imageUrls}
           onClose={() => setSelectedFilm(null)}
-          availabilityOptions={AVAILABILITY_OPTIONS}
+          availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
+          initialValues={{
+            availability: showAvailability ? defaultFilmAvailability : null,
+            isViewed: defaultFilmIsViewed ?? undefined,
+          }}
           onAdd={(payload) => handleAddFilm(selectedFilm, payload)}
         >
           <div className={styles.resultContent}>
@@ -2103,7 +2113,7 @@ export default function FilmsManager({
             viewPercent: selectedView.view_percent,
             availability: selectedView.availability,
           }}
-          availabilityOptions={AVAILABILITY_OPTIONS}
+          availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
           onAdd={readOnly ? undefined : (payload) => handleUpdateView(selectedView.id, payload)}
           onDelete={readOnly ? undefined : () => handleDeleteView(selectedView.id)}
         >
