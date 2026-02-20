@@ -15,6 +15,10 @@ import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
 import { supabase } from "@/lib/supabase/client";
+import {
+  DEFAULT_GAME_PLATFORM_OPTIONS,
+  readDisplayPreferences,
+} from "@/lib/settings/displayPreferences";
 import { getDisplayName } from "@/lib/users/displayName";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
@@ -87,7 +91,7 @@ const EXTERNAL_MIN = 0;
 const EXTERNAL_MAX = 5;
 const PERSONAL_MIN = 1;
 const PERSONAL_MAX = 5;
-const GAME_PLATFORM_OPTIONS = ["PS", "Steam", "PC", "Android", "iOS", "Xbox"];
+const GAME_PLATFORM_OPTIONS = [...DEFAULT_GAME_PLATFORM_OPTIONS];
 const AVAILABILITY_OPTIONS = [
   "В колекції",
   "Тимчасовий доступ",
@@ -170,16 +174,12 @@ export default function GamesManager({
   const [recommendedItemIds, setRecommendedItemIds] = useState<Set<string>>(
     new Set(),
   );
-  const [gameDetails, setGameDetails] = useState<
-    Record<string, { released?: string; genres?: string }>
-  >({});
   const [searchDescriptions, setSearchDescriptions] = useState<
     Record<string, string>
   >({});
   const descriptionRefs = useRef<Map<string, HTMLParagraphElement | null>>(
     new Map(),
   );
-  const fetchingDetailsRef = useRef<Set<string>>(new Set());
   const fetchingSearchDescRef = useRef<Set<string>>(new Set());
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const skipNextApplyRef = useRef(false);
@@ -202,6 +202,24 @@ export default function GamesManager({
     "checking" | "allowed" | "unauthenticated" | "not_friends" | "closed"
   >(readOnly && ownerUserId ? "checking" : "allowed");
   const [friendOwnerName, setFriendOwnerName] = useState("");
+  const [showAvailability, setShowAvailability] = useState(true);
+  const [defaultGamePlatform, setDefaultGamePlatform] = useState<string | null>(
+    null,
+  );
+  const [visiblePlatforms, setVisiblePlatforms] = useState<string[]>([
+    ...GAME_PLATFORM_OPTIONS,
+  ]);
+
+  useEffect(() => {
+    const applyPreferences = () => {
+      const prefs = readDisplayPreferences();
+      setShowAvailability(prefs.showGameAvailability);
+      setVisiblePlatforms(prefs.visibleGamePlatforms);
+      setDefaultGamePlatform(prefs.defaultGamePlatform);
+    };
+    applyPreferences();
+    return undefined;
+  }, []);
 
   const loadRecommendations = useCallback(
     async (itemIds: string[], shouldReset: boolean) => {
@@ -637,8 +655,6 @@ export default function GamesManager({
     const filtered = !genresFilter
       ? collection
       : collection.filter((item) => {
-          const genres = gameDetails[item.items.id]?.genres?.toLowerCase();
-          if (genres) return genres.includes(genresFilter);
           const description = item.items.description?.toLowerCase() ?? "";
           return description.includes(genresFilter);
         });
@@ -646,7 +662,12 @@ export default function GamesManager({
     return [...filtered].sort(
       (left, right) => Date.parse(right.created_at) - Date.parse(left.created_at),
     );
-  }, [appliedFilters.genres, collection, gameDetails]);
+  }, [appliedFilters.genres, collection]);
+
+  const visiblePlatformsSet = useMemo(
+    () => new Set(visiblePlatforms),
+    [visiblePlatforms],
+  );
 
   useEffect(() => {
     const countToShow = appliedFilters.genres.trim() ? displayedCollection.length : totalCount;
@@ -874,17 +895,13 @@ export default function GamesManager({
     let itemId = existingItem?.id;
 
     if (!itemId) {
-      const detailResponse = await fetch(`/api/rawg/${game.id}`);
-      const detailData = (await detailResponse.json()) as {
-        description?: string;
-      };
-
+      const descriptionFromSearch = searchDescriptions[game.id] ?? "";
       const { data: createdItem, error: createError } = await supabase
         .from("items")
         .insert({
           type: "game",
           title: game.title,
-          description: detailData.description ?? "",
+          description: descriptionFromSearch,
           poster_url: game.poster,
           external_id: game.id,
           imdb_rating: overallRating,
@@ -898,6 +915,20 @@ export default function GamesManager({
       }
 
       itemId = createdItem.id;
+      if (!descriptionFromSearch) {
+        void fetch(`/api/rawg/${game.id}`)
+          .then(async (response) => {
+            if (!response.ok) return null;
+            return (await response.json()) as { description?: string };
+          })
+          .then((detailData) => {
+            if (!detailData?.description) return;
+            void supabase
+              .from("items")
+              .update({ description: detailData.description })
+              .eq("id", createdItem.id);
+          });
+      }
     } else {
       const itemUpdates: { imdb_rating?: string | null; year?: number | null } = {};
       if (overallRating) {
@@ -1109,48 +1140,6 @@ export default function GamesManager({
     );
   };
 
-  useEffect(() => {
-    collection.forEach((item) => {
-      const externalId = item.items.external_id;
-      if (!externalId) return;
-      if (gameDetails[item.items.id] || fetchingDetailsRef.current.has(item.id)) {
-        return;
-      }
-
-      fetchingDetailsRef.current.add(item.id);
-      void fetch(`/api/rawg?q=${encodeURIComponent(item.items.title)}`)
-        .then(async (response) => {
-          if (!response.ok) return null;
-          const data = (await response.json()) as { results?: GameResult[] };
-          return data.results?.find(
-            (result) => String(result.id) === String(externalId),
-          );
-        })
-        .then((detail) => {
-          if (!detail) return;
-          setGameDetails((prev) => ({
-            ...prev,
-            [item.items.id]: {
-              released: detail.released,
-              genres: detail.genres,
-            },
-          }));
-          if (!item.items.year && detail.released) {
-            const parsedYear = Number.parseInt(detail.released.slice(0, 4), 10);
-            if (!Number.isNaN(parsedYear)) {
-              void supabase
-                .from("items")
-                .update({ year: parsedYear })
-                .eq("id", item.items.id);
-            }
-          }
-        })
-        .finally(() => {
-          fetchingDetailsRef.current.delete(item.id);
-        });
-    });
-  }, [collection, gameDetails]);
-
   const ensureSearchDescription = useCallback(async (id: string) => {
     if (searchDescriptions[id] || fetchingSearchDescRef.current.has(id)) {
       return;
@@ -1172,10 +1161,6 @@ export default function GamesManager({
     const [isOverflow, setIsOverflow] = useState(false);
     const descriptionRef = useRef<HTMLParagraphElement | null>(null);
 
-    useEffect(() => {
-      void ensureSearchDescription(game.id);
-    }, [game.id]);
-
     const description = searchDescriptions[game.id];
 
     useEffect(() => {
@@ -1192,6 +1177,9 @@ export default function GamesManager({
     ) => {
       event.preventDefault();
       event.stopPropagation();
+      if (!description) {
+        void ensureSearchDescription(game.id);
+      }
       setIsExpanded(true);
     };
 
@@ -1250,7 +1238,23 @@ export default function GamesManager({
                 </span>
               ) : null}
             </div>
-          ) : null}
+          ) : (
+            <div className={styles.plotBlock}>
+              <span
+                className={styles.plotToggle}
+                role="button"
+                tabIndex={0}
+                onClick={handleExpandSearchDescription}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    handleExpandSearchDescription(event);
+                  }
+                }}
+              >
+                Детальніше
+              </span>
+            </div>
+          )}
         </div>
       </>
     );
@@ -1321,8 +1325,7 @@ export default function GamesManager({
 
       {isFriendAccessAllowed ? <div className={styles.results}>
         {displayedCollection.map((item) => {
-          const details = gameDetails[item.items.id];
-          const releasedYear = details?.released ? details.released.slice(0, 4) : "";
+          const releasedYear = item.items.year ? String(item.items.year) : "";
           return (
             <button
               key={item.id}
@@ -1362,9 +1365,6 @@ export default function GamesManager({
               <div className={styles.resultContent}>
                 {releasedYear ? (
                   <p className={styles.resultMeta}>Рік: {releasedYear}</p>
-                ) : null}
-                {details?.genres ? (
-                  <p className={styles.resultMeta}>Жанри: {details.genres}</p>
                 ) : null}
                 {item.items.description ? (
                   <div className={styles.plotBlock}>
@@ -1413,6 +1413,18 @@ export default function GamesManager({
                       ? `${formatViewedDate(item.viewed_at)} (${item.view_percent}%)`
                       : "ні"}
                   </span>
+                  {showAvailability && item.availability ? (
+                    <span>Наявність: {item.availability}</span>
+                  ) : null}
+                  {(item.platforms ?? []).filter((platform) => visiblePlatformsSet.has(platform))
+                    .length > 0 ? (
+                      <span>
+                        Платформи:{" "}
+                        {(item.platforms ?? [])
+                          .filter((platform) => visiblePlatformsSet.has(platform))
+                          .join(", ")}
+                      </span>
+                    ) : null}
                   {recommendedItemIds.has(item.items.id) ? (
                     <span>Рекомендовано друзям</span>
                   ) : null}
@@ -1895,6 +1907,9 @@ export default function GamesManager({
           size="wide"
           platformOptions={GAME_PLATFORM_OPTIONS}
           availabilityOptions={AVAILABILITY_OPTIONS}
+          initialValues={
+            defaultGamePlatform ? { platforms: [defaultGamePlatform] } : undefined
+          }
           onClose={() => setSelectedGame(null)}
           onAdd={(payload) => handleAddGame(selectedGame, payload)}
         >
@@ -1965,14 +1980,9 @@ export default function GamesManager({
                 Мій: {selectedView.rating ?? "—"}
               </span>
             </div>
-            {gameDetails[selectedView.items.id]?.released ? (
+            {selectedView.items.year ? (
               <p className={styles.resultMeta}>
-                Рік: {gameDetails[selectedView.items.id]?.released?.slice(0, 4)}
-              </p>
-            ) : null}
-            {gameDetails[selectedView.items.id]?.genres ? (
-              <p className={styles.resultMeta}>
-                Жанри: {gameDetails[selectedView.items.id]?.genres}
+                Рік: {selectedView.items.year}
               </p>
             ) : null}
             {selectedView.items.description ? (
