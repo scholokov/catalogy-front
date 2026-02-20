@@ -64,14 +64,17 @@ export default function SettingsPage() {
         return;
       }
 
+      const profileVisiblePlatforms = Array.isArray(data?.settings_visible_game_platforms)
+        ? (data.settings_visible_game_platforms.filter(Boolean) as string[])
+        : [];
+      const resolvedVisiblePlatforms =
+        profileVisiblePlatforms.length > 0
+          ? profileVisiblePlatforms
+          : [...DEFAULT_GAME_PLATFORM_OPTIONS];
+
       setShowFilmAvailability(data?.settings_show_film_availability ?? true);
       setShowGameAvailability(data?.settings_show_game_availability ?? true);
-      setVisibleGamePlatforms(
-        (data?.settings_visible_game_platforms?.filter(Boolean) as string[] | undefined)
-          ?.length
-          ? (data.settings_visible_game_platforms as string[])
-          : [...DEFAULT_GAME_PLATFORM_OPTIONS],
-      );
+      setVisibleGamePlatforms(resolvedVisiblePlatforms);
       setDefaultGamePlatform(data?.settings_default_game_platform ?? null);
       setDefaultFilmAvailability(data?.settings_default_film_availability ?? null);
       setDefaultGameAvailability(data?.settings_default_game_availability ?? null);
@@ -88,11 +91,7 @@ export default function SettingsPage() {
       writeDisplayPreferences({
         showFilmAvailability: data?.settings_show_film_availability ?? true,
         showGameAvailability: data?.settings_show_game_availability ?? true,
-        visibleGamePlatforms:
-          (data?.settings_visible_game_platforms?.filter(Boolean) as string[] | undefined)
-            ?.length
-            ? (data.settings_visible_game_platforms as string[])
-            : [...DEFAULT_GAME_PLATFORM_OPTIONS],
+        visibleGamePlatforms: resolvedVisiblePlatforms,
         defaultGamePlatform: data?.settings_default_game_platform ?? null,
         defaultFilmAvailability: data?.settings_default_film_availability ?? null,
         defaultGameAvailability: data?.settings_default_game_availability ?? null,
