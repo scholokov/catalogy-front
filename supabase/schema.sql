@@ -4,12 +4,28 @@ create table if not exists profiles (
   id uuid primary key references auth.users on delete cascade,
   username text,
   views_visible_to_friends boolean not null default false,
+  settings_show_film_availability boolean not null default true,
+  settings_show_game_availability boolean not null default true,
+  settings_visible_game_platforms text[] not null default '{"PS","Steam","PC","Android","iOS","Xbox"}',
+  settings_default_game_platform text,
   avatar_url text,
   created_at timestamptz not null default now()
 );
 
 alter table profiles
 add column if not exists views_visible_to_friends boolean not null default false;
+
+alter table profiles
+add column if not exists settings_show_film_availability boolean not null default true;
+
+alter table profiles
+add column if not exists settings_show_game_availability boolean not null default true;
+
+alter table profiles
+add column if not exists settings_visible_game_platforms text[] not null default '{"PS","Steam","PC","Android","iOS","Xbox"}';
+
+alter table profiles
+add column if not exists settings_default_game_platform text;
 
 do $$
 begin

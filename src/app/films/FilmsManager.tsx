@@ -15,6 +15,7 @@ import CatalogModal from "@/components/catalog/CatalogModal";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
 import { supabase } from "@/lib/supabase/client";
+import { readDisplayPreferences } from "@/lib/settings/displayPreferences";
 import { getDisplayName } from "@/lib/users/displayName";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
@@ -181,13 +182,9 @@ export default function FilmsManager({
   const [recommendedItemIds, setRecommendedItemIds] = useState<Set<string>>(
     new Set(),
   );
-  const [filmDetails, setFilmDetails] = useState<
-    Record<string, { director?: string; actors?: string; year?: string; genres?: string }>
-  >({});
   const descriptionRefs = useRef<Map<string, HTMLParagraphElement | null>>(
     new Map(),
   );
-  const fetchingDetailsRef = useRef<Set<string>>(new Set());
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const skipNextApplyRef = useRef(false);
   const loadingPagesRef = useRef<Set<number>>(new Set());
@@ -212,6 +209,16 @@ export default function FilmsManager({
     "checking" | "allowed" | "unauthenticated" | "not_friends" | "closed"
   >(readOnly && ownerUserId ? "checking" : "allowed");
   const [friendOwnerName, setFriendOwnerName] = useState("");
+  const [showAvailability, setShowAvailability] = useState(true);
+
+  useEffect(() => {
+    const applyPreferences = () => {
+      const prefs = readDisplayPreferences();
+      setShowAvailability(prefs.showFilmAvailability);
+    };
+    applyPreferences();
+    return undefined;
+  }, []);
 
   const loadRecommendations = useCallback(
     async (itemIds: string[], shouldReset: boolean) => {
@@ -714,14 +721,11 @@ export default function FilmsManager({
       ? collection
       : collection.filter((item) => {
           const description = item.items.description?.toLowerCase() ?? "";
-          const genres = filmDetails[item.items.id]?.genres?.toLowerCase() ?? "";
-          const director = filmDetails[item.items.id]?.director?.toLowerCase() ?? "";
-
           const genresMatches = genresFilter
-            ? (genres ? genres.includes(genresFilter) : description.includes(genresFilter))
+            ? description.includes(genresFilter)
             : true;
           const directorMatches = directorFilter
-            ? (director ? director.includes(directorFilter) : description.includes(directorFilter))
+            ? description.includes(directorFilter)
             : true;
 
           return genresMatches && directorMatches;
@@ -730,7 +734,7 @@ export default function FilmsManager({
     return [...filtered].sort(
       (left, right) => Date.parse(right.created_at) - Date.parse(left.created_at),
     );
-  }, [appliedFilters.director, appliedFilters.genres, collection, filmDetails]);
+  }, [appliedFilters.director, appliedFilters.genres, collection]);
 
   useEffect(() => {
     const hasClientFilters = Boolean(
@@ -1227,47 +1231,6 @@ export default function FilmsManager({
   };
 
   useEffect(() => {
-    collection.forEach((item) => {
-      const externalId = item.items.external_id;
-      if (!externalId) return;
-      if (filmDetails[item.items.id] || fetchingDetailsRef.current.has(item.id)) {
-        return;
-      }
-
-      fetchingDetailsRef.current.add(item.id);
-      void fetch(`/api/tmdb/${externalId}`)
-        .then(async (response) => {
-          if (!response.ok) return null;
-          return (await response.json()) as FilmResult;
-        })
-        .then((detail) => {
-          if (!detail) return;
-          setFilmDetails((prev) => ({
-            ...prev,
-            [item.items.id]: {
-              director: detail.director,
-              actors: detail.actors,
-              year: detail.year,
-              genres: detail.genres,
-            },
-          }));
-          if (!item.items.year && detail.year) {
-            const parsedYear = Number.parseInt(detail.year.slice(0, 4), 10);
-            if (!Number.isNaN(parsedYear)) {
-              void supabase
-                .from("items")
-                .update({ year: parsedYear })
-                .eq("id", item.items.id);
-            }
-          }
-        })
-        .finally(() => {
-          fetchingDetailsRef.current.delete(item.id);
-        });
-    });
-  }, [collection, filmDetails]);
-
-  useEffect(() => {
     const next = new Set<string>();
     descriptionRefs.current.forEach((node, id) => {
       if (!node) return;
@@ -1294,7 +1257,7 @@ export default function FilmsManager({
   const groupedByDirector = useMemo(() => {
     const groups = new Map<string, FilmCollectionItem[]>();
     displayedCollection.forEach((item) => {
-      const director = filmDetails[item.items.id]?.director?.trim() || "Без режисера";
+      const director = "Без режисера";
       const bucket = groups.get(director);
       if (bucket) {
         bucket.push(item);
@@ -1303,7 +1266,7 @@ export default function FilmsManager({
       }
     });
     return [...groups.entries()].sort(([left], [right]) => left.localeCompare(right, "uk"));
-  }, [displayedCollection, filmDetails]);
+  }, [displayedCollection]);
 
   const renderDefaultFilmItem = (
     item: FilmCollectionItem,
@@ -1341,17 +1304,8 @@ export default function FilmsManager({
         )}
       </div>
       <div className={styles.resultContent}>
-        {filmDetails[item.items.id]?.year ? (
-          <p className={styles.resultMeta}>Рік: {filmDetails[item.items.id]?.year}</p>
-        ) : null}
-        {filmDetails[item.items.id]?.director ? (
-          <p className={styles.resultMeta}>Режисер: {filmDetails[item.items.id]?.director}</p>
-        ) : null}
-        {filmDetails[item.items.id]?.actors ? (
-          <p className={styles.resultMeta}>Актори: {filmDetails[item.items.id]?.actors}</p>
-        ) : null}
-        {filmDetails[item.items.id]?.genres ? (
-          <p className={styles.resultMeta}>Жанри: {filmDetails[item.items.id]?.genres}</p>
+        {item.items.year ? (
+          <p className={styles.resultMeta}>Рік: {item.items.year}</p>
         ) : null}
         {item.items.description ? (
           <div className={styles.plotBlock}>
@@ -1393,6 +1347,9 @@ export default function FilmsManager({
             Переглянуто:{" "}
             {item.is_viewed ? `${formatViewedDate(item.viewed_at)} (${item.view_percent}%)` : "ні"}
           </span>
+          {showAvailability && item.availability ? (
+            <span>Наявність: {item.availability}</span>
+          ) : null}
           {recommendedItemIds.has(item.items.id) ? <span>Рекомендовано друзям</span> : null}
           {item.comment ? <span>Коментар: {item.comment}</span> : null}
         </div>
@@ -2159,25 +2116,8 @@ export default function FilmsManager({
                 Мій: {selectedView.rating ?? "—"}
               </span>
             </div>
-            {filmDetails[selectedView.items.id]?.year ? (
-              <p className={styles.resultMeta}>
-                Рік: {filmDetails[selectedView.items.id]?.year}
-              </p>
-            ) : null}
-            {filmDetails[selectedView.items.id]?.director ? (
-              <p className={styles.resultMeta}>
-                Режисер: {filmDetails[selectedView.items.id]?.director}
-              </p>
-            ) : null}
-            {filmDetails[selectedView.items.id]?.actors ? (
-              <p className={styles.resultMeta}>
-                Актори: {filmDetails[selectedView.items.id]?.actors}
-              </p>
-            ) : null}
-            {filmDetails[selectedView.items.id]?.genres ? (
-              <p className={styles.resultMeta}>
-                Жанри: {filmDetails[selectedView.items.id]?.genres}
-              </p>
+            {selectedView.items.year ? (
+              <p className={styles.resultMeta}>Рік: {selectedView.items.year}</p>
             ) : null}
             {selectedView.items.description ? (
               <ModalDescription text={selectedView.items.description} />
