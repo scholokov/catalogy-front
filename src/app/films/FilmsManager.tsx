@@ -59,6 +59,14 @@ type FilmCollectionItem = {
   };
 };
 
+type FilmItemDraft = {
+  poster_url: string | null;
+  year: number | null;
+  imdb_rating: string | null;
+  description: string | null;
+  external_id: string | null;
+};
+
 type ContactOption = {
   id: string;
   name: string;
@@ -149,8 +157,10 @@ const reconcileRangeWithNewBounds = (
   return clampRange([from, to], nextBounds);
 };
 
-const formatPersonalRating = (value: number) =>
-  Number.isInteger(value) ? String(value) : value.toFixed(1);
+const formatPersonalRating = (value: number | null) => {
+  if (value === null) return "—";
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+};
 
 export default function FilmsManager({
   onCountChange,
@@ -179,6 +189,11 @@ export default function FilmsManager({
   const [selectedView, setSelectedView] = useState<FilmCollectionItem | null>(
     null,
   );
+  const [selectedViewItemDraft, setSelectedViewItemDraft] = useState<FilmItemDraft | null>(
+    null,
+  );
+  const [isRefreshPickerOpen, setIsRefreshPickerOpen] = useState(false);
+  const [refreshSearchQuery, setRefreshSearchQuery] = useState("");
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(
     new Set(),
   );
@@ -231,6 +246,12 @@ export default function FilmsManager({
     applyPreferences();
     return undefined;
   }, []);
+
+  useEffect(() => {
+    setSelectedViewItemDraft(null);
+    setIsRefreshPickerOpen(false);
+    setRefreshSearchQuery("");
+  }, [selectedView?.id]);
 
   const loadRecommendations = useCallback(
     async (itemIds: string[], shouldReset: boolean) => {
@@ -1082,6 +1103,8 @@ export default function FilmsManager({
 
   const handleUpdateView = async (
     viewId: string,
+    itemId: string,
+    itemDraft: FilmItemDraft | null,
     payload: {
       viewedAt: string;
       comment: string;
@@ -1110,8 +1133,65 @@ export default function FilmsManager({
       throw new Error("Не вдалося оновити запис.");
     }
 
+    if (itemDraft) {
+      const { error: updateItemError } = await supabase
+        .from("items")
+        .update({
+          poster_url: itemDraft.poster_url,
+          year: itemDraft.year,
+          imdb_rating: itemDraft.imdb_rating,
+          description: itemDraft.description,
+          external_id: itemDraft.external_id,
+        })
+        .eq("id", itemId);
+      if (updateItemError) {
+        throw new Error("Не вдалося оновити дані фільму.");
+      }
+    }
+
     setHasApplied(true);
     void fetchPage(0, appliedFilters);
+  };
+
+  const applyRefreshedFilmMetadata = async (film: FilmResult) => {
+    if (!selectedView) return;
+
+    const detailResponse = await fetch(
+      `/api/tmdb/${film.id}?mediaType=${film.mediaType ?? "movie"}`,
+    );
+    const detail = detailResponse.ok
+      ? ((await detailResponse.json()) as FilmResult)
+      : film;
+
+    const parsedYear = Number.parseInt(detail.year ?? "", 10);
+    setSelectedViewItemDraft({
+      poster_url: detail.poster?.trim()
+        ? detail.poster.trim()
+        : selectedView.items.poster_url ?? null,
+      year: Number.isFinite(parsedYear) ? parsedYear : selectedView.items.year ?? null,
+      imdb_rating: detail.imdbRating?.trim()
+        ? detail.imdbRating.trim()
+        : selectedView.items.imdb_rating ?? null,
+      description: detail.plot?.trim()
+        ? detail.plot.trim()
+        : selectedView.items.description ?? null,
+      external_id: detail.id,
+    });
+  };
+
+  const handleRefreshSelectedFilmMetadata = async () => {
+    if (!selectedView) return;
+    const query = selectedView.items.title.trim();
+    const results = await handleFilmSearch(query);
+    if (results.length === 0) {
+      throw new Error("Не знайдено збіг у TMDB.");
+    }
+    if (results.length === 1) {
+      await applyRefreshedFilmMetadata(results[0]);
+      return;
+    }
+    setRefreshSearchQuery(query);
+    setIsRefreshPickerOpen(true);
   };
 
   const handleDeleteView = async (viewId: string) => {
@@ -2069,6 +2149,56 @@ export default function FilmsManager({
         />
       ) : null}
 
+      {isRefreshPickerOpen ? (
+        <CatalogSearchModal
+          title="Оновити фільм"
+          onSearch={handleFilmSearch}
+          getKey={(film) => film.id}
+          initialQuery={refreshSearchQuery}
+          onSelect={async (film) => {
+            await applyRefreshedFilmMetadata(film);
+            setIsRefreshPickerOpen(false);
+          }}
+          onClose={() => setIsRefreshPickerOpen(false)}
+          renderItem={(film) => (
+            <>
+              <div className={styles.posterWrapper}>
+                {film.poster && film.poster !== "N/A" ? (
+                  <Image
+                    className={styles.poster}
+                    src={film.poster}
+                    alt={`Постер ${film.title}`}
+                    width={180}
+                    height={270}
+                    unoptimized
+                  />
+                ) : (
+                  <div className={styles.posterPlaceholder}>No image</div>
+                )}
+              </div>
+              <div className={styles.resultContent}>
+                <div className={styles.titleRow}>
+                  <h2 className={styles.resultTitle}>
+                    {film.title} <span className={styles.resultYear}>({film.year})</span>
+                  </h2>
+                  {film.imdbRating ? (
+                    <span className={styles.resultRating}>IMDb: {film.imdbRating}</span>
+                  ) : null}
+                </div>
+                {film.genres ? <p className={styles.resultMeta}>{film.genres}</p> : null}
+                {film.director ? (
+                  <p className={styles.resultMeta}>Режисер: {film.director}</p>
+                ) : null}
+                {film.actors ? <p className={styles.resultMeta}>Актори: {film.actors}</p> : null}
+                <p className={styles.resultPlot}>
+                  {film.plot ? film.plot : "Опис недоступний."}
+                </p>
+              </div>
+            </>
+          )}
+        />
+      ) : null}
+
       {selectedFilm ? (
         <CatalogModal
           title={selectedFilm.title}
@@ -2116,9 +2246,13 @@ export default function FilmsManager({
       {selectedView ? (
         <CatalogModal
           title={selectedView.items.title}
-          posterUrl={selectedView.items.poster_url ?? undefined}
+          posterUrl={
+            (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined
+          }
           imageUrls={
-            selectedView.items.poster_url ? [selectedView.items.poster_url] : []
+            (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url)
+              ? [selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url ?? ""]
+              : []
           }
           onClose={() => setSelectedView(null)}
           readOnly={readOnly}
@@ -2147,23 +2281,45 @@ export default function FilmsManager({
             availability: selectedView.availability,
           }}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
-          onAdd={readOnly ? undefined : (payload) => handleUpdateView(selectedView.id, payload)}
+          onRefresh={readOnly ? undefined : handleRefreshSelectedFilmMetadata}
+          onAdd={
+            readOnly
+              ? undefined
+              : (payload) =>
+                  handleUpdateView(
+                    selectedView.id,
+                    selectedView.items.id,
+                    selectedViewItemDraft,
+                    payload,
+                  )
+          }
           onDelete={readOnly ? undefined : () => handleDeleteView(selectedView.id)}
         >
           <div className={styles.resultContent}>
             <div className={styles.titleRow}>
               <span className={styles.resultRating}>
-                IMDb: {selectedView.items.imdb_rating ?? "—"}
+                IMDb:{" "}
+                {selectedViewItemDraft?.imdb_rating ??
+                  selectedView.items.imdb_rating ??
+                  "—"}
               </span>
               <span className={styles.resultRating}>
-                Мій: {selectedView.rating ?? "—"}
+                Мій: {formatPersonalRating(selectedView.rating)}
               </span>
             </div>
-            {selectedView.items.year ? (
-              <p className={styles.resultMeta}>Рік: {selectedView.items.year}</p>
+            {(selectedViewItemDraft?.year ?? selectedView.items.year) ? (
+              <p className={styles.resultMeta}>
+                Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
+              </p>
             ) : null}
-            {selectedView.items.description ? (
-              <ModalDescription text={selectedView.items.description} />
+            {(selectedViewItemDraft?.description ?? selectedView.items.description) ? (
+              <ModalDescription
+                text={
+                  selectedViewItemDraft?.description ??
+                  selectedView.items.description ??
+                  ""
+                }
+              />
             ) : (
               <p className={styles.resultPlot}>Опис недоступний.</p>
             )}

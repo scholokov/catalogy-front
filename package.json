@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "import:games:csv:dry": "node scripts/import-games-csv.js --mode dry-run",
+    "import:games:csv:apply": "node scripts/import-games-csv.js --mode apply"
   },
   "dependencies": {
     "@supabase/ssr": "^0.8.0",

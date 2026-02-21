@@ -1,10 +1,14 @@
 export const DEFAULT_GAME_PLATFORM_OPTIONS = [
   "PS",
+  "PS VR",
+  "PS PlayLink",
   "Steam",
+  "Nintendo",
   "PC",
+  "Xbox",
   "Android",
   "iOS",
-  "Xbox",
+  "Other",
 ] as const;
 
 export type DisplayPreferences = {

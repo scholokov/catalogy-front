@@ -24,6 +24,7 @@ type CatalogModalProps = {
     availability: string | null;
   }) => Promise<void>;
   onDelete?: () => Promise<void>;
+  onRefresh?: () => Promise<void>;
   extraActions?: React.ReactNode;
   initialValues?: {
     viewedAt?: string;
@@ -61,6 +62,7 @@ export default function CatalogModal({
   onClose,
   onAdd,
   onDelete,
+  onRefresh,
   extraActions,
   initialValues,
   platformOptions = [],
@@ -109,6 +111,7 @@ export default function CatalogModal({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>("");
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isPlatformsOpen, setIsPlatformsOpen] = useState(false);
   const [isAvailabilityOpen, setIsAvailabilityOpen] = useState(false);
@@ -278,6 +281,23 @@ export default function CatalogModal({
     setIsConfirmOpen(true);
   };
 
+  const handleRefresh = async () => {
+    if (!onRefresh) return;
+    setIsRefreshing(true);
+    setSaveError("");
+    try {
+      await onRefresh();
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Не вдалося оновити дані.";
+      setSaveError(message);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const confirmDelete = async () => {
     if (!onDelete) return;
 
@@ -344,7 +364,9 @@ export default function CatalogModal({
     }
     const parsed = Number(normalizedValue);
     if (!Number.isFinite(parsed)) return;
-    setRating(normalizeRating(parsed));
+    const normalized = normalizeRating(parsed);
+    setRating(normalized);
+    setRatingInput(formatRating(normalized));
   };
 
   const handleRatingInputBlur = () => {
@@ -378,12 +400,52 @@ export default function CatalogModal({
           <h2 className={styles.title}>{title}</h2>
           <div className={styles.headerActions}>
             {onDelete ? (
+              <>
+                {onRefresh ? (
+                  <button
+                    type="button"
+                    className={`${styles.iconButton} ${styles.deleteButton}`}
+                    onClick={handleRefresh}
+                    aria-label="Оновити дані"
+                    disabled={isSaving || isDeleting || isRefreshing}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 -960 960 960"
+                      width="20"
+                      height="20"
+                      aria-hidden="true"
+                    >
+                      <path d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-110h80v280H520v-80h168q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q77 0 139-44t87-116h84q-28 106-114 173t-196 67Z" />
+                    </svg>
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={`${styles.iconButton} ${styles.deleteButton}`}
+                  onClick={handleDelete}
+                  aria-label="Видалити"
+                  disabled={isSaving || isDeleting || isRefreshing}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 -960 960 960"
+                    width="20"
+                    height="20"
+                    aria-hidden="true"
+                  >
+                    <path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z" />
+                  </svg>
+                </button>
+              </>
+            ) : null}
+            {!onDelete && onRefresh ? (
               <button
                 type="button"
                 className={`${styles.iconButton} ${styles.deleteButton}`}
-                onClick={handleDelete}
-                aria-label="Видалити"
-                disabled={isSaving || isDeleting}
+                onClick={handleRefresh}
+                aria-label="Оновити дані"
+                disabled={isSaving || isDeleting || isRefreshing}
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -392,7 +454,7 @@ export default function CatalogModal({
                   height="20"
                   aria-hidden="true"
                 >
-                  <path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z" />
+                  <path d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-110h80v280H520v-80h168q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q77 0 139-44t87-116h84q-28 106-114 173t-196 67Z" />
                 </svg>
               </button>
             ) : null}
@@ -401,7 +463,7 @@ export default function CatalogModal({
               className={`${styles.iconButton} btnSecondary`}
               onClick={onClose}
               aria-label="Закрити"
-              disabled={isSaving}
+              disabled={isSaving || isRefreshing}
             >
               ✕
             </button>

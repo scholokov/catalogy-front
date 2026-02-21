@@ -6,7 +6,7 @@ create table if not exists profiles (
   views_visible_to_friends boolean not null default false,
   settings_show_film_availability boolean not null default true,
   settings_show_game_availability boolean not null default true,
-  settings_visible_game_platforms text[] not null default '{"PS","Steam","PC","Android","iOS","Xbox"}',
+  settings_visible_game_platforms text[] not null default '{"PS","PS VR","PS PlayLink","Steam","Nintendo","PC","Xbox","Android","iOS","Other"}',
   settings_default_game_platform text,
   settings_default_film_availability text,
   settings_default_game_availability text,
@@ -26,7 +26,7 @@ alter table profiles
 add column if not exists settings_show_game_availability boolean not null default true;
 
 alter table profiles
-add column if not exists settings_visible_game_platforms text[] not null default '{"PS","Steam","PC","Android","iOS","Xbox"}';
+add column if not exists settings_visible_game_platforms text[] not null default '{"PS","PS VR","PS PlayLink","Steam","Nintendo","PC","Xbox","Android","iOS","Other"}';
 
 alter table profiles
 add column if not exists settings_default_game_platform text;
@@ -81,7 +81,7 @@ create table if not exists user_views (
   user_id uuid not null references auth.users on delete cascade,
   item_id uuid not null references items on delete cascade,
   created_at timestamptz not null default now(),
-  rating numeric(2,1) check (rating between 1 and 5 and rating * 2 = trunc(rating * 2)),
+  rating numeric(2,1) check (rating in (1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0)),
   comment text,
   viewed_at timestamptz not null default now(),
   is_viewed boolean not null default true,

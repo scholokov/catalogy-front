@@ -57,6 +57,14 @@ type GameCollectionItem = {
   };
 };
 
+type GameItemDraft = {
+  poster_url: string | null;
+  year: number | null;
+  imdb_rating: string | null;
+  description: string | null;
+  external_id: string | null;
+};
+
 type ContactOption = {
   id: string;
   name: string;
@@ -143,8 +151,10 @@ const reconcileRangeWithNewBounds = (
   return clampRange([from, to], nextBounds);
 };
 
-const formatPersonalRating = (value: number) =>
-  Number.isInteger(value) ? String(value) : value.toFixed(1);
+const formatPersonalRating = (value: number | null) => {
+  if (value === null) return "—";
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+};
 
 export default function GamesManager({
   onCountChange,
@@ -171,6 +181,11 @@ export default function GamesManager({
   const [selectedView, setSelectedView] = useState<GameCollectionItem | null>(
     null,
   );
+  const [selectedViewItemDraft, setSelectedViewItemDraft] = useState<GameItemDraft | null>(
+    null,
+  );
+  const [isRefreshPickerOpen, setIsRefreshPickerOpen] = useState(false);
+  const [refreshSearchQuery, setRefreshSearchQuery] = useState("");
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(
     new Set(),
   );
@@ -234,6 +249,12 @@ export default function GamesManager({
     applyPreferences();
     return undefined;
   }, []);
+
+  useEffect(() => {
+    setSelectedViewItemDraft(null);
+    setIsRefreshPickerOpen(false);
+    setRefreshSearchQuery("");
+  }, [selectedView?.id]);
 
   const loadRecommendations = useCallback(
     async (itemIds: string[], shouldReset: boolean) => {
@@ -984,6 +1005,8 @@ export default function GamesManager({
 
   const handleUpdateView = async (
     viewId: string,
+    itemId: string,
+    itemDraft: GameItemDraft | null,
     payload: {
       viewedAt: string;
       comment: string;
@@ -1013,8 +1036,81 @@ export default function GamesManager({
       throw new Error("Не вдалося оновити запис.");
     }
 
+    if (itemDraft) {
+      const { error: updateItemError } = await supabase
+        .from("items")
+        .update({
+          poster_url: itemDraft.poster_url,
+          year: itemDraft.year,
+          imdb_rating: itemDraft.imdb_rating,
+          description: itemDraft.description,
+          external_id: itemDraft.external_id,
+        })
+        .eq("id", itemId);
+      if (updateItemError) {
+        throw new Error("Не вдалося оновити дані гри.");
+      }
+    }
+
     setHasApplied(true);
     void fetchPage(0, appliedFilters);
+  };
+
+  const applyRefreshedGameMetadata = async (game: GameResult) => {
+    if (!selectedView) return;
+    const detailResponse = await fetch(`/api/rawg/${game.id}`);
+    const detailData = detailResponse.ok
+      ? ((await detailResponse.json()) as {
+          description?: string;
+          rating?: number | null;
+          released?: string;
+          poster?: string;
+        })
+      : null;
+
+    const released =
+      detailData?.released && detailData.released.trim()
+        ? detailData.released
+        : game.released;
+    const parsedYear = Number.parseInt(released?.slice(0, 4) ?? "", 10);
+    const rawRating =
+      typeof detailData?.rating === "number" && Number.isFinite(detailData.rating)
+        ? detailData.rating
+        : game.rating;
+    const poster =
+      detailData?.poster && detailData.poster.trim()
+        ? detailData.poster.trim()
+        : game.poster;
+    const description =
+      detailData?.description && detailData.description.trim()
+        ? detailData.description.trim()
+        : selectedView.items.description ?? null;
+
+    setSelectedViewItemDraft({
+      poster_url: poster?.trim() ? poster.trim() : selectedView.items.poster_url ?? null,
+      year: Number.isFinite(parsedYear) ? parsedYear : selectedView.items.year ?? null,
+      imdb_rating:
+        typeof rawRating === "number" && Number.isFinite(rawRating)
+          ? rawRating.toFixed(1)
+          : selectedView.items.imdb_rating ?? null,
+      description,
+      external_id: game.id,
+    });
+  };
+
+  const handleRefreshSelectedGameMetadata = async () => {
+    if (!selectedView) return;
+    const query = selectedView.items.title.trim();
+    const results = await handleGameSearch(query);
+    if (results.length === 0) {
+      throw new Error("Не знайдено збіг у RAWG.");
+    }
+    if (results.length === 1) {
+      await applyRefreshedGameMetadata(results[0]);
+      return;
+    }
+    setRefreshSearchQuery(query);
+    setIsRefreshPickerOpen(true);
   };
 
   const handleDeleteView = async (viewId: string) => {
@@ -1369,7 +1465,7 @@ export default function GamesManager({
                       RAWG: {item.items.imdb_rating ?? "—"}
                     </span>
                     <span className={styles.resultRating}>
-                      Мій: {item.rating ?? "—"}
+                      Мій: {item.rating != null ? formatPersonalRating(item.rating) : "—"}
                     </span>
                   </div>
                 </div>
@@ -1941,6 +2037,22 @@ export default function GamesManager({
         />
       ) : null}
 
+      {isRefreshPickerOpen ? (
+        <CatalogSearchModal
+          title="Оновити гру"
+          onSearch={handleGameSearch}
+          getKey={(game) => game.id}
+          resultItemClassName={styles.gameSearchResultItem}
+          initialQuery={refreshSearchQuery}
+          onSelect={async (game) => {
+            await applyRefreshedGameMetadata(game);
+            setIsRefreshPickerOpen(false);
+          }}
+          onClose={() => setIsRefreshPickerOpen(false)}
+          renderItem={(game) => <GameSearchItem game={game} />}
+        />
+      ) : null}
+
       {selectedGame ? (
         <CatalogModal
           title={selectedGame.title}
@@ -1982,7 +2094,9 @@ export default function GamesManager({
       {selectedView ? (
         <CatalogModal
           title={selectedView.items.title}
-          posterUrl={selectedView.items.poster_url ?? undefined}
+          posterUrl={
+            (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined
+          }
           size="wide"
           platformOptions={visiblePlatforms}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
@@ -2013,25 +2127,45 @@ export default function GamesManager({
             platforms: selectedView.platforms ?? [],
             availability: selectedView.availability,
           }}
-          onAdd={readOnly ? undefined : (payload) => handleUpdateView(selectedView.id, payload)}
+          onRefresh={readOnly ? undefined : handleRefreshSelectedGameMetadata}
+          onAdd={
+            readOnly
+              ? undefined
+              : (payload) =>
+                  handleUpdateView(
+                    selectedView.id,
+                    selectedView.items.id,
+                    selectedViewItemDraft,
+                    payload,
+                  )
+          }
           onDelete={readOnly ? undefined : () => handleDeleteView(selectedView.id)}
         >
           <div className={styles.resultContent}>
             <div className={styles.titleRow}>
               <span className={styles.resultRating}>
-                RAWG: {selectedView.items.imdb_rating ?? "—"}
+                RAWG:{" "}
+                {selectedViewItemDraft?.imdb_rating ??
+                  selectedView.items.imdb_rating ??
+                  "—"}
               </span>
               <span className={styles.resultRating}>
-                Мій: {selectedView.rating ?? "—"}
+                Мій: {formatPersonalRating(selectedView.rating)}
               </span>
             </div>
-            {selectedView.items.year ? (
+            {(selectedViewItemDraft?.year ?? selectedView.items.year) ? (
               <p className={styles.resultMeta}>
-                Рік: {selectedView.items.year}
+                Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
               </p>
             ) : null}
-            {selectedView.items.description ? (
-              <ModalDescription text={selectedView.items.description} />
+            {(selectedViewItemDraft?.description ?? selectedView.items.description) ? (
+              <ModalDescription
+                text={
+                  selectedViewItemDraft?.description ??
+                  selectedView.items.description ??
+                  ""
+                }
+              />
             ) : (
               <p className={styles.resultPlot}>Опис недоступний.</p>
             )}
