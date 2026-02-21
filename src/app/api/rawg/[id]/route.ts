@@ -17,7 +17,22 @@ export async function GET(
   detailUrl.searchParams.set("key", apiKey);
 
   const response = await fetch(detailUrl.toString());
-  const data = (await response.json()) as {
+  if (!response.ok) {
+    return NextResponse.json(
+      { error: `RAWG detail failed with status ${response.status}.` },
+      { status: 502 },
+    );
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return NextResponse.json(
+      { error: "RAWG returned non-JSON response." },
+      { status: 502 },
+    );
+  }
+
+  let data: {
     name?: string;
     rating?: number;
     released?: string;
@@ -25,6 +40,21 @@ export async function GET(
     description_raw?: string;
     description?: string;
   };
+  try {
+    data = (await response.json()) as {
+      name?: string;
+      rating?: number;
+      released?: string;
+      background_image?: string;
+      description_raw?: string;
+      description?: string;
+    };
+  } catch {
+    return NextResponse.json(
+      { error: "Failed to parse RAWG JSON response." },
+      { status: 502 },
+    );
+  }
 
   const raw = data.description_raw || data.description || "";
   const description = raw.replace(/<[^>]*>/g, "");

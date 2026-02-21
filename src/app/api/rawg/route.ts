@@ -34,7 +34,33 @@ export async function GET(request: Request) {
   searchUrl.searchParams.set("page_size", "10");
 
   const response = await fetch(searchUrl.toString());
-  const data = (await response.json()) as { results?: RawgGame[] };
+  if (!response.ok) {
+    return NextResponse.json(
+      {
+        results: [],
+        error: `RAWG search failed with status ${response.status}.`,
+      },
+      { status: 502 },
+    );
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return NextResponse.json(
+      { results: [], error: "RAWG returned non-JSON response." },
+      { status: 502 },
+    );
+  }
+
+  let data: { results?: RawgGame[] };
+  try {
+    data = (await response.json()) as { results?: RawgGame[] };
+  } catch {
+    return NextResponse.json(
+      { results: [], error: "Failed to parse RAWG JSON response." },
+      { status: 502 },
+    );
+  }
 
   const results = (data.results ?? []).map((game) => ({
     id: String(game.id),
