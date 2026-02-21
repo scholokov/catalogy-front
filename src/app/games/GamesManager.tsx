@@ -49,6 +49,7 @@ type GameCollectionItem = {
     id: string;
     title: string;
     description: string | null;
+    genres: string | null;
     poster_url: string | null;
     external_id: string | null;
     imdb_rating: string | null;
@@ -62,6 +63,7 @@ type GameItemDraft = {
   year: number | null;
   imdb_rating: string | null;
   description: string | null;
+  genres: string | null;
   external_id: string | null;
 };
 
@@ -460,7 +462,7 @@ export default function GamesManager({
     let query = supabase
       .from("user_views")
       .select(
-        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
+        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, items:items!inner (id, title, description, genres, poster_url, external_id, imdb_rating, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "game");
@@ -1082,6 +1084,7 @@ export default function GamesManager({
           type: "game",
           title: game.title,
           description: descriptionFromSearch,
+          genres: game.genres || null,
           poster_url: game.poster,
           external_id: game.id,
           imdb_rating: overallRating,
@@ -1110,12 +1113,19 @@ export default function GamesManager({
           });
       }
     } else {
-      const itemUpdates: { imdb_rating?: string | null; year?: number | null } = {};
+      const itemUpdates: {
+        imdb_rating?: string | null;
+        year?: number | null;
+        genres?: string | null;
+      } = {};
       if (overallRating) {
         itemUpdates.imdb_rating = overallRating;
       }
       if (yearValue) {
         itemUpdates.year = yearValue;
+      }
+      if (game.genres) {
+        itemUpdates.genres = game.genres;
       }
       if (Object.keys(itemUpdates).length > 0) {
         await supabase.from("items").update(itemUpdates).eq("id", itemId);
@@ -1185,6 +1195,7 @@ export default function GamesManager({
         year: itemDraft.year,
         imdb_rating: itemDraft.imdb_rating,
         description: itemDraft.description,
+        genres: itemDraft.genres,
         external_id: itemDraft.external_id,
       };
       const { error: updateItemError } = await supabase
@@ -1200,6 +1211,7 @@ export default function GamesManager({
               year: itemDraft.year,
               imdb_rating: itemDraft.imdb_rating,
               description: itemDraft.description,
+              genres: itemDraft.genres,
             })
             .eq("id", itemId);
           if (retryError) {
@@ -1229,6 +1241,7 @@ export default function GamesManager({
                 poster_url: itemDraft.poster_url,
                 year: itemDraft.year,
                 imdb_rating: itemDraft.imdb_rating,
+              genres: itemDraft.genres,
                 description: itemDraft.description,
                 external_id: itemDraft.external_id,
               }
@@ -1254,6 +1267,7 @@ export default function GamesManager({
               poster_url: itemDraft.poster_url,
               year: itemDraft.year,
               imdb_rating: itemDraft.imdb_rating,
+              genres: itemDraft.genres,
               description: itemDraft.description,
               external_id: itemDraft.external_id,
             }
@@ -1288,6 +1302,9 @@ export default function GamesManager({
       detailData?.poster && detailData.poster.trim()
         ? detailData.poster.trim()
         : game.poster;
+    const genres = game.genres?.trim()
+      ? game.genres.trim()
+      : selectedView.items.genres ?? null;
     const description =
       detailData?.description && detailData.description.trim()
         ? detailData.description.trim()
@@ -1300,6 +1317,7 @@ export default function GamesManager({
         typeof rawRating === "number" && Number.isFinite(rawRating)
           ? rawRating.toFixed(1)
           : selectedView.items.imdb_rating ?? null,
+      genres,
       description,
       external_id: game.id,
     });
@@ -1728,6 +1746,9 @@ export default function GamesManager({
                 {releasedYear ? (
                   <p className={styles.resultMeta}>Рік: {releasedYear}</p>
                 ) : null}
+                {item.items.genres ? (
+                  <p className={styles.resultMeta}>Жанри: {item.items.genres}</p>
+                ) : null}
                 {item.items.description ? (
                   <div className={styles.plotBlock}>
                     <p
@@ -1790,7 +1811,6 @@ export default function GamesManager({
                   {recommendedItemIds.has(item.items.id) ? (
                     <span>Рекомендовано друзям</span>
                   ) : null}
-                  {item.comment ? <span>Коментар: {item.comment}</span> : null}
                 </div>
               </div>
             </button>
@@ -2394,6 +2414,11 @@ export default function GamesManager({
             {(selectedViewItemDraft?.year ?? selectedView.items.year) ? (
               <p className={styles.resultMeta}>
                 Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
+              </p>
+            ) : null}
+            {(selectedViewItemDraft?.genres ?? selectedView.items.genres) ? (
+              <p className={styles.resultMeta}>
+                Жанри: {selectedViewItemDraft?.genres ?? selectedView.items.genres}
               </p>
             ) : null}
             {(selectedViewItemDraft?.description ?? selectedView.items.description) ? (
