@@ -99,6 +99,7 @@ const EXTERNAL_MIN = 0;
 const EXTERNAL_MAX = 10;
 const PERSONAL_MIN = 1;
 const PERSONAL_MAX = 5;
+const PERSONAL_STEP = 0.5;
 const AVAILABILITY_OPTIONS = [
   "В колекції",
   "Тимчасовий доступ",
@@ -147,6 +148,9 @@ const reconcileRangeWithNewBounds = (
   }
   return clampRange([from, to], nextBounds);
 };
+
+const formatPersonalRating = (value: number) =>
+  Number.isInteger(value) ? String(value) : value.toFixed(1);
 
 export default function FilmsManager({
   onCountChange,
@@ -1718,13 +1722,13 @@ export default function FilmsManager({
               <div className={styles.rangeHeader}>
                 <span>Мій рейтинг</span>
                 <span className={styles.rangeValues}>
-                  {pendingFilters.personalRatingRange[0]}–
-                  {pendingFilters.personalRatingRange[1]}
+                  {formatPersonalRating(pendingFilters.personalRatingRange[0])}–
+                  {formatPersonalRating(pendingFilters.personalRatingRange[1])}
                 </span>
               </div>
               <Range
                 values={pendingFilters.personalRatingRange}
-                step={1}
+                step={PERSONAL_STEP}
                 min={PERSONAL_MIN}
                 max={PERSONAL_MAX}
                 onChange={(values) =>

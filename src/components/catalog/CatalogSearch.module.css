@@ -551,23 +551,47 @@
 
 .titleRow {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
 
 .ratingRow {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  align-content: flex-start;
+  justify-content: flex-end;
   gap: 12px;
   margin-left: auto;
   flex-wrap: wrap;
   row-gap: 4px;
+  text-align: right;
 }
 
 .resultTitle {
+  margin: 0;
   font-size: 20px;
   font-weight: 600;
+}
+
+.collectionItem .titleRow {
+  gap: 12px;
+}
+
+.collectionItem .resultTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collectionItem .ratingRow {
+  flex: 0 0 auto;
+  max-width: 45%;
 }
 
 .resultYear {

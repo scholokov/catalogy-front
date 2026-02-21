@@ -81,7 +81,7 @@ create table if not exists user_views (
   user_id uuid not null references auth.users on delete cascade,
   item_id uuid not null references items on delete cascade,
   created_at timestamptz not null default now(),
-  rating int check (rating between 1 and 5),
+  rating numeric(2,1) check (rating between 1 and 5 and rating * 2 = trunc(rating * 2)),
   comment text,
   viewed_at timestamptz not null default now(),
   is_viewed boolean not null default true,

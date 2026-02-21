@@ -40,14 +40,19 @@ type CatalogModalProps = {
   children: React.ReactNode;
 };
 
-const ratingOptions: Array<{ value: number | null; label: string }> = [
-  { value: null, label: "-" },
-  { value: 5, label: "5" },
-  { value: 4, label: "4" },
-  { value: 3, label: "3" },
-  { value: 2, label: "2" },
-  { value: 1, label: "1" },
-];
+const RATING_MIN = 1;
+const RATING_MAX = 5;
+const RATING_STEP = 0.5;
+
+const normalizeRating = (value: number) => {
+  const rounded = Math.round(value / RATING_STEP) * RATING_STEP;
+  return Math.min(RATING_MAX, Math.max(RATING_MIN, rounded));
+};
+
+const formatRating = (value: number | null) => {
+  if (value === null) return "";
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+};
 
 export default function CatalogModal({
   title,
@@ -97,6 +102,7 @@ export default function CatalogModal({
   const [recommendSimilar, setRecommendSimilar] = useState(false);
   const [isViewed, setIsViewed] = useState(true);
   const [rating, setRating] = useState<number | null>(null);
+  const [ratingInput, setRatingInput] = useState("");
   const [viewPercent, setViewPercent] = useState(100);
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [availability, setAvailability] = useState<string | null>(null);
@@ -116,6 +122,7 @@ export default function CatalogModal({
       setRecommendSimilar(false);
       setIsViewed(true);
       setRating(null);
+      setRatingInput("");
       setViewPercent(100);
       setPlatforms([]);
       setAvailability(null);
@@ -134,6 +141,7 @@ export default function CatalogModal({
     setRecommendSimilar(Boolean(initialRecommendSimilar));
     setIsViewed(initialIsViewed ?? true);
     setRating(initialRating ?? null);
+    setRatingInput(formatRating(initialRating ?? null));
     setViewPercent(initialViewPercent ?? 100);
     setPlatforms(initialPlatformsKey ? initialPlatformsKey.split("|") : []);
     setAvailability(initialAvailability ?? null);
@@ -309,6 +317,51 @@ export default function CatalogModal({
   const selectedPlatformsLabel =
     platforms.length > 0 ? platforms.join(", ") : "Оберіть платформу";
   const selectedAvailabilityLabel = availability ?? "Оберіть наявність";
+  const isRatingDisabled = readOnly || !isViewed || isSaving;
+
+  const decreaseRating = () => {
+    if (rating === null) return;
+    const next = rating <= RATING_MIN ? null : normalizeRating(rating - RATING_STEP);
+    setRating(next);
+    setRatingInput(formatRating(next));
+  };
+
+  const increaseRating = () => {
+    const next =
+      rating === null
+        ? RATING_MIN
+        : normalizeRating(Math.min(RATING_MAX, rating + RATING_STEP));
+    setRating(next);
+    setRatingInput(formatRating(next));
+  };
+
+  const handleRatingInputChange = (value: string) => {
+    const normalizedValue = value.replace(",", ".");
+    setRatingInput(normalizedValue);
+    if (normalizedValue.trim() === "") {
+      setRating(null);
+      return;
+    }
+    const parsed = Number(normalizedValue);
+    if (!Number.isFinite(parsed)) return;
+    setRating(normalizeRating(parsed));
+  };
+
+  const handleRatingInputBlur = () => {
+    if (ratingInput.trim() === "") {
+      setRating(null);
+      setRatingInput("");
+      return;
+    }
+    const parsed = Number(ratingInput);
+    if (!Number.isFinite(parsed)) {
+      setRatingInput(formatRating(rating));
+      return;
+    }
+    const normalized = normalizeRating(parsed);
+    setRating(normalized);
+    setRatingInput(formatRating(normalized));
+  };
 
   return (
     <div
@@ -541,27 +594,37 @@ export default function CatalogModal({
                 }`}
               >
                 <span>Особистий рейтинг</span>
-                <select
-                  className={`${styles.select} ${styles.inlineSelect}`}
-                  value={rating === null ? "none" : String(rating)}
-                  onChange={(event) =>
-                    setRating(
-                      event.target.value === "none"
-                        ? null
-                        : Number(event.target.value),
-                    )
-                  }
-                  disabled={readOnly || !isViewed || isSaving}
-                >
-                  {ratingOptions.map((option) => (
-                    <option
-                      key={option.value === null ? "none" : option.value}
-                      value={option.value === null ? "none" : option.value}
-                    >
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                <div className={styles.ratingControl}>
+                  <button
+                    type="button"
+                    className={styles.ratingStepButton}
+                    onClick={decreaseRating}
+                    disabled={isRatingDisabled}
+                    aria-label="Зменшити рейтинг на 0.5"
+                  >
+                    -
+                  </button>
+                  <input
+                    className={`${styles.input} ${styles.ratingValueInput}`}
+                    type="text"
+                    inputMode="decimal"
+                    value={ratingInput}
+                    placeholder="-"
+                    onChange={(event) => handleRatingInputChange(event.target.value)}
+                    onBlur={handleRatingInputBlur}
+                    disabled={isRatingDisabled}
+                    aria-label="Особистий рейтинг від 1 до 5 з кроком 0.5"
+                  />
+                  <button
+                    type="button"
+                    className={styles.ratingStepButton}
+                    onClick={increaseRating}
+                    disabled={isRatingDisabled}
+                    aria-label="Збільшити рейтинг на 0.5"
+                  >
+                    +
+                  </button>
+                </div>
               </label>
 
               <label
