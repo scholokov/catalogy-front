@@ -93,7 +93,12 @@ type Filters = {
   recommendSimilarOnly: boolean;
   viewedDateFrom: string;
   viewedDateTo: string;
+  sortBy: SortBy;
+  sortDirection: SortDirection;
 };
+
+type SortBy = "created_at" | "title" | "rating" | "year";
+type SortDirection = "asc" | "desc";
 
 const MIN_YEAR = 1950;
 const MAX_YEAR = new Date().getFullYear();
@@ -102,6 +107,12 @@ const EXTERNAL_MAX = 5;
 const PERSONAL_MIN = 1;
 const PERSONAL_MAX = 5;
 const PERSONAL_STEP = 0.5;
+const SORT_OPTIONS: Array<{ value: SortBy; label: string }> = [
+  { value: "created_at", label: "Дата додавання" },
+  { value: "title", label: "Ім'я" },
+  { value: "rating", label: "Особистий рейтинг" },
+  { value: "year", label: "Рік релізу" },
+];
 const GAME_PLATFORM_OPTIONS = [...DEFAULT_GAME_PLATFORM_OPTIONS];
 const AVAILABILITY_OPTIONS = [
   "В колекції",
@@ -127,6 +138,8 @@ const DEFAULT_FILTERS: Filters = {
   recommendSimilarOnly: false,
   viewedDateFrom: "",
   viewedDateTo: "",
+  sortBy: "created_at",
+  sortDirection: "desc",
 };
 
 const clampRange = (range: [number, number], bounds: [number, number]) => {
@@ -154,6 +167,42 @@ const reconcileRangeWithNewBounds = (
 const formatPersonalRating = (value: number | null) => {
   if (value === null) return "—";
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+};
+
+const getDefaultSortDirection = (sortBy: SortBy): SortDirection => {
+  if (sortBy === "title") return "asc";
+  return "desc";
+};
+
+const getFiltersRequestKey = (filters: Filters) => JSON.stringify(filters);
+
+const sortGameCollection = (
+  items: GameCollectionItem[],
+  sortBy: SortBy,
+  sortDirection: SortDirection,
+) => {
+  const sorted = [...items];
+  const dir = sortDirection === "asc" ? 1 : -1;
+  sorted.sort((left, right) => {
+    if (sortBy === "title") {
+      const cmp = left.items.title.localeCompare(right.items.title, "uk", {
+        sensitivity: "base",
+      });
+      if (cmp !== 0) return cmp * dir;
+    } else if (sortBy === "year") {
+      const leftYear = left.items.year ?? null;
+      const rightYear = right.items.year ?? null;
+      if (leftYear === null && rightYear !== null) return 1;
+      if (leftYear !== null && rightYear === null) return -1;
+      if (leftYear !== null && rightYear !== null && leftYear !== rightYear) {
+        return (leftYear - rightYear) * dir;
+      }
+    }
+    const createdDiff = Date.parse(right.created_at) - Date.parse(left.created_at);
+    if (createdDiff !== 0) return createdDiff;
+    return right.id.localeCompare(left.id);
+  });
+  return sorted;
 };
 
 export default function GamesManager({
@@ -205,6 +254,7 @@ export default function GamesManager({
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const skipNextApplyRef = useRef(false);
   const loadingPagesRef = useRef<Set<number>>(new Set());
+  const activeRequestKeyRef = useRef("");
   const yearBoundsRef = useRef<[number, number]>([MIN_YEAR, MAX_YEAR]);
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
@@ -344,6 +394,11 @@ export default function GamesManager({
   }, [ownerUserId, readOnly]);
 
   const fetchPage = useCallback(async (pageIndex: number, filters: Filters) => {
+    const requestKey = getFiltersRequestKey(filters);
+    if (pageIndex === 0) {
+      activeRequestKeyRef.current = requestKey;
+    }
+
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -389,6 +444,11 @@ export default function GamesManager({
       return false;
     }
     loadingPagesRef.current.add(pageIndex);
+    const needsClientSort = filters.sortBy === "title" || filters.sortBy === "year";
+    if (needsClientSort && pageIndex > 0) {
+      loadingPagesRef.current.delete(pageIndex);
+      return false;
+    }
 
     if (pageIndex === 0) {
       setIsLoading(true);
@@ -403,9 +463,7 @@ export default function GamesManager({
         "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
-      .eq("items.type", "game")
-      .order("created_at", { ascending: false })
-      .order("id", { ascending: false });
+      .eq("items.type", "game");
 
     if (effectiveViewed !== effectivePlanned) {
       query = query.eq("is_viewed", effectiveViewed);
@@ -455,6 +513,31 @@ export default function GamesManager({
     if (filters.viewedDateTo) {
       query = query.lte("viewed_at", `${filters.viewedDateTo}T23:59:59.999Z`);
     }
+
+    const sortAscending = filters.sortDirection === "asc";
+    if (filters.sortBy === "title") {
+      query = query.order("title", {
+        foreignTable: "items",
+        ascending: sortAscending,
+      });
+    } else if (filters.sortBy === "rating") {
+      query = query.order("rating", {
+        ascending: sortAscending,
+        nullsFirst: false,
+      });
+    } else if (filters.sortBy === "year") {
+      query = query.order("year", {
+        foreignTable: "items",
+        ascending: sortAscending,
+        nullsFirst: false,
+      });
+    } else {
+      query = query.order("created_at", { ascending: sortAscending });
+    }
+    if (filters.sortBy !== "created_at") {
+      query = query.order("created_at", { ascending: false });
+    }
+    query = query.order("id", { ascending: false });
 
     if (pageIndex === 0) {
       let countQuery = supabase
@@ -513,12 +596,47 @@ export default function GamesManager({
       }
 
       const { count, error: countError } = await countQuery;
-      setTotalCount(countError ? 0 : (count ?? 0));
+      if (requestKey === activeRequestKeyRef.current) {
+        setTotalCount(countError ? 0 : (count ?? 0));
+      }
     }
 
     const from = pageIndex * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
-    const { data, error } = await query.range(from, to);
+    let data: GameCollectionItem[] | null;
+    let error: { message: string } | null = null;
+
+    if (needsClientSort) {
+      const loaded: GameCollectionItem[] = [];
+      let offset = 0;
+      const batchSize = 500;
+      while (true) {
+        const { data: batch, error: batchError } = await query.range(
+          offset,
+          offset + batchSize - 1,
+        );
+        if (batchError) {
+          error = batchError;
+          break;
+        }
+        const rows = (batch as unknown as GameCollectionItem[]) ?? [];
+        loaded.push(...rows);
+        if (rows.length < batchSize) {
+          break;
+        }
+        offset += batchSize;
+      }
+      data = loaded;
+    } else {
+      const ranged = await query.range(from, to);
+      data = (ranged.data as unknown as GameCollectionItem[]) ?? [];
+      error = ranged.error as { message: string } | null;
+    }
+
+    if (requestKey !== activeRequestKeyRef.current) {
+      loadingPagesRef.current.delete(pageIndex);
+      return false;
+    }
 
     if (error) {
       if (pageIndex === 0) {
@@ -531,7 +649,9 @@ export default function GamesManager({
       loadingPagesRef.current.delete(pageIndex);
       return false;
     } else {
-      const nextCollection = (data as unknown as GameCollectionItem[]) ?? [];
+      const nextCollection = needsClientSort
+        ? sortGameCollection(data ?? [], filters.sortBy, filters.sortDirection)
+        : ((data as unknown as GameCollectionItem[]) ?? []);
       setCollection((prev) => {
         if (pageIndex === 0) {
           return nextCollection;
@@ -546,7 +666,7 @@ export default function GamesManager({
         return merged;
       });
       const nextHasMore = nextCollection.length === PAGE_SIZE;
-      setHasMore(nextHasMore);
+      setHasMore(needsClientSort ? false : nextHasMore);
       setPage(pageIndex);
       if (pageIndex === 0 && nextCollection.length === 0) {
         const hasActiveFilters = Boolean(
@@ -687,22 +807,45 @@ export default function GamesManager({
 
   const displayedCollection = useMemo(() => {
     const genresFilter = appliedFilters.genres.trim().toLowerCase();
-    const filtered = !genresFilter
+    return !genresFilter
       ? collection
       : collection.filter((item) => {
           const description = item.items.description?.toLowerCase() ?? "";
           return description.includes(genresFilter);
         });
-
-    return [...filtered].sort(
-      (left, right) => Date.parse(right.created_at) - Date.parse(left.created_at),
-    );
   }, [appliedFilters.genres, collection]);
 
   const visiblePlatformsSet = useMemo(
     () => new Set(visiblePlatforms),
     [visiblePlatforms],
   );
+
+  const handleSortByChange = (value: SortBy) => {
+    const defaultDirection = getDefaultSortDirection(value);
+    setAppliedFilters((prev) => ({
+      ...prev,
+      sortBy: value,
+      sortDirection: defaultDirection,
+    }));
+    setPendingFilters((prev) => ({
+      ...prev,
+      sortBy: value,
+      sortDirection: defaultDirection,
+    }));
+    setHasApplied(true);
+  };
+
+  const handleToggleSortDirection = () => {
+    setAppliedFilters((prev) => {
+      const nextDirection: SortDirection = prev.sortDirection === "asc" ? "desc" : "asc";
+      return { ...prev, sortDirection: nextDirection };
+    });
+    setPendingFilters((prev) => {
+      const nextDirection: SortDirection = prev.sortDirection === "asc" ? "desc" : "asc";
+      return { ...prev, sortDirection: nextDirection };
+    });
+    setHasApplied(true);
+  };
 
   useEffect(() => {
     const countToShow = appliedFilters.genres.trim() ? displayedCollection.length : totalCount;
@@ -1037,23 +1180,87 @@ export default function GamesManager({
     }
 
     if (itemDraft) {
+      const itemUpdatePayload = {
+        poster_url: itemDraft.poster_url,
+        year: itemDraft.year,
+        imdb_rating: itemDraft.imdb_rating,
+        description: itemDraft.description,
+        external_id: itemDraft.external_id,
+      };
       const { error: updateItemError } = await supabase
         .from("items")
-        .update({
-          poster_url: itemDraft.poster_url,
-          year: itemDraft.year,
-          imdb_rating: itemDraft.imdb_rating,
-          description: itemDraft.description,
-          external_id: itemDraft.external_id,
-        })
+        .update(itemUpdatePayload)
         .eq("id", itemId);
       if (updateItemError) {
-        throw new Error("Не вдалося оновити дані гри.");
+        if (updateItemError.code === "23505") {
+          const { error: retryError } = await supabase
+            .from("items")
+            .update({
+              poster_url: itemDraft.poster_url,
+              year: itemDraft.year,
+              imdb_rating: itemDraft.imdb_rating,
+              description: itemDraft.description,
+            })
+            .eq("id", itemId);
+          if (retryError) {
+            throw new Error("Не вдалося оновити дані гри.");
+          }
+        } else {
+          throw new Error("Не вдалося оновити дані гри.");
+        }
       }
     }
-
-    setHasApplied(true);
-    void fetchPage(0, appliedFilters);
+    setCollection((prev) =>
+      prev.map((item) => {
+        if (item.id !== viewId) return item;
+        return {
+          ...item,
+          viewed_at: payload.viewedAt,
+          rating: payload.rating,
+          comment: payload.comment,
+          recommend_similar: payload.recommendSimilar,
+          is_viewed: payload.isViewed,
+          view_percent: payload.viewPercent,
+          platforms: payload.platforms,
+          availability: payload.availability,
+          items: itemDraft
+            ? {
+                ...item.items,
+                poster_url: itemDraft.poster_url,
+                year: itemDraft.year,
+                imdb_rating: itemDraft.imdb_rating,
+                description: itemDraft.description,
+                external_id: itemDraft.external_id,
+              }
+            : item.items,
+        };
+      }),
+    );
+    setSelectedView((prev) => {
+      if (!prev || prev.id !== viewId) return prev;
+      return {
+        ...prev,
+        viewed_at: payload.viewedAt,
+        rating: payload.rating,
+        comment: payload.comment,
+        recommend_similar: payload.recommendSimilar,
+        is_viewed: payload.isViewed,
+        view_percent: payload.viewPercent,
+        platforms: payload.platforms,
+        availability: payload.availability,
+        items: itemDraft
+          ? {
+              ...prev.items,
+              poster_url: itemDraft.poster_url,
+              year: itemDraft.year,
+              imdb_rating: itemDraft.imdb_rating,
+              description: itemDraft.description,
+              external_id: itemDraft.external_id,
+            }
+          : prev.items,
+      };
+    });
+    setSelectedViewItemDraft(null);
   };
 
   const applyRefreshedGameMetadata = async (game: GameResult) => {
@@ -1412,16 +1619,47 @@ export default function GamesManager({
       <div className={styles.filtersWrapper}>
         <div className={styles.toolbar}>
           <div className={styles.toolbarSearch}>
-            <button
-              type="button"
-              className="btnBase btnSecondary"
-              onClick={() => {
-                setPendingFilters(appliedFilters);
-                setIsFiltersOpen(true);
-              }}
-            >
-              Фільтри
-            </button>
+            <div className={styles.sortControls}>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
+                onClick={() => {
+                  setPendingFilters(appliedFilters);
+                  setIsFiltersOpen(true);
+                }}
+              >
+                Фільтри
+              </button>
+              <label className={styles.sortField}>
+                <span className={styles.sortLabel}>Сортування</span>
+                <select
+                  className={styles.sortSelect}
+                  value={appliedFilters.sortBy}
+                  onChange={(event) => handleSortByChange(event.target.value as SortBy)}
+                >
+                  {SORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
+                onClick={handleToggleSortDirection}
+                aria-label={
+                  appliedFilters.sortDirection === "asc"
+                    ? "Змінити порядок на спадання"
+                    : "Змінити порядок на зростання"
+                }
+                title={
+                  appliedFilters.sortDirection === "asc" ? "Зростання" : "Спадання"
+                }
+              >
+                {appliedFilters.sortDirection === "asc" ? "↑" : "↓"}
+              </button>
+            </div>
           </div>
           <div className={styles.toolbarActions}>
             {!readOnly ? (

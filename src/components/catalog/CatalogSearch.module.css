@@ -30,6 +30,33 @@
   min-width: 260px;
 }
 
+.sortControls {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sortField {
+  display: grid;
+  gap: 4px;
+  min-width: 210px;
+}
+
+.sortLabel {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.sortSelect {
+  height: 40px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--control-text);
+  padding: 0 10px;
+}
+
 .toolbarCenter {
   display: flex;
   justify-content: center;
@@ -776,6 +803,10 @@
   .filmsToolbar .toolbarSearch {
     grid-area: filters;
     justify-self: start;
+  }
+
+  .filmsToolbar .sortField {
+    min-width: 180px;
   }
 
   .filmsToolbar .toolbarCenter {

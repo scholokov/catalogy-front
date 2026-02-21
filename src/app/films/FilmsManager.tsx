@@ -22,6 +22,7 @@ import styles from "@/components/catalog/CatalogSearch.module.css";
 type FilmResult = {
   id: string;
   title: string;
+  originalTitle?: string;
   year: string;
   poster: string;
   imageUrls?: string[];
@@ -50,7 +51,11 @@ type FilmCollectionItem = {
   items: {
     id: string;
     title: string;
+    title_original: string | null;
     description: string | null;
+    genres: string | null;
+    director: string | null;
+    actors: string | null;
     poster_url: string | null;
     external_id: string | null;
     imdb_rating: string | null;
@@ -60,10 +65,14 @@ type FilmCollectionItem = {
 };
 
 type FilmItemDraft = {
+  title_original: string | null;
   poster_url: string | null;
   year: number | null;
   imdb_rating: string | null;
   description: string | null;
+  genres: string | null;
+  director: string | null;
+  actors: string | null;
   external_id: string | null;
 };
 
@@ -96,7 +105,12 @@ type Filters = {
   recommendSimilarOnly: boolean;
   viewedDateFrom: string;
   viewedDateTo: string;
+  sortBy: SortBy;
+  sortDirection: SortDirection;
 };
+
+type SortBy = "created_at" | "title" | "rating" | "year";
+type SortDirection = "asc" | "desc";
 
 type FilmsViewMode = "default" | "directors" | "cards";
 const FILMS_VIEW_MODES: FilmsViewMode[] = ["default", "directors", "cards"];
@@ -108,6 +122,12 @@ const EXTERNAL_MAX = 10;
 const PERSONAL_MIN = 1;
 const PERSONAL_MAX = 5;
 const PERSONAL_STEP = 0.5;
+const SORT_OPTIONS: Array<{ value: SortBy; label: string }> = [
+  { value: "created_at", label: "Дата додавання" },
+  { value: "title", label: "Ім'я" },
+  { value: "rating", label: "Особистий рейтинг" },
+  { value: "year", label: "Рік релізу" },
+];
 const AVAILABILITY_OPTIONS = [
   "В колекції",
   "Тимчасовий доступ",
@@ -133,6 +153,8 @@ const DEFAULT_FILTERS: Filters = {
   recommendSimilarOnly: false,
   viewedDateFrom: "",
   viewedDateTo: "",
+  sortBy: "created_at",
+  sortDirection: "desc",
 };
 
 const clampRange = (range: [number, number], bounds: [number, number]) => {
@@ -160,6 +182,42 @@ const reconcileRangeWithNewBounds = (
 const formatPersonalRating = (value: number | null) => {
   if (value === null) return "—";
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+};
+
+const getDefaultSortDirection = (sortBy: SortBy): SortDirection => {
+  if (sortBy === "title") return "asc";
+  return "desc";
+};
+
+const getFiltersRequestKey = (filters: Filters) => JSON.stringify(filters);
+
+const sortFilmCollection = (
+  items: FilmCollectionItem[],
+  sortBy: SortBy,
+  sortDirection: SortDirection,
+) => {
+  const sorted = [...items];
+  const dir = sortDirection === "asc" ? 1 : -1;
+  sorted.sort((left, right) => {
+    if (sortBy === "title") {
+      const cmp = left.items.title.localeCompare(right.items.title, "uk", {
+        sensitivity: "base",
+      });
+      if (cmp !== 0) return cmp * dir;
+    } else if (sortBy === "year") {
+      const leftYear = left.items.year ?? null;
+      const rightYear = right.items.year ?? null;
+      if (leftYear === null && rightYear !== null) return 1;
+      if (leftYear !== null && rightYear === null) return -1;
+      if (leftYear !== null && rightYear !== null && leftYear !== rightYear) {
+        return (leftYear - rightYear) * dir;
+      }
+    }
+    const createdDiff = Date.parse(right.created_at) - Date.parse(left.created_at);
+    if (createdDiff !== 0) return createdDiff;
+    return right.id.localeCompare(left.id);
+  });
+  return sorted;
 };
 
 export default function FilmsManager({
@@ -209,6 +267,7 @@ export default function FilmsManager({
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const skipNextApplyRef = useRef(false);
   const loadingPagesRef = useRef<Set<number>>(new Set());
+  const activeRequestKeyRef = useRef("");
   const yearBoundsRef = useRef<[number, number]>([MIN_YEAR, MAX_YEAR]);
   const viewModeStorageKeyRef = useRef("films:view-mode:guest");
   const isViewModeStorageReadyRef = useRef(false);
@@ -366,6 +425,11 @@ export default function FilmsManager({
   }, [ownerUserId, readOnly]);
 
   const fetchPage = useCallback(async (pageIndex: number, filters: Filters) => {
+    const requestKey = getFiltersRequestKey(filters);
+    if (pageIndex === 0) {
+      activeRequestKeyRef.current = requestKey;
+    }
+
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -411,6 +475,11 @@ export default function FilmsManager({
       return false;
     }
     loadingPagesRef.current.add(pageIndex);
+    const needsClientSort = filters.sortBy === "title" || filters.sortBy === "year";
+    if (needsClientSort && pageIndex > 0) {
+      loadingPagesRef.current.delete(pageIndex);
+      return false;
+    }
 
     if (pageIndex === 0) {
       setIsLoading(true);
@@ -422,12 +491,10 @@ export default function FilmsManager({
     let query = supabase
       .from("user_views")
       .select(
-        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, description, poster_url, external_id, imdb_rating, year, type)",
+        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, title_original, description, genres, director, actors, poster_url, external_id, imdb_rating, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
-      .eq("items.type", "film")
-      .order("created_at", { ascending: false })
-      .order("id", { ascending: false });
+      .eq("items.type", "film");
 
     if (effectiveViewed !== effectivePlanned) {
       query = query.eq("is_viewed", effectiveViewed);
@@ -477,6 +544,31 @@ export default function FilmsManager({
     if (filters.viewedDateTo) {
       query = query.lte("viewed_at", `${filters.viewedDateTo}T23:59:59.999Z`);
     }
+
+    const sortAscending = filters.sortDirection === "asc";
+    if (filters.sortBy === "title") {
+      query = query.order("title", {
+        foreignTable: "items",
+        ascending: sortAscending,
+      });
+    } else if (filters.sortBy === "rating") {
+      query = query.order("rating", {
+        ascending: sortAscending,
+        nullsFirst: false,
+      });
+    } else if (filters.sortBy === "year") {
+      query = query.order("year", {
+        foreignTable: "items",
+        ascending: sortAscending,
+        nullsFirst: false,
+      });
+    } else {
+      query = query.order("created_at", { ascending: sortAscending });
+    }
+    if (filters.sortBy !== "created_at") {
+      query = query.order("created_at", { ascending: false });
+    }
+    query = query.order("id", { ascending: false });
 
     if (pageIndex === 0) {
       let countQuery = supabase
@@ -535,12 +627,47 @@ export default function FilmsManager({
       }
 
       const { count, error: countError } = await countQuery;
-      setTotalCount(countError ? 0 : (count ?? 0));
+      if (requestKey === activeRequestKeyRef.current) {
+        setTotalCount(countError ? 0 : (count ?? 0));
+      }
     }
 
     const from = pageIndex * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
-    const { data, error } = await query.range(from, to);
+    let data: FilmCollectionItem[] | null;
+    let error: { message: string } | null = null;
+
+    if (needsClientSort) {
+      const loaded: FilmCollectionItem[] = [];
+      let offset = 0;
+      const batchSize = 500;
+      while (true) {
+        const { data: batch, error: batchError } = await query.range(
+          offset,
+          offset + batchSize - 1,
+        );
+        if (batchError) {
+          error = batchError;
+          break;
+        }
+        const rows = (batch as unknown as FilmCollectionItem[]) ?? [];
+        loaded.push(...rows);
+        if (rows.length < batchSize) {
+          break;
+        }
+        offset += batchSize;
+      }
+      data = loaded;
+    } else {
+      const ranged = await query.range(from, to);
+      data = (ranged.data as unknown as FilmCollectionItem[]) ?? [];
+      error = ranged.error as { message: string } | null;
+    }
+
+    if (requestKey !== activeRequestKeyRef.current) {
+      loadingPagesRef.current.delete(pageIndex);
+      return false;
+    }
 
     if (error) {
       if (pageIndex === 0) {
@@ -553,7 +680,9 @@ export default function FilmsManager({
       loadingPagesRef.current.delete(pageIndex);
       return false;
     } else {
-      const nextCollection = (data as unknown as FilmCollectionItem[]) ?? [];
+      const nextCollection = needsClientSort
+        ? sortFilmCollection(data ?? [], filters.sortBy, filters.sortDirection)
+        : ((data as unknown as FilmCollectionItem[]) ?? []);
       setCollection((prev) => {
         if (pageIndex === 0) {
           return nextCollection;
@@ -568,7 +697,7 @@ export default function FilmsManager({
         return merged;
       });
       const nextHasMore = nextCollection.length === PAGE_SIZE;
-      setHasMore(nextHasMore);
+      setHasMore(needsClientSort ? false : nextHasMore);
       setPage(pageIndex);
       if (pageIndex === 0 && nextCollection.length === 0) {
         const hasActiveFilters = Boolean(
@@ -750,24 +879,49 @@ export default function FilmsManager({
   const displayedCollection = useMemo(() => {
     const genresFilter = appliedFilters.genres.trim().toLowerCase();
     const directorFilter = appliedFilters.director.trim().toLowerCase();
-    const filtered = (!genresFilter && !directorFilter)
+    return (!genresFilter && !directorFilter)
       ? collection
       : collection.filter((item) => {
           const description = item.items.description?.toLowerCase() ?? "";
+          const genresText = item.items.genres?.toLowerCase() ?? "";
+          const directorText = item.items.director?.toLowerCase() ?? "";
           const genresMatches = genresFilter
-            ? description.includes(genresFilter)
+            ? genresText.includes(genresFilter) || description.includes(genresFilter)
             : true;
           const directorMatches = directorFilter
-            ? description.includes(directorFilter)
+            ? directorText.includes(directorFilter) || description.includes(directorFilter)
             : true;
 
           return genresMatches && directorMatches;
         });
-
-    return [...filtered].sort(
-      (left, right) => Date.parse(right.created_at) - Date.parse(left.created_at),
-    );
   }, [appliedFilters.director, appliedFilters.genres, collection]);
+
+  const handleSortByChange = (value: SortBy) => {
+    const defaultDirection = getDefaultSortDirection(value);
+    setAppliedFilters((prev) => ({
+      ...prev,
+      sortBy: value,
+      sortDirection: defaultDirection,
+    }));
+    setPendingFilters((prev) => ({
+      ...prev,
+      sortBy: value,
+      sortDirection: defaultDirection,
+    }));
+    setHasApplied(true);
+  };
+
+  const handleToggleSortDirection = () => {
+    setAppliedFilters((prev) => {
+      const nextDirection: SortDirection = prev.sortDirection === "asc" ? "desc" : "asc";
+      return { ...prev, sortDirection: nextDirection };
+    });
+    setPendingFilters((prev) => {
+      const nextDirection: SortDirection = prev.sortDirection === "asc" ? "desc" : "asc";
+      return { ...prev, sortDirection: nextDirection };
+    });
+    setHasApplied(true);
+  };
 
   useEffect(() => {
     const hasClientFilters = Boolean(
@@ -1011,7 +1165,11 @@ export default function FilmsManager({
         .insert({
           type: "film",
           title: film.title,
+          title_original: film.originalTitle || null,
           description: film.plot,
+          genres: film.genres || null,
+          director: film.director || null,
+          actors: film.actors || null,
           poster_url: film.poster,
           external_id: film.id,
           imdb_rating: imdbRatingValue,
@@ -1040,13 +1198,24 @@ export default function FilmsManager({
       }
     }
 
-    const itemUpdates: { imdb_rating?: string | null; year?: number | null } = {};
+    const itemUpdates: {
+      title_original?: string | null;
+      imdb_rating?: string | null;
+      year?: number | null;
+      genres?: string | null;
+      director?: string | null;
+      actors?: string | null;
+    } = {};
     if (imdbRatingValue) {
       itemUpdates.imdb_rating = imdbRatingValue;
     }
+    if (film.originalTitle) itemUpdates.title_original = film.originalTitle;
     if (yearValue) {
       itemUpdates.year = yearValue;
     }
+    if (film.genres) itemUpdates.genres = film.genres;
+    if (film.director) itemUpdates.director = film.director;
+    if (film.actors) itemUpdates.actors = film.actors;
     if (itemId && Object.keys(itemUpdates).length > 0) {
       const { error: updateError } = await supabase
         .from("items")
@@ -1134,23 +1303,101 @@ export default function FilmsManager({
     }
 
     if (itemDraft) {
+      const itemUpdatePayload = {
+        title_original: itemDraft.title_original,
+        poster_url: itemDraft.poster_url,
+        year: itemDraft.year,
+        imdb_rating: itemDraft.imdb_rating,
+        description: itemDraft.description,
+        genres: itemDraft.genres,
+        director: itemDraft.director,
+        actors: itemDraft.actors,
+        external_id: itemDraft.external_id,
+      };
       const { error: updateItemError } = await supabase
         .from("items")
-        .update({
-          poster_url: itemDraft.poster_url,
-          year: itemDraft.year,
-          imdb_rating: itemDraft.imdb_rating,
-          description: itemDraft.description,
-          external_id: itemDraft.external_id,
-        })
+        .update(itemUpdatePayload)
         .eq("id", itemId);
       if (updateItemError) {
-        throw new Error("Не вдалося оновити дані фільму.");
+        if (updateItemError.code === "23505") {
+          const { error: retryError } = await supabase
+            .from("items")
+            .update({
+              title_original: itemDraft.title_original,
+              poster_url: itemDraft.poster_url,
+              year: itemDraft.year,
+              imdb_rating: itemDraft.imdb_rating,
+              description: itemDraft.description,
+              genres: itemDraft.genres,
+              director: itemDraft.director,
+              actors: itemDraft.actors,
+            })
+            .eq("id", itemId);
+          if (retryError) {
+            throw new Error("Не вдалося оновити дані фільму.");
+          }
+        } else {
+          throw new Error("Не вдалося оновити дані фільму.");
+        }
       }
     }
-
-    setHasApplied(true);
-    void fetchPage(0, appliedFilters);
+    setCollection((prev) =>
+      prev.map((item) => {
+        if (item.id !== viewId) return item;
+        return {
+          ...item,
+          viewed_at: payload.viewedAt,
+          rating: payload.rating,
+          comment: payload.comment,
+          recommend_similar: payload.recommendSimilar,
+          is_viewed: payload.isViewed,
+          view_percent: payload.viewPercent,
+          availability: payload.availability,
+          items: itemDraft
+            ? {
+                ...item.items,
+                title_original: itemDraft.title_original,
+                poster_url: itemDraft.poster_url,
+                year: itemDraft.year,
+                imdb_rating: itemDraft.imdb_rating,
+                description: itemDraft.description,
+                genres: itemDraft.genres,
+                director: itemDraft.director,
+                actors: itemDraft.actors,
+                external_id: itemDraft.external_id,
+              }
+            : item.items,
+        };
+      }),
+    );
+    setSelectedView((prev) => {
+      if (!prev || prev.id !== viewId) return prev;
+      return {
+        ...prev,
+        viewed_at: payload.viewedAt,
+        rating: payload.rating,
+        comment: payload.comment,
+        recommend_similar: payload.recommendSimilar,
+        is_viewed: payload.isViewed,
+        view_percent: payload.viewPercent,
+        availability: payload.availability,
+        items: itemDraft
+          ? {
+              ...prev.items,
+              title_original: itemDraft.title_original,
+              poster_url: itemDraft.poster_url,
+              year: itemDraft.year,
+              imdb_rating: itemDraft.imdb_rating,
+              description: itemDraft.description,
+              genres: itemDraft.genres,
+              director: itemDraft.director,
+              actors: itemDraft.actors,
+              external_id: itemDraft.external_id,
+            }
+          : prev.items,
+      };
+    });
+    setSelectedViewItemDraft(null);
   };
 
   const applyRefreshedFilmMetadata = async (film: FilmResult) => {
@@ -1165,6 +1412,9 @@ export default function FilmsManager({
 
     const parsedYear = Number.parseInt(detail.year ?? "", 10);
     setSelectedViewItemDraft({
+      title_original: detail.originalTitle?.trim()
+        ? detail.originalTitle.trim()
+        : selectedView.items.title_original ?? null,
       poster_url: detail.poster?.trim()
         ? detail.poster.trim()
         : selectedView.items.poster_url ?? null,
@@ -1175,6 +1425,11 @@ export default function FilmsManager({
       description: detail.plot?.trim()
         ? detail.plot.trim()
         : selectedView.items.description ?? null,
+      genres: detail.genres?.trim() ? detail.genres.trim() : selectedView.items.genres ?? null,
+      director: detail.director?.trim()
+        ? detail.director.trim()
+        : selectedView.items.director ?? null,
+      actors: detail.actors?.trim() ? detail.actors.trim() : selectedView.items.actors ?? null,
       external_id: detail.id,
     });
   };
@@ -1358,7 +1613,7 @@ export default function FilmsManager({
   const groupedByDirector = useMemo(() => {
     const groups = new Map<string, FilmCollectionItem[]>();
     displayedCollection.forEach((item) => {
-      const director = "Без режисера";
+      const director = item.items.director?.trim() || "Без режисера";
       const bucket = groups.get(director);
       if (bucket) {
         bucket.push(item);
@@ -1407,6 +1662,15 @@ export default function FilmsManager({
       <div className={styles.resultContent}>
         {item.items.year ? (
           <p className={styles.resultMeta}>Рік: {item.items.year}</p>
+        ) : null}
+        {item.items.director ? (
+          <p className={styles.resultMeta}>Режисер: {item.items.director}</p>
+        ) : null}
+        {item.items.actors ? (
+          <p className={styles.resultMeta}>Актори: {item.items.actors}</p>
+        ) : null}
+        {item.items.genres ? (
+          <p className={styles.resultMeta}>Жанри: {item.items.genres}</p>
         ) : null}
         {item.items.description ? (
           <div className={styles.plotBlock}>
@@ -1475,16 +1739,47 @@ export default function FilmsManager({
       <div className={styles.filtersWrapper}>
         <div className={`${styles.toolbar} ${styles.filmsToolbar}`}>
           <div className={styles.toolbarSearch}>
-            <button
-              type="button"
-              className="btnBase btnSecondary"
-              onClick={() => {
-                setPendingFilters(appliedFilters);
-                setIsFiltersOpen(true);
-              }}
-            >
-              Фільтри
-            </button>
+            <div className={styles.sortControls}>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
+                onClick={() => {
+                  setPendingFilters(appliedFilters);
+                  setIsFiltersOpen(true);
+                }}
+              >
+                Фільтри
+              </button>
+              <label className={styles.sortField}>
+                <span className={styles.sortLabel}>Сортування</span>
+                <select
+                  className={styles.sortSelect}
+                  value={appliedFilters.sortBy}
+                  onChange={(event) => handleSortByChange(event.target.value as SortBy)}
+                >
+                  {SORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
+                onClick={handleToggleSortDirection}
+                aria-label={
+                  appliedFilters.sortDirection === "asc"
+                    ? "Змінити порядок на спадання"
+                    : "Змінити порядок на зростання"
+                }
+                title={
+                  appliedFilters.sortDirection === "asc" ? "Зростання" : "Спадання"
+                }
+              >
+                {appliedFilters.sortDirection === "asc" ? "↑" : "↓"}
+              </button>
+            </div>
           </div>
           <div className={styles.toolbarCenter}>
             <div className={styles.viewSwitch}>
@@ -2307,9 +2602,30 @@ export default function FilmsManager({
                 Мій: {formatPersonalRating(selectedView.rating)}
               </span>
             </div>
+            <p className={styles.resultMeta}>
+              Оригінальна назва:{" "}
+              {selectedViewItemDraft?.title_original ??
+                selectedView.items.title_original ??
+                "—"}
+            </p>
             {(selectedViewItemDraft?.year ?? selectedView.items.year) ? (
               <p className={styles.resultMeta}>
                 Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
+              </p>
+            ) : null}
+            {(selectedViewItemDraft?.director ?? selectedView.items.director) ? (
+              <p className={styles.resultMeta}>
+                Режисер: {selectedViewItemDraft?.director ?? selectedView.items.director}
+              </p>
+            ) : null}
+            {(selectedViewItemDraft?.actors ?? selectedView.items.actors) ? (
+              <p className={styles.resultMeta}>
+                Актори: {selectedViewItemDraft?.actors ?? selectedView.items.actors}
+              </p>
+            ) : null}
+            {(selectedViewItemDraft?.genres ?? selectedView.items.genres) ? (
+              <p className={styles.resultMeta}>
+                Жанри: {selectedViewItemDraft?.genres ?? selectedView.items.genres}
               </p>
             ) : null}
             {(selectedViewItemDraft?.description ?? selectedView.items.description) ? (

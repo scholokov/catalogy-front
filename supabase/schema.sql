@@ -65,12 +65,28 @@ create table if not exists items (
   id uuid primary key default gen_random_uuid(),
   type text not null check (type in ('film', 'game')),
   title text not null,
+  title_original text,
   description text,
+  genres text,
+  director text,
+  actors text,
   poster_url text,
   external_id text,
   imdb_rating text,
   created_at timestamptz not null default now()
 );
+
+alter table items
+add column if not exists genres text;
+
+alter table items
+add column if not exists director text;
+
+alter table items
+add column if not exists actors text;
+
+alter table items
+add column if not exists title_original text;
 
 create unique index if not exists items_type_external_id_idx
   on items (type, external_id)

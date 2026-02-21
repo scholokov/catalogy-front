@@ -4,7 +4,9 @@ type TmdbMovie = {
   id: number;
   media_type: "movie" | "tv" | "person";
   title: string;
+  original_title?: string;
   name?: string;
+  original_name?: string;
   release_date?: string;
   first_air_date?: string;
   poster_path?: string | null;
@@ -112,6 +114,7 @@ export async function GET(request: Request) {
       return {
         id: String(item.id),
         title: item.title ?? item.name ?? "",
+        originalTitle: item.original_title ?? item.original_name ?? "",
         year: (item.release_date ?? item.first_air_date ?? "").slice(0, 4),
         poster: item.poster_path
           ? `https://image.tmdb.org/t/p/w500${item.poster_path}`

@@ -8,7 +8,9 @@ type TmdbCredits = {
 type TmdbDetail = {
   id: number;
   title: string;
+  original_title?: string;
   name?: string;
+  original_name?: string;
   release_date?: string;
   first_air_date?: string;
   poster_path?: string | null;
@@ -115,6 +117,7 @@ export async function GET(
   return NextResponse.json({
     id: String(detail.id),
     title: detail.title ?? detail.name ?? "",
+    originalTitle: detail.original_title ?? detail.original_name ?? "",
     year: (detail.release_date ?? detail.first_air_date ?? "").slice(0, 4),
     poster: primaryPoster,
     imageUrls,
