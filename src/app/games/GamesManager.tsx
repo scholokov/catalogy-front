@@ -105,6 +105,8 @@ type Filters = {
 
 type SortBy = "created_at" | "title" | "rating" | "year";
 type SortDirection = "asc" | "desc";
+type GamesViewMode = "default" | "cards";
+const GAMES_VIEW_MODES: GamesViewMode[] = ["cards", "default"];
 
 const MIN_YEAR = 1950;
 const MAX_YEAR = new Date().getFullYear();
@@ -246,7 +248,7 @@ export default function GamesManager({
   const [page, setPage] = useState(0);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<"default" | "cards">("default");
+  const [viewMode, setViewMode] = useState<GamesViewMode>("cards");
   const [selectedGame, setSelectedGame] = useState<GameResult | null>(null);
   const [selectedView, setSelectedView] = useState<GameCollectionItem | null>(
     null,
@@ -277,6 +279,8 @@ export default function GamesManager({
   const loadingPagesRef = useRef<Set<number>>(new Set());
   const activeRequestKeyRef = useRef("");
   const yearBoundsRef = useRef<[number, number]>([MIN_YEAR, MAX_YEAR]);
+  const viewModeStorageKeyRef = useRef("games:view-mode:v2:guest");
+  const isViewModeStorageReadyRef = useRef(false);
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
     title: string;
@@ -361,6 +365,31 @@ export default function GamesManager({
   useEffect(() => {
     yearBoundsRef.current = yearBounds;
   }, [yearBounds]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    void (async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (isCancelled) return;
+      const storageKey = `games:view-mode:v2:${user?.id ?? "guest"}`;
+      viewModeStorageKeyRef.current = storageKey;
+      const rawValue = window.localStorage.getItem(storageKey);
+      if (rawValue && GAMES_VIEW_MODES.includes(rawValue as GamesViewMode)) {
+        setViewMode(rawValue as GamesViewMode);
+      }
+      isViewModeStorageReadyRef.current = true;
+    })();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isViewModeStorageReadyRef.current) return;
+    window.localStorage.setItem(viewModeStorageKeyRef.current, viewMode);
+  }, [viewMode]);
 
   useEffect(() => {
     if (!readOnly || !ownerUserId) {
@@ -1689,7 +1718,7 @@ export default function GamesManager({
   return (
     <div className={styles.searchBlock}>
       <div className={styles.filtersWrapper}>
-        <div className={styles.toolbar}>
+        <div className={`${styles.toolbar} ${styles.filmsToolbar}`}>
           <div className={styles.toolbarSearch}>
             <div className={styles.sortControls}>
               <button
@@ -1738,20 +1767,20 @@ export default function GamesManager({
               <button
                 type="button"
                 className={`${styles.viewSwitchButton} ${
-                  viewMode === "default" ? styles.viewSwitchButtonActive : ""
-                }`}
-                onClick={() => setViewMode("default")}
-              >
-                Стандарт
-              </button>
-              <button
-                type="button"
-                className={`${styles.viewSwitchButton} ${
                   viewMode === "cards" ? styles.viewSwitchButtonActive : ""
                 }`}
                 onClick={() => setViewMode("cards")}
               >
                 Картки
+              </button>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  viewMode === "default" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => setViewMode("default")}
+              >
+                Детальний
               </button>
             </div>
           </div>

@@ -114,7 +114,7 @@ type SortBy = "created_at" | "title" | "rating" | "year";
 type SortDirection = "asc" | "desc";
 
 type FilmsViewMode = "default" | "directors" | "cards";
-const FILMS_VIEW_MODES: FilmsViewMode[] = ["default", "directors", "cards"];
+const FILMS_VIEW_MODES: FilmsViewMode[] = ["cards", "default", "directors"];
 
 const MIN_YEAR = 1950;
 const MAX_YEAR = new Date().getFullYear();
@@ -242,7 +242,7 @@ export default function FilmsManager({
   const [page, setPage] = useState(0);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<FilmsViewMode>("default");
+  const [viewMode, setViewMode] = useState<FilmsViewMode>("cards");
   const [isDirectorsHydrating, setIsDirectorsHydrating] = useState(false);
   const [selectedFilm, setSelectedFilm] = useState<FilmResult | null>(null);
   const [selectedView, setSelectedView] = useState<FilmCollectionItem | null>(
@@ -270,7 +270,7 @@ export default function FilmsManager({
   const loadingPagesRef = useRef<Set<number>>(new Set());
   const activeRequestKeyRef = useRef("");
   const yearBoundsRef = useRef<[number, number]>([MIN_YEAR, MAX_YEAR]);
-  const viewModeStorageKeyRef = useRef("films:view-mode:guest");
+  const viewModeStorageKeyRef = useRef("films:view-mode:v2:guest");
   const isViewModeStorageReadyRef = useRef(false);
   const directorsHydrationRunRef = useRef(0);
   const [recommendItem, setRecommendItem] = useState<{
@@ -355,7 +355,7 @@ export default function FilmsManager({
         data: { user },
       } = await supabase.auth.getUser();
       if (isCancelled) return;
-      const storageKey = `films:view-mode:${user?.id ?? "guest"}`;
+      const storageKey = `films:view-mode:v2:${user?.id ?? "guest"}`;
       viewModeStorageKeyRef.current = storageKey;
       const rawValue = window.localStorage.getItem(storageKey);
       if (rawValue && FILMS_VIEW_MODES.includes(rawValue as FilmsViewMode)) {
@@ -1787,11 +1787,20 @@ export default function FilmsManager({
               <button
                 type="button"
                 className={`${styles.viewSwitchButton} ${
+                  viewMode === "cards" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => setViewMode("cards")}
+              >
+                Картки
+              </button>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
                   viewMode === "default" ? styles.viewSwitchButtonActive : ""
                 }`}
                 onClick={() => setViewMode("default")}
               >
-                Стандарт
+                Детальний
               </button>
               <button
                 type="button"
@@ -1801,15 +1810,6 @@ export default function FilmsManager({
                 onClick={() => setViewMode("directors")}
               >
                 Режисери
-              </button>
-              <button
-                type="button"
-                className={`${styles.viewSwitchButton} ${
-                  viewMode === "cards" ? styles.viewSwitchButtonActive : ""
-                }`}
-                onClick={() => setViewMode("cards")}
-              >
-                Картки
               </button>
             </div>
           </div>
