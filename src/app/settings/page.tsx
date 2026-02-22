@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import CatalogLayout from "@/components/catalog/CatalogLayout";
 import { supabase } from "@/lib/supabase/client";
 import {
@@ -34,6 +34,8 @@ export default function SettingsPage() {
   );
   const [defaultFilmIsViewed, setDefaultFilmIsViewed] = useState<boolean | null>(null);
   const [defaultGameIsViewed, setDefaultGameIsViewed] = useState<boolean | null>(null);
+  const [isPlatformsOpen, setIsPlatformsOpen] = useState(false);
+  const platformsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let isCancelled = false;
@@ -116,6 +118,24 @@ export default function SettingsPage() {
     () => new Set(visibleGamePlatforms),
     [visibleGamePlatforms],
   );
+  const selectedPlatformsLabel =
+    visibleGamePlatforms.length > 0
+      ? visibleGamePlatforms.join(", ")
+      : "Оберіть платформи";
+
+  useEffect(() => {
+    if (!isPlatformsOpen) return;
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (
+        platformsRef.current &&
+        !platformsRef.current.contains(event.target as Node)
+      ) {
+        setIsPlatformsOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handleOutsideClick);
+    return () => window.removeEventListener("mousedown", handleOutsideClick);
+  }, [isPlatformsOpen]);
 
   const togglePlatform = (platform: string) => {
     setVisibleGamePlatforms((prev) => {
@@ -215,20 +235,33 @@ export default function SettingsPage() {
             />
             Відображати &quot;Наявність&quot;
           </label>
-          <p className={styles.sectionText}>Наявні платформи</p>
-          <div className={styles.platformsColumn}>
-            {DEFAULT_GAME_PLATFORM_OPTIONS.map((platform) => (
-              <label key={platform} className={styles.checkboxRow}>
-                <input
-                  className={styles.checkbox}
-                  type="checkbox"
-                  checked={visiblePlatformSet.has(platform)}
-                  onChange={() => togglePlatform(platform)}
-                  disabled={isLoading || isSaving}
-                />
-                {platform}
-              </label>
-            ))}
+          <div className={`${styles.field} ${styles.platformsField}`} ref={platformsRef}>
+            Наявні платформи
+            <button
+              type="button"
+              className={styles.multiSelectTrigger}
+              onClick={() => setIsPlatformsOpen((prev) => !prev)}
+              disabled={isLoading || isSaving}
+            >
+              <span className={styles.multiSelectText}>{selectedPlatformsLabel}</span>
+              <span className={styles.multiSelectChevron}>▾</span>
+            </button>
+            {isPlatformsOpen ? (
+              <div className={styles.multiSelectMenu}>
+                {DEFAULT_GAME_PLATFORM_OPTIONS.map((platform) => (
+                  <label key={platform} className={styles.multiSelectOption}>
+                    <input
+                      className={styles.checkbox}
+                      type="checkbox"
+                      checked={visiblePlatformSet.has(platform)}
+                      onChange={() => togglePlatform(platform)}
+                      disabled={isLoading || isSaving}
+                    />
+                    {platform}
+                  </label>
+                ))}
+              </div>
+            ) : null}
           </div>
           <label className={styles.field}>
             Значення за замовчанням
