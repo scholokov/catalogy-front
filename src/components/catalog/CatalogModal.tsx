@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import CloseIconButton from "@/components/ui/CloseIconButton";
 import styles from "./CatalogModal.module.css";
 
 type CatalogModalProps = {
@@ -44,6 +45,9 @@ type CatalogModalProps = {
 const RATING_MIN = 1;
 const RATING_MAX = 5;
 const RATING_STEP = 0.5;
+const VIEW_PERCENT_MIN = 0;
+const VIEW_PERCENT_MAX = 100;
+const VIEW_PERCENT_STEP = 10;
 
 const normalizeRating = (value: number) => {
   const rounded = Math.round(value / RATING_STEP) * RATING_STEP;
@@ -53,6 +57,11 @@ const normalizeRating = (value: number) => {
 const formatRating = (value: number | null) => {
   if (value === null) return "";
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+};
+
+const normalizeViewPercent = (value: number) => {
+  const rounded = Math.round(value / VIEW_PERCENT_STEP) * VIEW_PERCENT_STEP;
+  return Math.min(VIEW_PERCENT_MAX, Math.max(VIEW_PERCENT_MIN, rounded));
 };
 
 export default function CatalogModal({
@@ -106,6 +115,7 @@ export default function CatalogModal({
   const [rating, setRating] = useState<number | null>(null);
   const [ratingInput, setRatingInput] = useState("");
   const [viewPercent, setViewPercent] = useState(100);
+  const [viewPercentInput, setViewPercentInput] = useState("100");
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [availability, setAvailability] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -127,6 +137,7 @@ export default function CatalogModal({
       setRating(null);
       setRatingInput("");
       setViewPercent(100);
+      setViewPercentInput("100");
       setPlatforms([]);
       setAvailability(null);
       return;
@@ -145,7 +156,9 @@ export default function CatalogModal({
     setIsViewed(initialIsViewed ?? true);
     setRating(initialRating ?? null);
     setRatingInput(formatRating(initialRating ?? null));
-    setViewPercent(initialViewPercent ?? 100);
+    const normalizedInitialViewPercent = normalizeViewPercent(initialViewPercent ?? 100);
+    setViewPercent(normalizedInitialViewPercent);
+    setViewPercentInput(String(normalizedInitialViewPercent));
     setPlatforms(initialPlatformsKey ? initialPlatformsKey.split("|") : []);
     setAvailability(initialAvailability ?? null);
   }, [
@@ -338,6 +351,7 @@ export default function CatalogModal({
     platforms.length > 0 ? platforms.join(", ") : "Оберіть платформу";
   const selectedAvailabilityLabel = availability ?? "Оберіть наявність";
   const isRatingDisabled = readOnly || !isViewed || isSaving;
+  const isViewPercentDisabled = readOnly || !isViewed || isSaving;
 
   const decreaseRating = () => {
     if (rating === null) return;
@@ -383,6 +397,46 @@ export default function CatalogModal({
     const normalized = normalizeRating(parsed);
     setRating(normalized);
     setRatingInput(formatRating(normalized));
+  };
+
+  const decreaseViewPercent = () => {
+    const next = normalizeViewPercent(viewPercent - VIEW_PERCENT_STEP);
+    setViewPercent(next);
+    setViewPercentInput(String(next));
+  };
+
+  const increaseViewPercent = () => {
+    const next = normalizeViewPercent(viewPercent + VIEW_PERCENT_STEP);
+    setViewPercent(next);
+    setViewPercentInput(String(next));
+  };
+
+  const handleViewPercentInputChange = (value: string) => {
+    const digitsOnly = value.replace(/[^\d]/g, "");
+    setViewPercentInput(digitsOnly);
+    if (digitsOnly.trim() === "") {
+      setViewPercent(0);
+      return;
+    }
+    const parsed = Number(digitsOnly);
+    if (!Number.isFinite(parsed)) return;
+    setViewPercent(normalizeViewPercent(parsed));
+  };
+
+  const handleViewPercentInputBlur = () => {
+    if (viewPercentInput.trim() === "") {
+      setViewPercent(0);
+      setViewPercentInput("0");
+      return;
+    }
+    const parsed = Number(viewPercentInput);
+    if (!Number.isFinite(parsed)) {
+      setViewPercentInput(String(viewPercent));
+      return;
+    }
+    const normalized = normalizeViewPercent(parsed);
+    setViewPercent(normalized);
+    setViewPercentInput(String(normalized));
   };
 
   return (
@@ -458,15 +512,11 @@ export default function CatalogModal({
                 </svg>
               </button>
             ) : null}
-            <button
-              type="button"
+            <CloseIconButton
               className={`${styles.iconButton} btnSecondary`}
               onClick={onClose}
-              aria-label="Закрити"
               disabled={isSaving || isRefreshing}
-            >
-              ✕
-            </button>
+            />
           </div>
         </div>
 
@@ -613,24 +663,43 @@ export default function CatalogModal({
                       setIsViewed(nextIsViewed);
                       if (nextIsViewed && viewPercent <= 0) {
                         setViewPercent(100);
+                        setViewPercentInput("100");
                       }
                     }}
                     disabled={readOnly || isSaving}
                   />
                   Переглянуто
                 </label>
-                <input
-                  className={styles.input}
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={viewPercent}
-                  onChange={(event) =>
-                    setViewPercent(Number(event.target.value))
-                  }
-                  disabled={readOnly || !isViewed || isSaving}
-                  aria-label="Відсоток перегляду"
-                />
+                <div className={styles.ratingControl}>
+                  <button
+                    type="button"
+                    className={styles.ratingStepButton}
+                    onClick={decreaseViewPercent}
+                    disabled={isViewPercentDisabled}
+                    aria-label="Зменшити відсоток перегляду на 10"
+                  >
+                    -
+                  </button>
+                  <input
+                    className={`${styles.input} ${styles.percentValueInput}`}
+                    type="text"
+                    inputMode="numeric"
+                    value={viewPercentInput}
+                    onChange={(event) => handleViewPercentInputChange(event.target.value)}
+                    onBlur={handleViewPercentInputBlur}
+                    disabled={isViewPercentDisabled}
+                    aria-label="Відсоток перегляду від 0 до 100 з кроком 10"
+                  />
+                  <button
+                    type="button"
+                    className={styles.ratingStepButton}
+                    onClick={increaseViewPercent}
+                    disabled={isViewPercentDisabled}
+                    aria-label="Збільшити відсоток перегляду на 10"
+                  >
+                    +
+                  </button>
+                </div>
                 <span className={styles.percentLabel}>%</span>
               </div>
 

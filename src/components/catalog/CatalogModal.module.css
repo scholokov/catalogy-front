@@ -77,8 +77,9 @@
 
 .headerActions {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+  margin-top: -2px;
 }
 
 .title {
@@ -254,6 +255,11 @@
 }
 
 .ratingValueInput {
+  width: 90px;
+  text-align: center;
+}
+
+.percentValueInput {
   width: 90px;
   text-align: center;
 }
@@ -500,6 +506,10 @@
 @media (max-width: 800px) {
   .overlay {
     padding: 0;
+  }
+
+  .title {
+    font-size: var(--font-size-xl);
   }
 
   .modal {

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import CloseIconButton from "@/components/ui/CloseIconButton";
 import { getDisplayName } from "@/lib/users/displayName";
 import styles from "./RecommendModal.module.css";
 
@@ -104,15 +105,11 @@ export default function RecommendModal({
       <div className={styles.modal} onClick={(event) => event.stopPropagation()}>
         <div className={styles.header}>
           <h2 className={styles.title}>Порекомендувати: {title}</h2>
-          <button
-            type="button"
+          <CloseIconButton
             className={`${styles.closeButton} btnSecondary`}
             onClick={onClose}
-            aria-label="Закрити"
             disabled={isSending}
-          >
-            ✕
-          </button>
+          />
         </div>
 
         <div className={styles.body}>

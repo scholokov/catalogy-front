@@ -14,6 +14,7 @@ import { Range, getTrackBackground } from "react-range";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
+import CloseIconButton from "@/components/ui/CloseIconButton";
 import { supabase } from "@/lib/supabase/client";
 import {
   DEFAULT_GAME_PLATFORM_OPTIONS,
@@ -31,6 +32,7 @@ type GameResult = {
   genres: string;
   inCollection?: boolean;
   existingViewId?: string;
+  isRefreshCurrent?: boolean;
 };
 
 type GameCollectionItem = {
@@ -1386,35 +1388,60 @@ export default function GamesManager({
     setMessage("Додано до твоєї колекції.");
   };
 
-  const handleGameSearch = async (query: string) => {
-    const response = await fetch(`/api/rawg?q=${encodeURIComponent(query)}`);
-    const data = (await response.json()) as {
-      results?: GameResult[];
-      error?: string;
-    };
+  const handleGameSearch = useCallback(
+    async (query: string) => {
+      const response = await fetch(`/api/rawg?q=${encodeURIComponent(query)}`);
+      const data = (await response.json()) as {
+        results?: GameResult[];
+        error?: string;
+      };
 
-    if (!response.ok) {
-      throw new Error(data.error ?? "Не вдалося виконати пошук.");
-    }
+      if (!response.ok) {
+        throw new Error(data.error ?? "Не вдалося виконати пошук.");
+      }
 
-    const results = data.results ?? [];
-    return results
-      .map((item) => {
-        const existingView = existingViewsByExternalId.get(item.id);
-        return {
+      const results = data.results ?? [];
+      return results
+        .map((item) => {
+          const existingView = existingViewsByExternalId.get(item.id);
+          return {
+            ...item,
+            inCollection: Boolean(existingView),
+            existingViewId: existingView?.id,
+          };
+        })
+        .sort((left, right) => {
+          const leftYear = Number.parseInt(left.released?.slice(0, 4) ?? "", 10);
+          const rightYear = Number.parseInt(right.released?.slice(0, 4) ?? "", 10);
+          const safeLeftYear = Number.isNaN(leftYear) ? -Infinity : leftYear;
+          const safeRightYear = Number.isNaN(rightYear) ? -Infinity : rightYear;
+          return safeRightYear - safeLeftYear;
+        });
+    },
+    [existingViewsByExternalId],
+  );
+
+  const handleRefreshGameSearch = useCallback(
+    async (query: string) => {
+      const results = await handleGameSearch(query);
+      const currentExternalId = selectedView?.items.external_id ?? null;
+      if (!currentExternalId) {
+        return results.map((item) => ({ ...item, isRefreshCurrent: false }));
+      }
+
+      return results
+        .map((item) => ({
           ...item,
-          inCollection: Boolean(existingView),
-          existingViewId: existingView?.id,
-        };
-      })
-      .sort((left, right) => {
-        const leftYear = Number.parseInt(left.released?.slice(0, 4) ?? "", 10);
-        const rightYear = Number.parseInt(right.released?.slice(0, 4) ?? "", 10);
-        const safeLeftYear = Number.isNaN(leftYear) ? -Infinity : leftYear;
-        const safeRightYear = Number.isNaN(rightYear) ? -Infinity : rightYear;
-        return safeRightYear - safeLeftYear;
-      });
-  };
+          isRefreshCurrent: item.id === currentExternalId,
+        }))
+        .sort((left, right) => {
+          if (left.isRefreshCurrent && !right.isRefreshCurrent) return -1;
+          if (!left.isRefreshCurrent && right.isRefreshCurrent) return 1;
+          return 0;
+        });
+    },
+    [handleGameSearch, selectedView?.items.external_id],
+  );
 
   const handleExpandDescription = (
     event: MouseEvent | KeyboardEvent,
@@ -1500,7 +1527,13 @@ export default function GamesManager({
     }
   }, [searchDescriptions]);
 
-  const GameSearchItem = ({ game }: { game: GameResult }) => {
+  const GameSearchItem = ({
+    game,
+    hideInCollectionHint = false,
+  }: {
+    game: GameResult;
+    hideInCollectionHint?: boolean;
+  }) => {
     const [isExpanded, setIsExpanded] = useState(false);
     const [isOverflow, setIsOverflow] = useState(false);
     const descriptionRef = useRef<HTMLParagraphElement | null>(null);
@@ -1556,7 +1589,7 @@ export default function GamesManager({
           {game.released ? (
             <p className={styles.resultMeta}>Реліз: {game.released}</p>
           ) : null}
-          {game.inCollection ? (
+          {game.inCollection && !hideInCollectionHint ? (
             <p className={styles.resultMeta}>
               Вже у колекції — відкриється редагування
             </p>
@@ -1664,7 +1697,7 @@ export default function GamesManager({
               </label>
               <button
                 type="button"
-                className="btnBase btnSecondary"
+                className={`btnBase btnSecondary ${styles.sortDirectionButton}`}
                 onClick={handleToggleSortDirection}
                 aria-label={
                   appliedFilters.sortDirection === "asc"
@@ -1796,9 +1829,6 @@ export default function GamesManager({
                       ? `${formatViewedDate(item.viewed_at)} (${item.view_percent}%)`
                       : "ні"}
                   </span>
-                  {showAvailability && item.availability ? (
-                    <span>Наявність: {item.availability}</span>
-                  ) : null}
                   {(item.platforms ?? []).filter((platform) => visiblePlatformsSet.has(platform))
                     .length > 0 ? (
                       <span>
@@ -1848,14 +1878,7 @@ export default function GamesManager({
           >
             <div className={styles.filtersHeader}>
               <h2 className={styles.filtersTitle}>Фільтри</h2>
-              <button
-                type="button"
-                className={styles.filtersClose}
-                onClick={() => setIsFiltersOpen(false)}
-                aria-label="Закрити"
-              >
-                ✕
-              </button>
+              <CloseIconButton onClick={() => setIsFiltersOpen(false)} />
             </div>
             <label className={styles.filtersField}>
               Пошук
@@ -1912,6 +1935,7 @@ export default function GamesManager({
                     <div
                       onMouseDown={props.onMouseDown}
                       onTouchStart={props.onTouchStart}
+                      style={props.style}
                       className={styles.rangeTrack}
                     >
                       <div
@@ -1970,6 +1994,7 @@ export default function GamesManager({
                   <div
                     onMouseDown={props.onMouseDown}
                     onTouchStart={props.onTouchStart}
+                    style={props.style}
                     className={styles.rangeTrack}
                   >
                     <div
@@ -2027,6 +2052,7 @@ export default function GamesManager({
                   <div
                     onMouseDown={props.onMouseDown}
                     onTouchStart={props.onTouchStart}
+                    style={props.style}
                     className={styles.rangeTrack}
                   >
                     <div
@@ -2298,16 +2324,19 @@ export default function GamesManager({
       {isRefreshPickerOpen ? (
         <CatalogSearchModal
           title="Оновити гру"
-          onSearch={handleGameSearch}
+          onSearch={handleRefreshGameSearch}
           getKey={(game) => game.id}
           resultItemClassName={styles.gameSearchResultItem}
+          getResultItemClassName={(game) =>
+            game.isRefreshCurrent ? styles.existingCollectionResult : ""
+          }
           initialQuery={refreshSearchQuery}
           onSelect={async (game) => {
             await applyRefreshedGameMetadata(game);
             setIsRefreshPickerOpen(false);
           }}
           onClose={() => setIsRefreshPickerOpen(false)}
-          renderItem={(game) => <GameSearchItem game={game} />}
+          renderItem={(game) => <GameSearchItem game={game} hideInCollectionHint />}
         />
       ) : null}
 

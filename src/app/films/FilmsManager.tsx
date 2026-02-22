@@ -14,6 +14,7 @@ import { Range, getTrackBackground } from "react-range";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
+import CloseIconButton from "@/components/ui/CloseIconButton";
 import { supabase } from "@/lib/supabase/client";
 import { readDisplayPreferences } from "@/lib/settings/displayPreferences";
 import { getDisplayName } from "@/lib/users/displayName";
@@ -1766,7 +1767,7 @@ export default function FilmsManager({
               </label>
               <button
                 type="button"
-                className="btnBase btnSecondary"
+                className={`btnBase btnSecondary ${styles.sortDirectionButton}`}
                 onClick={handleToggleSortDirection}
                 aria-label={
                   appliedFilters.sortDirection === "asc"
@@ -1923,14 +1924,7 @@ export default function FilmsManager({
           >
             <div className={styles.filtersHeader}>
               <h2 className={styles.filtersTitle}>Фільтри</h2>
-              <button
-                type="button"
-                className={styles.filtersClose}
-                onClick={() => setIsFiltersOpen(false)}
-                aria-label="Закрити"
-              >
-                ✕
-              </button>
+              <CloseIconButton onClick={() => setIsFiltersOpen(false)} />
             </div>
             <label className={styles.filtersField}>
               Пошук
@@ -2001,6 +1995,7 @@ export default function FilmsManager({
                     <div
                       onMouseDown={props.onMouseDown}
                       onTouchStart={props.onTouchStart}
+                      style={props.style}
                       className={styles.rangeTrack}
                     >
                       <div
@@ -2059,6 +2054,7 @@ export default function FilmsManager({
                   <div
                     onMouseDown={props.onMouseDown}
                     onTouchStart={props.onTouchStart}
+                    style={props.style}
                     className={styles.rangeTrack}
                   >
                     <div
@@ -2116,6 +2112,7 @@ export default function FilmsManager({
                   <div
                     onMouseDown={props.onMouseDown}
                     onTouchStart={props.onTouchStart}
+                    style={props.style}
                     className={styles.rangeTrack}
                   >
                     <div

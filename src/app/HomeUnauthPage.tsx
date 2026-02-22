@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import CloseIconButton from "@/components/ui/CloseIconButton";
 import { supabase } from "@/lib/supabase/client";
 import authStyles from "./auth/page.module.css";
 import { useRouter } from "next/navigation";
@@ -234,17 +235,13 @@ export default function HomeUnauthPage() {
           <div className="authModal" onClick={(event) => event.stopPropagation()}>
             <div className="authModalHeader">
               <h2 className={authStyles.title}>Авторизація</h2>
-              <button
-                type="button"
+              <CloseIconButton
                 className="authClose"
                 onClick={() => {
                   setIsAuthOpen(false);
                   router.push("/");
                 }}
-                aria-label="Закрити"
-              >
-                ✕
-              </button>
+              />
             </div>
             <p className={authStyles.text}>Увійди або зареєструйся.</p>
             <form className={authStyles.form} onSubmit={handleSignIn}>

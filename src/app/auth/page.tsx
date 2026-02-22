@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Session } from "@supabase/supabase-js";
 import { useRouter, useSearchParams } from "next/navigation";
+import CloseIconButton from "@/components/ui/CloseIconButton";
 import { supabase } from "@/lib/supabase/client";
 import styles from "./page.module.css";
 
@@ -95,14 +96,10 @@ export default function AuthPage() {
       <main className={styles.card}>
         <div className={styles.header}>
           <h1 className={styles.title}>Авторизація</h1>
-          <button
-            type="button"
+          <CloseIconButton
             className={styles.closeButton}
             onClick={() => router.push("/")}
-            aria-label="Закрити"
-          >
-            ✕
-          </button>
+          />
         </div>
         <p className={styles.text}>Увійди або зареєструйся.</p>
 

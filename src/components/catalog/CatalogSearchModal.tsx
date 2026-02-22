@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Search from "@/components/search/Search";
+import CloseIconButton from "@/components/ui/CloseIconButton";
 import listStyles from "@/components/catalog/CatalogSearch.module.css";
 import styles from "./CatalogSearchModal.module.css";
 
@@ -85,14 +86,7 @@ export default function CatalogSearchModal<T>({
       <div className={styles.modal} onClick={(event) => event.stopPropagation()}>
         <div className={styles.header}>
           <h2 className={styles.title}>{title}</h2>
-          <button
-            type="button"
-            className={`${styles.closeButton} btnSecondary`}
-            onClick={onClose}
-            aria-label="Закрити"
-          >
-            ✕
-          </button>
+          <CloseIconButton onClick={onClose} />
         </div>
         <div className={styles.body}>
           <Search
