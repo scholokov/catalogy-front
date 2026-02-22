@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { searchGamesInIgdb } from "@/lib/igdb/server";
 
 type RawgGame = {
   id: number;
@@ -20,12 +21,21 @@ export async function GET(request: Request) {
     );
   }
 
+  try {
+    const results = await searchGamesInIgdb(query);
+    if (results.length > 0) {
+      return NextResponse.json({ results });
+    }
+  } catch (igdbError) {
+    // Continue with RAWG fallback below.
+    const message =
+      igdbError instanceof Error ? igdbError.message : "IGDB search failed.";
+    console.warn(message);
+  }
+
   const apiKey = process.env.RAWG_API_KEY;
   if (!apiKey) {
-    return NextResponse.json(
-      { results: [], error: "Missing RAWG_API_KEY." },
-      { status: 500 },
-    );
+    return NextResponse.json({ results: [] });
   }
 
   const searchUrl = new URL("https://api.rawg.io/api/games");
@@ -66,6 +76,7 @@ export async function GET(request: Request) {
     id: String(game.id),
     title: game.name,
     rating: Number.isFinite(game.rating) ? game.rating : null,
+    ratingSource: "rawg" as const,
     released: game.released ?? "",
     poster: game.background_image ?? "",
     genres: (game.genres ?? []).map((g) => g.name).join(", "),

@@ -1,15 +1,25 @@
 import { NextResponse } from "next/server";
+import { getIgdbGameDetails } from "@/lib/igdb/server";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  try {
+    const igdbData = await getIgdbGameDetails(id);
+    if (igdbData) {
+      return NextResponse.json(igdbData);
+    }
+  } catch {
+    // Fallback below.
+  }
+
   const apiKey = process.env.RAWG_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
-      { error: "Missing RAWG_API_KEY." },
-      { status: 500 },
+      { error: "Failed to fetch game details from IGDB." },
+      { status: 502 },
     );
   }
 
@@ -62,6 +72,7 @@ export async function GET(
   return NextResponse.json({
     title: data.name ?? "",
     rating: typeof data.rating === "number" ? data.rating : null,
+    source: "rawg" as const,
     released: data.released ?? "",
     poster: data.background_image ?? "",
     description,

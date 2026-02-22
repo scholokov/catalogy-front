@@ -27,6 +27,7 @@ type GameResult = {
   id: string;
   title: string;
   rating: number | null;
+  ratingSource?: "igdb" | "rawg";
   released: string;
   poster: string;
   genres: string;
@@ -64,6 +65,7 @@ type GameItemDraft = {
   poster_url: string | null;
   year: number | null;
   imdb_rating: string | null;
+  ratingSource?: "igdb" | "rawg";
   description: string | null;
   genres: string | null;
   external_id: string | null;
@@ -173,6 +175,20 @@ const formatPersonalRating = (value: number | null) => {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 };
 
+const getExternalRatingLabel = (
+  source?: "igdb" | "rawg",
+  value?: number | string | null,
+) => {
+  if (source === "igdb") return "IGDB";
+  if (source === "rawg") return "RAWG";
+  const numeric =
+    typeof value === "string" ? Number.parseFloat(value) : value ?? null;
+  if (typeof numeric === "number" && Number.isFinite(numeric) && numeric > 5) {
+    return "IGDB";
+  }
+  return "RAWG";
+};
+
 const getDefaultSortDirection = (sortBy: SortBy): SortDirection => {
   if (sortBy === "title") return "asc";
   return "desc";
@@ -230,6 +246,7 @@ export default function GamesManager({
   const [page, setPage] = useState(0);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"default" | "cards">("default");
   const [selectedGame, setSelectedGame] = useState<GameResult | null>(null);
   const [selectedView, setSelectedView] = useState<GameCollectionItem | null>(
     null,
@@ -1286,6 +1303,7 @@ export default function GamesManager({
       ? ((await detailResponse.json()) as {
           description?: string;
           rating?: number | null;
+          source?: "igdb" | "rawg";
           released?: string;
           poster?: string;
         })
@@ -1319,6 +1337,7 @@ export default function GamesManager({
         typeof rawRating === "number" && Number.isFinite(rawRating)
           ? rawRating.toFixed(1)
           : selectedView.items.imdb_rating ?? null,
+      ratingSource: detailData?.source ?? game.ratingSource,
       genres,
       description,
       external_id: game.id,
@@ -1330,7 +1349,7 @@ export default function GamesManager({
     const query = selectedView.items.title.trim();
     const results = await handleGameSearch(query);
     if (results.length === 0) {
-      throw new Error("Не знайдено збіг у RAWG.");
+      throw new Error("Не знайдено збіг.");
     }
     if (results.length === 1) {
       await applyRefreshedGameMetadata(results[0]);
@@ -1580,7 +1599,9 @@ export default function GamesManager({
           <div className={styles.titleRow}>
             <h2 className={styles.resultTitle}>{game.title}</h2>
             <div className={styles.ratingRow}>
-              <span className={styles.resultRating}>RAWG: {game.rating ?? "—"}</span>
+              <span className={styles.resultRating}>
+                {getExternalRatingLabel(game.ratingSource, game.rating)}: {game.rating ?? "—"}
+              </span>
             </div>
           </div>
           {game.genres ? (
@@ -1712,6 +1733,28 @@ export default function GamesManager({
               </button>
             </div>
           </div>
+          <div className={styles.toolbarCenter}>
+            <div className={styles.viewSwitch}>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  viewMode === "default" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => setViewMode("default")}
+              >
+                Стандарт
+              </button>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  viewMode === "cards" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => setViewMode("cards")}
+              >
+                Картки
+              </button>
+            </div>
+          </div>
           <div className={styles.toolbarActions}>
             {!readOnly ? (
               <button
@@ -1736,7 +1779,7 @@ export default function GamesManager({
       ) : null}
       {message ? <p className={styles.message}>{message}</p> : null}
 
-      {isFriendAccessAllowed ? <div className={styles.results}>
+      {viewMode === "default" && isFriendAccessAllowed ? <div className={styles.results}>
         {displayedCollection.map((item) => {
           const releasedYear = item.items.year ? String(item.items.year) : "";
           return (
@@ -1751,7 +1794,8 @@ export default function GamesManager({
                   <h2 className={styles.resultTitle}>{item.items.title}</h2>
                   <div className={styles.ratingRow}>
                     <span className={styles.resultRating}>
-                      RAWG: {item.items.imdb_rating ?? "—"}
+                      {getExternalRatingLabel(undefined, item.items.imdb_rating)}:{" "}
+                      {item.items.imdb_rating ?? "—"}
                     </span>
                     <span className={styles.resultRating}>
                       Мій: {item.rating != null ? formatPersonalRating(item.rating) : "—"}
@@ -1847,6 +1891,44 @@ export default function GamesManager({
           );
         })}
       </div> : null}
+      {viewMode === "cards" && isFriendAccessAllowed ? (
+        <div className={`${styles.results} ${styles.filmCardsGrid}`}>
+          {displayedCollection.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`${styles.resultButton} ${styles.filmCardViewItem}`}
+              onClick={() => setSelectedView(item)}
+            >
+              <div className={styles.filmCardPosterWrapper}>
+                {item.items.poster_url ? (
+                  <Image
+                    className={styles.poster}
+                    src={item.items.poster_url}
+                    alt={`Постер ${item.items.title}`}
+                    width={270}
+                    height={405}
+                    sizes="(max-width: 720px) 70vw, 270px"
+                    loading="lazy"
+                    unoptimized
+                  />
+                ) : (
+                  <div className={styles.posterPlaceholder}>No image</div>
+                )}
+              </div>
+              <div className={styles.filmCardFooter}>
+                <div className={styles.filmCardRatingsRow}>
+                  <span className={styles.resultRating}>
+                    {getExternalRatingLabel(undefined, item.items.imdb_rating)}:{" "}
+                    {item.items.imdb_rating ?? "—"}
+                  </span>
+                  <span className={styles.resultRating}>Мій: {item.rating ?? "—"}</span>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : null}
       {hasApplied && hasMore && isFriendAccessAllowed ? <div ref={loadMoreRef} /> : null}
       {isLoading ? (
         <div className={styles.loadingOverlay} aria-live="polite">
@@ -2360,7 +2442,8 @@ export default function GamesManager({
           <div className={styles.resultContent}>
             <div className={styles.titleRow}>
               <span className={styles.resultRating}>
-                RAWG: {selectedGame.rating ?? "—"}
+                {getExternalRatingLabel(selectedGame.ratingSource, selectedGame.rating)}:{" "}
+                {selectedGame.rating ?? "—"}
               </span>
             </div>
             {selectedGame.released ? (
@@ -2431,7 +2514,11 @@ export default function GamesManager({
           <div className={styles.resultContent}>
             <div className={styles.titleRow}>
               <span className={styles.resultRating}>
-                RAWG:{" "}
+                {getExternalRatingLabel(
+                  selectedViewItemDraft?.ratingSource,
+                  selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating,
+                )}
+                :{" "}
                 {selectedViewItemDraft?.imdb_rating ??
                   selectedView.items.imdb_rating ??
                   "—"}

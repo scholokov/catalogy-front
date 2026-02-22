@@ -36,15 +36,17 @@
 }
 
 .modalWide .poster {
-  object-fit: contain;
+  object-fit: cover;
   height: auto;
-  aspect-ratio: 16 / 9;
+  max-height: none;
+  aspect-ratio: auto;
   border: none;
 }
 
 .modalWide .posterPlaceholder {
   height: auto;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: auto;
+  min-height: 480px;
 }
 
 @media (max-width: 1080px) {
