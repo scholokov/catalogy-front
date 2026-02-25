@@ -275,6 +275,7 @@ export default function GamesManager({
   );
   const fetchingSearchDescRef = useRef<Set<string>>(new Set());
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const filtersQueryInputRef = useRef<HTMLInputElement | null>(null);
   const skipNextApplyRef = useRef(false);
   const loadingPagesRef = useRef<Set<number>>(new Set());
   const activeRequestKeyRef = useRef("");
@@ -445,9 +446,6 @@ export default function GamesManager({
 
   const fetchPage = useCallback(async (pageIndex: number, filters: Filters) => {
     const requestKey = getFiltersRequestKey(filters);
-    if (pageIndex === 0) {
-      activeRequestKeyRef.current = requestKey;
-    }
 
     const {
       data: { user },
@@ -498,6 +496,10 @@ export default function GamesManager({
     if (needsClientSort && pageIndex > 0) {
       loadingPagesRef.current.delete(pageIndex);
       return false;
+    }
+
+    if (pageIndex === 0) {
+      activeRequestKeyRef.current = requestKey;
     }
 
     if (pageIndex === 0) {
@@ -909,6 +911,10 @@ export default function GamesManager({
         setIsFiltersOpen(false);
       }
     };
+    const isMobile = window.matchMedia("(max-width: 779px)").matches;
+    if (!isMobile) {
+      filtersQueryInputRef.current?.focus();
+    }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isFiltersOpen]);
@@ -1994,8 +2000,8 @@ export default function GamesManager({
             <label className={styles.filtersField}>
               Пошук
               <input
+                ref={filtersQueryInputRef}
                 className={styles.filtersInput}
-                autoFocus
                 value={pendingFilters.query}
                 onChange={(event) =>
                   setPendingFilters((prev) => ({

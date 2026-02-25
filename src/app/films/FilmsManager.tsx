@@ -265,6 +265,7 @@ export default function FilmsManager({
   const descriptionRefs = useRef<Map<string, HTMLParagraphElement | null>>(
     new Map(),
   );
+  const filtersQueryInputRef = useRef<HTMLInputElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const skipNextApplyRef = useRef(false);
   const loadingPagesRef = useRef<Set<number>>(new Set());
@@ -427,9 +428,6 @@ export default function FilmsManager({
 
   const fetchPage = useCallback(async (pageIndex: number, filters: Filters) => {
     const requestKey = getFiltersRequestKey(filters);
-    if (pageIndex === 0) {
-      activeRequestKeyRef.current = requestKey;
-    }
 
     const {
       data: { user },
@@ -483,6 +481,10 @@ export default function FilmsManager({
     }
 
     if (pageIndex === 0) {
+      activeRequestKeyRef.current = requestKey;
+    }
+
+    if (pageIndex === 0) {
       setIsLoading(true);
       setMessage("");
     } else {
@@ -503,9 +505,12 @@ export default function FilmsManager({
 
     if (trimmedQuery) {
       const escaped = trimmedQuery.replaceAll("%", "\\%");
-      query = query.or(`title.ilike.%${escaped}%,description.ilike.%${escaped}%`, {
+      query = query.or(
+        `title.ilike.%${escaped}%,title_original.ilike.%${escaped}%,description.ilike.%${escaped}%`,
+        {
         foreignTable: "items",
-      });
+        },
+      );
     }
 
     if (!filters.availabilityAll && filters.availability.length > 0) {
@@ -585,7 +590,7 @@ export default function FilmsManager({
       if (trimmedQuery) {
         const escaped = trimmedQuery.replaceAll("%", "\\%");
         countQuery = countQuery.or(
-          `title.ilike.%${escaped}%,description.ilike.%${escaped}%`,
+          `title.ilike.%${escaped}%,title_original.ilike.%${escaped}%,description.ilike.%${escaped}%`,
           {
             foreignTable: "items",
           },
@@ -945,6 +950,10 @@ export default function FilmsManager({
         setIsFiltersOpen(false);
       }
     };
+    const isMobile = window.matchMedia("(max-width: 779px)").matches;
+    if (!isMobile) {
+      filtersQueryInputRef.current?.focus();
+    }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isFiltersOpen]);
@@ -1927,10 +1936,10 @@ export default function FilmsManager({
               <CloseIconButton onClick={() => setIsFiltersOpen(false)} />
             </div>
             <label className={styles.filtersField}>
-              Пошук
+              Назва та Оригінальна назва
               <input
+                ref={filtersQueryInputRef}
                 className={styles.filtersInput}
-                autoFocus
                 value={pendingFilters.query}
                 onChange={(event) =>
                   setPendingFilters((prev) => ({

@@ -742,6 +742,10 @@
 }
 
 @media (max-width: 779px) {
+  .filtersInput {
+    font-size: 16px;
+  }
+
   .resultItem {
     grid-template-columns: 120px 1fr;
   }
