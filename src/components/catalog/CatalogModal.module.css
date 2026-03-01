@@ -133,6 +133,9 @@
 
 .posterBlock {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .poster {
@@ -184,6 +187,57 @@
 
 .arrowRight {
   right: 10px;
+}
+
+.previewActionButton {
+  width: 100%;
+  min-height: 44px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.previewActionButton:hover {
+  border-color: var(--color-accent);
+  background: var(--color-surface);
+  transform: translateY(-1px);
+}
+
+.previewActionButton:disabled {
+  cursor: not-allowed;
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+  background: var(--color-surface-subtle);
+  transform: none;
+}
+
+.previewActionIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+
+.previewActionIcon svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+  fill: currentColor;
+}
+
+.previewActionLabel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .details {

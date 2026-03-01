@@ -27,6 +27,12 @@ type CatalogModalProps = {
   onDelete?: () => Promise<void>;
   onRefresh?: () => Promise<void>;
   extraActions?: React.ReactNode;
+  previewAction?: {
+    label: string;
+    onClick: () => void;
+    disabled?: boolean;
+    icon?: React.ReactNode;
+  };
   initialValues?: {
     viewedAt?: string;
     comment?: string | null;
@@ -73,6 +79,7 @@ export default function CatalogModal({
   onDelete,
   onRefresh,
   extraActions,
+  previewAction,
   initialValues,
   platformOptions = [],
   availabilityOptions = [],
@@ -553,6 +560,19 @@ export default function CatalogModal({
                   →
                 </button>
               </>
+            ) : null}
+            {previewAction ? (
+              <button
+                type="button"
+                className={styles.previewActionButton}
+                onClick={previewAction.onClick}
+                disabled={previewAction.disabled}
+              >
+                {previewAction.icon ? (
+                  <span className={styles.previewActionIcon}>{previewAction.icon}</span>
+                ) : null}
+                <span className={styles.previewActionLabel}>{previewAction.label}</span>
+              </button>
             ) : null}
           </div>
           <div className={styles.details}>

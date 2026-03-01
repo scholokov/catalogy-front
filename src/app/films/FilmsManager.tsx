@@ -20,6 +20,18 @@ import { readDisplayPreferences } from "@/lib/settings/displayPreferences";
 import { getDisplayName } from "@/lib/users/displayName";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
+type Trailer = {
+  id: string;
+  name: string;
+  site: string;
+  key: string;
+  type: string;
+  official: boolean;
+  language: string;
+  region: string;
+  url: string;
+};
+
 type FilmResult = {
   id: string;
   title: string;
@@ -32,6 +44,7 @@ type FilmResult = {
   director: string;
   actors: string;
   imdbRating: string;
+  trailers?: Trailer[];
   mediaType?: "movie" | "tv";
   source: "tmdb";
   inCollection?: boolean;
@@ -60,6 +73,7 @@ type FilmCollectionItem = {
     poster_url: string | null;
     external_id: string | null;
     imdb_rating: string | null;
+    trailers: Trailer[] | null;
     year?: number | null;
     type: string;
   };
@@ -75,6 +89,7 @@ type FilmItemDraft = {
   director: string | null;
   actors: string | null;
   external_id: string | null;
+  trailers: Trailer[] | null;
 };
 
 type ContactOption = {
@@ -235,6 +250,7 @@ export default function FilmsManager({
     MAX_YEAR,
   ]);
   const [message, setMessage] = useState("");
+  const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -251,6 +267,11 @@ export default function FilmsManager({
   const [selectedViewItemDraft, setSelectedViewItemDraft] = useState<FilmItemDraft | null>(
     null,
   );
+  const [trailerModal, setTrailerModal] = useState<{
+    url: string;
+    title: string;
+  } | null>(null);
+  const [isTrailerLoading, setIsTrailerLoading] = useState(false);
   const [isRefreshPickerOpen, setIsRefreshPickerOpen] = useState(false);
   const [refreshSearchQuery, setRefreshSearchQuery] = useState("");
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(
@@ -313,6 +334,12 @@ export default function FilmsManager({
     setIsRefreshPickerOpen(false);
     setRefreshSearchQuery("");
   }, [selectedView?.id]);
+
+  useEffect(() => {
+    if (selectedFilm || selectedView) {
+      setTrailerMessage("");
+    }
+  }, [selectedFilm, selectedView]);
 
   const loadRecommendations = useCallback(
     async (itemIds: string[], shouldReset: boolean) => {
@@ -494,7 +521,7 @@ export default function FilmsManager({
     let query = supabase
       .from("user_views")
       .select(
-        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, title_original, description, genres, director, actors, poster_url, external_id, imdb_rating, year, type)",
+        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, title_original, description, genres, director, actors, poster_url, external_id, imdb_rating, trailers, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "film");
@@ -1105,6 +1132,173 @@ export default function FilmsManager({
     setPendingRecommendItem(null);
   };
 
+  const normalizeTrailers = (trailers?: Trailer[] | null) =>
+    trailers && trailers.length > 0 ? trailers : null;
+
+  const selectPreferredTrailer = (trailers?: Trailer[] | null) => {
+    if (!trailers || trailers.length === 0) return null;
+    const officialTrailer = trailers.find(
+      (trailer) => trailer.type === "Trailer" && trailer.official && trailer.url,
+    );
+    const trailer = trailers.find(
+      (candidate) => candidate.type === "Trailer" && candidate.url,
+    );
+    const teaser = trailers.find(
+      (candidate) => candidate.type === "Teaser" && candidate.url,
+    );
+    return officialTrailer ?? trailer ?? teaser ?? trailers.find((candidate) => candidate.url);
+  };
+
+  const toEmbedUrl = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname.includes("youtube.com")) {
+        const videoId = parsed.searchParams.get("v");
+        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
+      }
+      if (parsed.hostname === "youtu.be") {
+        const videoId = parsed.pathname.replace("/", "").trim();
+        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
+      }
+    } catch {
+      return url;
+    }
+    return url;
+  };
+
+  const playIcon = (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      height="24px"
+      viewBox="0 -960 960 960"
+      width="24px"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="m380-300 280-180-280-180v360ZM480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z" />
+    </svg>
+  );
+
+  const openTrailerModal = (title: string, trailers?: Trailer[] | null) => {
+    const picked = selectPreferredTrailer(trailers);
+    if (!picked) {
+      setTrailerMessage("Трейлер недоступний.");
+      return false;
+    }
+    setTrailerModal({
+      url: picked.url,
+      title: picked.name?.trim() ? picked.name : title,
+    });
+    return true;
+  };
+
+  const fetchFilmTrailers = async (
+    filmId: string,
+    mediaType?: "movie" | "tv",
+  ): Promise<Trailer[] | null> => {
+    const query = mediaType ? `?mediaType=${mediaType}` : "";
+    const response = await fetch(`/api/tmdb/${filmId}${query}`);
+    if (!response.ok) return null;
+    const detail = (await response.json()) as FilmResult;
+    return normalizeTrailers(detail.trailers ?? null);
+  };
+
+  const updateTrailersLocally = (itemId: string, trailers: Trailer[] | null) => {
+    setCollection((prev) =>
+      prev.map((item) =>
+        item.items.id === itemId
+          ? {
+              ...item,
+              items: {
+                ...item.items,
+                trailers,
+              },
+            }
+          : item,
+      ),
+    );
+    setSelectedView((prev) => {
+      if (!prev || prev.items.id !== itemId) return prev;
+      return {
+        ...prev,
+        items: {
+          ...prev.items,
+          trailers,
+        },
+      };
+    });
+  };
+
+  const handleWatchSelectedFilmTrailer = async () => {
+    if (!selectedFilm) return;
+    setTrailerMessage("");
+    const existing = normalizeTrailers(selectedFilm.trailers ?? null);
+    if (existing) {
+      openTrailerModal(selectedFilm.title, existing);
+      return;
+    }
+    setIsTrailerLoading(true);
+    try {
+      const trailers = await fetchFilmTrailers(
+        selectedFilm.id,
+        selectedFilm.mediaType ?? "movie",
+      );
+      if (!trailers) {
+        setTrailerMessage("Трейлер недоступний.");
+        return;
+      }
+      setSelectedFilm((prev) => (prev ? { ...prev, trailers } : prev));
+      openTrailerModal(selectedFilm.title, trailers);
+    } finally {
+      setIsTrailerLoading(false);
+    }
+  };
+
+  const handleWatchSelectedViewTrailer = async () => {
+    if (!selectedView) return;
+    setTrailerMessage("");
+    const currentTrailers =
+      normalizeTrailers(selectedViewItemDraft?.trailers ?? null) ??
+      normalizeTrailers(selectedView.items.trailers ?? null);
+    if (currentTrailers) {
+      openTrailerModal(selectedView.items.title, currentTrailers);
+      return;
+    }
+    const externalId =
+      selectedViewItemDraft?.external_id ?? selectedView.items.external_id ?? "";
+    if (!externalId) {
+      setTrailerMessage("Трейлер недоступний.");
+      return;
+    }
+    setIsTrailerLoading(true);
+    try {
+      const trailers = await fetchFilmTrailers(externalId);
+      if (!trailers) {
+        setTrailerMessage("Трейлер недоступний.");
+        return;
+      }
+      setSelectedViewItemDraft((prev) => (prev ? { ...prev, trailers } : prev));
+      updateTrailersLocally(selectedView.items.id, trailers);
+      const { error } = await supabase
+        .from("items")
+        .update({ trailers })
+        .eq("id", selectedView.items.id);
+      if (error) {
+        setTrailerMessage("Не вдалося зберегти трейлер.");
+        return;
+      }
+      openTrailerModal(selectedView.items.title, trailers);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Не вдалося отримати трейлер.";
+      setTrailerMessage(message);
+    } finally {
+      setIsTrailerLoading(false);
+    }
+  };
+
   const handleSendRecommendation = async (
     contactIds: string[],
     comment: string,
@@ -1155,6 +1349,7 @@ export default function FilmsManager({
       film.imdbRating && film.imdbRating !== "N/A" ? film.imdbRating : null;
     const parsedYear = Number.parseInt(film.year, 10);
     const yearValue = Number.isNaN(parsedYear) ? null : parsedYear;
+    const trailers = normalizeTrailers(film.trailers ?? null);
 
     const { data: existingItem, error: findError } = await supabase
       .from("items")
@@ -1184,6 +1379,7 @@ export default function FilmsManager({
           external_id: film.id,
           imdb_rating: imdbRatingValue,
           year: yearValue,
+          trailers,
         })
         .select("id")
         .single();
@@ -1215,6 +1411,7 @@ export default function FilmsManager({
       genres?: string | null;
       director?: string | null;
       actors?: string | null;
+      trailers?: Trailer[] | null;
     } = {};
     if (imdbRatingValue) {
       itemUpdates.imdb_rating = imdbRatingValue;
@@ -1226,6 +1423,7 @@ export default function FilmsManager({
     if (film.genres) itemUpdates.genres = film.genres;
     if (film.director) itemUpdates.director = film.director;
     if (film.actors) itemUpdates.actors = film.actors;
+    if (trailers) itemUpdates.trailers = trailers;
     if (itemId && Object.keys(itemUpdates).length > 0) {
       const { error: updateError } = await supabase
         .from("items")
@@ -1323,6 +1521,7 @@ export default function FilmsManager({
         director: itemDraft.director,
         actors: itemDraft.actors,
         external_id: itemDraft.external_id,
+        trailers: itemDraft.trailers,
       };
       const { error: updateItemError } = await supabase
         .from("items")
@@ -1341,6 +1540,7 @@ export default function FilmsManager({
               genres: itemDraft.genres,
               director: itemDraft.director,
               actors: itemDraft.actors,
+              trailers: itemDraft.trailers,
             })
             .eq("id", itemId);
           if (retryError) {
@@ -1375,6 +1575,7 @@ export default function FilmsManager({
                 director: itemDraft.director,
                 actors: itemDraft.actors,
                 external_id: itemDraft.external_id,
+                trailers: itemDraft.trailers,
               }
             : item.items,
         };
@@ -1403,6 +1604,7 @@ export default function FilmsManager({
               director: itemDraft.director,
               actors: itemDraft.actors,
               external_id: itemDraft.external_id,
+              trailers: itemDraft.trailers,
             }
           : prev.items,
       };
@@ -1421,6 +1623,7 @@ export default function FilmsManager({
       : film;
 
     const parsedYear = Number.parseInt(detail.year ?? "", 10);
+    const trailers = normalizeTrailers(detail.trailers ?? null) ?? selectedView.items.trailers;
     setSelectedViewItemDraft({
       title_original: detail.originalTitle?.trim()
         ? detail.originalTitle.trim()
@@ -1441,6 +1644,7 @@ export default function FilmsManager({
         : selectedView.items.director ?? null,
       actors: detail.actors?.trim() ? detail.actors.trim() : selectedView.items.actors ?? null,
       external_id: detail.id,
+      trailers: trailers ?? null,
     });
   };
 
@@ -2505,13 +2709,22 @@ export default function FilmsManager({
           title={selectedFilm.title}
           posterUrl={selectedFilm.poster}
           imageUrls={selectedFilm.imageUrls}
-          onClose={() => setSelectedFilm(null)}
+          onClose={() => {
+            setSelectedFilm(null);
+            setTrailerMessage("");
+          }}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
           initialValues={{
             availability: showAvailability ? defaultFilmAvailability : null,
             isViewed: defaultFilmIsViewed ?? undefined,
           }}
           onAdd={(payload) => handleAddFilm(selectedFilm, payload)}
+          previewAction={{
+            label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
+            onClick: handleWatchSelectedFilmTrailer,
+            disabled: isTrailerLoading,
+            icon: playIcon,
+          }}
         >
           <div className={styles.resultContent}>
             <div className={styles.titleRow}>
@@ -2540,6 +2753,7 @@ export default function FilmsManager({
             ) : (
               <p className={styles.resultPlot}>Опис недоступний.</p>
             )}
+            {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
           </div>
         </CatalogModal>
       ) : null}
@@ -2555,12 +2769,21 @@ export default function FilmsManager({
               ? [selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url ?? ""]
               : []
           }
-          onClose={() => setSelectedView(null)}
+          onClose={() => {
+            setSelectedView(null);
+            setTrailerMessage("");
+          }}
           readOnly={readOnly}
           submitLabel={readOnly ? "Додати собі у колекцію" : "Зберегти"}
           onReadOnlyPrimaryAction={() => handleAddToOwnCollection(selectedView.items.id)}
+          previewAction={{
+            label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
+            onClick: handleWatchSelectedViewTrailer,
+            disabled: isTrailerLoading,
+            icon: playIcon,
+          }}
           extraActions={
-            readOnly ? null : (
+            !readOnly ? (
               <button
                 type="button"
                 className="btnBase btnSecondary"
@@ -2570,7 +2793,7 @@ export default function FilmsManager({
               >
                 Порекомендувати другу
               </button>
-            )
+            ) : null
           }
           initialValues={{
             viewedAt: selectedView.viewed_at,
@@ -2645,8 +2868,40 @@ export default function FilmsManager({
             ) : (
               <p className={styles.resultPlot}>Опис недоступний.</p>
             )}
+            {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
           </div>
         </CatalogModal>
+      ) : null}
+
+      {trailerModal ? (
+        <div
+          className={styles.trailerOverlay}
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setTrailerModal(null)}
+        >
+          <div
+            className={styles.trailerModal}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className={styles.trailerHeader}>
+              <h3 className={styles.trailerTitle}>{trailerModal.title}</h3>
+              <CloseIconButton
+                className={styles.trailerCloseButton}
+                onClick={() => setTrailerModal(null)}
+              />
+            </div>
+            <div className={styles.trailerBody}>
+              <iframe
+                className={styles.trailerFrame}
+                src={`${toEmbedUrl(trailerModal.url)}?autoplay=1`}
+                title={trailerModal.title}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {recommendItem ? (

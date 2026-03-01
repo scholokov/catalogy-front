@@ -5,6 +5,17 @@ type TmdbCredits = {
   crew?: { job: string; name: string }[];
 };
 
+type TmdbVideo = {
+  id?: string;
+  key?: string;
+  name?: string;
+  site?: string;
+  type?: string;
+  official?: boolean;
+  iso_639_1?: string;
+  iso_3166_1?: string;
+};
+
 type TmdbDetail = {
   id: number;
   title: string;
@@ -23,6 +34,9 @@ type TmdbDetail = {
     posters?: { file_path: string }[];
     backdrops?: { file_path: string }[];
   };
+  videos?: {
+    results?: TmdbVideo[];
+  };
 };
 
 export async function GET(
@@ -32,6 +46,10 @@ export async function GET(
   const { id } = await params;
   const { searchParams } = new URL(request.url);
   const requestedMediaType = searchParams.get("mediaType");
+  const localeHeader = request.headers.get("accept-language") ?? "uk-UA";
+  const primaryLocale = localeHeader.split(",")[0]?.trim() || "uk-UA";
+  const localeLanguage = primaryLocale.split("-")[0] || "uk";
+  const localeRegion = primaryLocale.split("-")[1] || "UA";
   const token = process.env.TMDB_READ_ACCESS_TOKEN;
   const apiKey = process.env.TMDB_API_KEY;
 
@@ -53,10 +71,11 @@ export async function GET(
 
   for (const mediaType of fallbackOrder) {
     const detailUrl = new URL(`https://api.themoviedb.org/3/${mediaType}/${id}`);
-    detailUrl.searchParams.set("append_to_response", "credits,images");
+    detailUrl.searchParams.set("append_to_response", "credits,images,videos");
     detailUrl.searchParams.set("include_image_language", "uk,en,null");
-    detailUrl.searchParams.set("language", "uk-UA");
-    detailUrl.searchParams.set("region", "UA");
+    detailUrl.searchParams.set("include_video_language", `${localeLanguage},en,null`);
+    detailUrl.searchParams.set("language", primaryLocale);
+    detailUrl.searchParams.set("region", localeRegion);
     if (apiKey) {
       detailUrl.searchParams.set("api_key", apiKey);
     }
@@ -113,6 +132,28 @@ export async function GET(
   const imageUrls = Array.from(
     new Set([primaryPoster, ...posterImages, ...backdropImages].filter(Boolean)),
   );
+  const videoCandidates = (detail.videos?.results ?? []).filter(
+    (video) =>
+      video.site === "YouTube" &&
+      Boolean(video.key) &&
+      (video.type === "Trailer" || video.type === "Teaser"),
+  );
+  const localeVideos = videoCandidates.filter(
+    (video) => video.iso_639_1?.toLowerCase() === localeLanguage.toLowerCase(),
+  );
+  const trailers = (localeVideos.length > 0 ? localeVideos : videoCandidates).map(
+    (video) => ({
+      id: video.id ?? "",
+      name: video.name ?? "",
+      site: video.site ?? "",
+      key: video.key ?? "",
+      type: video.type ?? "",
+      official: Boolean(video.official),
+      language: video.iso_639_1 ?? "",
+      region: video.iso_3166_1 ?? "",
+      url: video.key ? `https://www.youtube.com/watch?v=${video.key}` : "",
+    }),
+  );
 
   return NextResponse.json({
     id: String(detail.id),
@@ -129,6 +170,7 @@ export async function GET(
       typeof detail.vote_average === "number"
         ? detail.vote_average.toFixed(1)
         : "",
+    trailers,
     mediaType: resolvedMediaType,
     source: "tmdb" as const,
   });

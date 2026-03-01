@@ -73,6 +73,7 @@ create table if not exists items (
   poster_url text,
   external_id text,
   imdb_rating text,
+  trailers jsonb,
   created_at timestamptz not null default now()
 );
 
@@ -84,6 +85,9 @@ add column if not exists director text;
 
 alter table items
 add column if not exists actors text;
+
+alter table items
+add column if not exists trailers jsonb;
 
 alter table items
 add column if not exists title_original text;
