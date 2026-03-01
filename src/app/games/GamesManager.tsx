@@ -23,6 +23,18 @@ import {
 import { getDisplayName } from "@/lib/users/displayName";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
+type Trailer = {
+  id: string;
+  name: string;
+  site: string;
+  key: string;
+  type: string;
+  official: boolean;
+  language: string;
+  region: string;
+  url: string;
+};
+
 type GameResult = {
   id: string;
   title: string;
@@ -31,6 +43,7 @@ type GameResult = {
   released: string;
   poster: string;
   genres: string;
+  trailers?: Trailer[];
   inCollection?: boolean;
   existingViewId?: string;
   isRefreshCurrent?: boolean;
@@ -56,6 +69,7 @@ type GameCollectionItem = {
     poster_url: string | null;
     external_id: string | null;
     imdb_rating: string | null;
+    trailers: Trailer[] | null;
     year?: number | null;
     type: string;
   };
@@ -69,6 +83,7 @@ type GameItemDraft = {
   description: string | null;
   genres: string | null;
   external_id: string | null;
+  trailers: Trailer[] | null;
 };
 
 type ContactOption = {
@@ -241,6 +256,7 @@ export default function GamesManager({
     MAX_YEAR,
   ]);
   const [message, setMessage] = useState("");
+  const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -256,6 +272,12 @@ export default function GamesManager({
   const [selectedViewItemDraft, setSelectedViewItemDraft] = useState<GameItemDraft | null>(
     null,
   );
+  const [trailerModal, setTrailerModal] = useState<{
+    trailers: Trailer[];
+    index: number;
+    baseTitle: string;
+  } | null>(null);
+  const [isTrailerLoading, setIsTrailerLoading] = useState(false);
   const [isRefreshPickerOpen, setIsRefreshPickerOpen] = useState(false);
   const [refreshSearchQuery, setRefreshSearchQuery] = useState("");
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(
@@ -331,6 +353,12 @@ export default function GamesManager({
     setIsRefreshPickerOpen(false);
     setRefreshSearchQuery("");
   }, [selectedView?.id]);
+
+  useEffect(() => {
+    if (selectedGame || selectedView) {
+      setTrailerMessage("");
+    }
+  }, [selectedGame, selectedView]);
 
   const loadRecommendations = useCallback(
     async (itemIds: string[], shouldReset: boolean) => {
@@ -512,7 +540,7 @@ export default function GamesManager({
     let query = supabase
       .from("user_views")
       .select(
-        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, items:items!inner (id, title, description, genres, poster_url, external_id, imdb_rating, year, type)",
+        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, items:items!inner (id, title, description, genres, poster_url, external_id, imdb_rating, trailers, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "game");
@@ -1066,6 +1094,169 @@ export default function GamesManager({
     setPendingRecommendItem(null);
   };
 
+  const normalizeTrailers = (trailers?: Trailer[] | null) =>
+    trailers && trailers.length > 0 ? trailers : null;
+
+  const selectPreferredTrailer = (trailers?: Trailer[] | null) => {
+    if (!trailers || trailers.length === 0) return null;
+    const officialTrailer = trailers.find(
+      (trailer) => trailer.type === "Trailer" && trailer.official && trailer.url,
+    );
+    const trailer = trailers.find(
+      (candidate) => candidate.type === "Trailer" && candidate.url,
+    );
+    const teaser = trailers.find(
+      (candidate) => candidate.type === "Teaser" && candidate.url,
+    );
+    return officialTrailer ?? trailer ?? teaser ?? trailers.find((candidate) => candidate.url);
+  };
+
+  const toEmbedUrl = (url: string) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname.includes("youtube.com")) {
+        const videoId = parsed.searchParams.get("v");
+        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
+      }
+      if (parsed.hostname === "youtu.be") {
+        const videoId = parsed.pathname.replace("/", "").trim();
+        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
+      }
+    } catch {
+      return url;
+    }
+    return url;
+  };
+
+  const playIcon = (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      height="24px"
+      viewBox="0 -960 960 960"
+      width="24px"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="m380-300 280-180-280-180v360ZM480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z" />
+    </svg>
+  );
+
+  const openTrailerModal = (title: string, trailers?: Trailer[] | null) => {
+    const picked = selectPreferredTrailer(trailers);
+    if (!picked) {
+      setTrailerMessage("Трейлер недоступний.");
+      return false;
+    }
+    const safeTrailers = trailers ?? [];
+    const pickedIndex = safeTrailers.indexOf(picked);
+    setTrailerModal({
+      trailers: safeTrailers,
+      index: pickedIndex >= 0 ? pickedIndex : 0,
+      baseTitle: title,
+    });
+    return true;
+  };
+
+  const fetchGameTrailers = async (gameId: string): Promise<Trailer[] | null> => {
+    const response = await fetch(`/api/rawg/${gameId}`);
+    if (!response.ok) return null;
+    const detail = (await response.json()) as { trailers?: Trailer[] | null };
+    return normalizeTrailers(detail.trailers ?? null);
+  };
+
+  const updateTrailersLocally = (itemId: string, trailers: Trailer[] | null) => {
+    setCollection((prev) =>
+      prev.map((item) =>
+        item.items.id === itemId
+          ? {
+              ...item,
+              items: {
+                ...item.items,
+                trailers,
+              },
+            }
+          : item,
+      ),
+    );
+    setSelectedView((prev) => {
+      if (!prev || prev.items.id !== itemId) return prev;
+      return {
+        ...prev,
+        items: {
+          ...prev.items,
+          trailers,
+        },
+      };
+    });
+  };
+
+  const handleWatchSelectedGameTrailer = async () => {
+    if (!selectedGame) return;
+    setTrailerMessage("");
+    const existing = normalizeTrailers(selectedGame.trailers ?? null);
+    if (existing) {
+      openTrailerModal(selectedGame.title, existing);
+      return;
+    }
+    setIsTrailerLoading(true);
+    try {
+      const trailers = await fetchGameTrailers(selectedGame.id);
+      if (!trailers) {
+        setTrailerMessage("Трейлер недоступний.");
+        return;
+      }
+      setSelectedGame((prev) => (prev ? { ...prev, trailers } : prev));
+      openTrailerModal(selectedGame.title, trailers);
+    } finally {
+      setIsTrailerLoading(false);
+    }
+  };
+
+  const handleWatchSelectedViewTrailer = async () => {
+    if (!selectedView) return;
+    setTrailerMessage("");
+    const currentTrailers =
+      normalizeTrailers(selectedViewItemDraft?.trailers ?? null) ??
+      normalizeTrailers(selectedView.items.trailers ?? null);
+    if (currentTrailers) {
+      openTrailerModal(selectedView.items.title, currentTrailers);
+      return;
+    }
+    const externalId =
+      selectedViewItemDraft?.external_id ?? selectedView.items.external_id ?? "";
+    if (!externalId) {
+      setTrailerMessage("Трейлер недоступний.");
+      return;
+    }
+    setIsTrailerLoading(true);
+    try {
+      const trailers = await fetchGameTrailers(externalId);
+      if (!trailers) {
+        setTrailerMessage("Трейлер недоступний.");
+        return;
+      }
+      setSelectedViewItemDraft((prev) => (prev ? { ...prev, trailers } : prev));
+      updateTrailersLocally(selectedView.items.id, trailers);
+      const { error } = await supabase
+        .from("items")
+        .update({ trailers })
+        .eq("id", selectedView.items.id);
+      if (error) {
+        setTrailerMessage("Не вдалося зберегти трейлер.");
+        return;
+      }
+      openTrailerModal(selectedView.items.title, trailers);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Не вдалося отримати трейлер.";
+      setTrailerMessage(message);
+    } finally {
+      setIsTrailerLoading(false);
+    }
+  };
+
   const handleSendRecommendation = async (
     contactIds: string[],
     comment: string,
@@ -1143,6 +1334,7 @@ export default function GamesManager({
           external_id: game.id,
           imdb_rating: overallRating,
           year: yearValue,
+          trailers: normalizeTrailers(game.trailers ?? null),
         })
         .select("id")
         .single();
@@ -1171,6 +1363,7 @@ export default function GamesManager({
         imdb_rating?: string | null;
         year?: number | null;
         genres?: string | null;
+        trailers?: Trailer[] | null;
       } = {};
       if (overallRating) {
         itemUpdates.imdb_rating = overallRating;
@@ -1180,6 +1373,9 @@ export default function GamesManager({
       }
       if (game.genres) {
         itemUpdates.genres = game.genres;
+      }
+      if (game.trailers && game.trailers.length > 0) {
+        itemUpdates.trailers = normalizeTrailers(game.trailers);
       }
       if (Object.keys(itemUpdates).length > 0) {
         await supabase.from("items").update(itemUpdates).eq("id", itemId);
@@ -1251,6 +1447,7 @@ export default function GamesManager({
         description: itemDraft.description,
         genres: itemDraft.genres,
         external_id: itemDraft.external_id,
+        trailers: itemDraft.trailers,
       };
       const { error: updateItemError } = await supabase
         .from("items")
@@ -1266,6 +1463,7 @@ export default function GamesManager({
               imdb_rating: itemDraft.imdb_rating,
               description: itemDraft.description,
               genres: itemDraft.genres,
+              trailers: itemDraft.trailers,
             })
             .eq("id", itemId);
           if (retryError) {
@@ -1295,9 +1493,10 @@ export default function GamesManager({
                 poster_url: itemDraft.poster_url,
                 year: itemDraft.year,
                 imdb_rating: itemDraft.imdb_rating,
-              genres: itemDraft.genres,
+                genres: itemDraft.genres,
                 description: itemDraft.description,
                 external_id: itemDraft.external_id,
+                trailers: itemDraft.trailers,
               }
             : item.items,
         };
@@ -1324,6 +1523,7 @@ export default function GamesManager({
               genres: itemDraft.genres,
               description: itemDraft.description,
               external_id: itemDraft.external_id,
+              trailers: itemDraft.trailers,
             }
           : prev.items,
       };
@@ -1341,6 +1541,7 @@ export default function GamesManager({
           source?: "igdb" | "rawg";
           released?: string;
           poster?: string;
+          trailers?: Trailer[] | null;
         })
       : null;
 
@@ -1364,6 +1565,9 @@ export default function GamesManager({
       detailData?.description && detailData.description.trim()
         ? detailData.description.trim()
         : selectedView.items.description ?? null;
+    const trailers =
+      normalizeTrailers(detailData?.trailers ?? null) ??
+      normalizeTrailers(selectedView.items.trailers ?? null);
 
     setSelectedViewItemDraft({
       poster_url: poster?.trim() ? poster.trim() : selectedView.items.poster_url ?? null,
@@ -1376,6 +1580,7 @@ export default function GamesManager({
       genres,
       description,
       external_id: game.id,
+      trailers: trailers ?? null,
     });
   };
 
@@ -2471,8 +2676,17 @@ export default function GamesManager({
               isViewed: defaultGameIsViewed ?? undefined,
             }
           }
-          onClose={() => setSelectedGame(null)}
+          onClose={() => {
+            setSelectedGame(null);
+            setTrailerMessage("");
+          }}
           onAdd={(payload) => handleAddGame(selectedGame, payload)}
+          previewAction={{
+            label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
+            onClick: handleWatchSelectedGameTrailer,
+            disabled: isTrailerLoading,
+            icon: playIcon,
+          }}
         >
           <div className={styles.resultContent}>
             <div className={styles.titleRow}>
@@ -2492,6 +2706,7 @@ export default function GamesManager({
             {searchDescriptions[selectedGame.id] ? (
               <ModalDescription text={searchDescriptions[selectedGame.id]} />
             ) : null}
+            {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
           </div>
         </CatalogModal>
       ) : null}
@@ -2505,10 +2720,19 @@ export default function GamesManager({
           size="wide"
           platformOptions={visiblePlatforms}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
-          onClose={() => setSelectedView(null)}
+          onClose={() => {
+            setSelectedView(null);
+            setTrailerMessage("");
+          }}
           readOnly={readOnly}
           submitLabel={readOnly ? "Додати собі у колекцію" : "Зберегти"}
           onReadOnlyPrimaryAction={() => handleAddToOwnCollection(selectedView.items.id)}
+          previewAction={{
+            label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
+            onClick: handleWatchSelectedViewTrailer,
+            disabled: isTrailerLoading,
+            icon: playIcon,
+          }}
           extraActions={
             readOnly ? null : (
               <button
@@ -2583,8 +2807,108 @@ export default function GamesManager({
             ) : (
               <p className={styles.resultPlot}>Опис недоступний.</p>
             )}
+            {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
           </div>
         </CatalogModal>
+      ) : null}
+
+      {trailerModal ? (
+        <div
+          className={styles.trailerOverlay}
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setTrailerModal(null)}
+        >
+          <div
+            className={styles.trailerModal}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {trailerModal.trailers[trailerModal.index] ? (
+              <>
+                <div className={styles.trailerHeader}>
+                  <h3 className={styles.trailerTitle}>
+                    {trailerModal.trailers[trailerModal.index]?.name?.trim()
+                      ? trailerModal.trailers[trailerModal.index]?.name
+                      : trailerModal.baseTitle}
+                  </h3>
+                  <CloseIconButton
+                    className={styles.trailerCloseButton}
+                    onClick={() => setTrailerModal(null)}
+                  />
+                </div>
+                <div className={styles.trailerBody}>
+                  {trailerModal.trailers[trailerModal.index]?.url
+                    .toLowerCase()
+                    .includes(".mp4") ? (
+                    <video
+                      className={styles.trailerFrame}
+                      src={trailerModal.trailers[trailerModal.index]?.url ?? ""}
+                      controls
+                      autoPlay
+                    />
+                  ) : (
+                    <iframe
+                      className={styles.trailerFrame}
+                      src={`${toEmbedUrl(
+                        trailerModal.trailers[trailerModal.index]?.url ?? "",
+                      )}?autoplay=1`}
+                      title={
+                        trailerModal.trailers[trailerModal.index]?.name?.trim()
+                          ? trailerModal.trailers[trailerModal.index]?.name
+                          : trailerModal.baseTitle
+                      }
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                    />
+                  )}
+                  {trailerModal.trailers.length > 1 ? (
+                    <>
+                      <button
+                        type="button"
+                        className={`${styles.trailerNavButton} ${styles.trailerNavLeft}`}
+                        onClick={() =>
+                          setTrailerModal((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  index:
+                                    (prev.index - 1 + prev.trailers.length) %
+                                    prev.trailers.length,
+                                }
+                              : prev,
+                          )
+                        }
+                        aria-label="Попередній трейлер"
+                      >
+                        ←
+                      </button>
+                      <button
+                        type="button"
+                        className={`${styles.trailerNavButton} ${styles.trailerNavRight}`}
+                        onClick={() =>
+                          setTrailerModal((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  index: (prev.index + 1) % prev.trailers.length,
+                                }
+                              : prev,
+                          )
+                        }
+                        aria-label="Наступний трейлер"
+                      >
+                        →
+                      </button>
+                      <div className={styles.trailerCounter}>
+                        {trailerModal.index + 1} / {trailerModal.trailers.length}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
       ) : null}
 
       {recommendItem ? (

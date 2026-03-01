@@ -12,7 +12,6 @@ export async function GET(
       return NextResponse.json(igdbData);
     }
   } catch {
-    // Fallback below.
   }
 
   const apiKey = process.env.RAWG_API_KEY;
@@ -68,6 +67,54 @@ export async function GET(
 
   const raw = data.description_raw || data.description || "";
   const description = raw.replace(/<[^>]*>/g, "");
+  let trailers: Array<{
+    id: string;
+    name: string;
+    site: string;
+    key: string;
+    type: string;
+    official: boolean;
+    language: string;
+    region: string;
+    url: string;
+  }> = [];
+  const moviesUrl = new URL(`https://api.rawg.io/api/games/${id}/movies`);
+  moviesUrl.searchParams.set("key", apiKey);
+  try {
+    const moviesResponse = await fetch(moviesUrl.toString());
+    if (moviesResponse.ok) {
+      const moviesData = (await moviesResponse.json()) as {
+        results?: Array<{
+          id?: number;
+          name?: string;
+          preview?: string;
+          data?: Record<string, string>;
+        }>;
+      };
+      trailers = (moviesData.results ?? [])
+        .map((movie) => {
+          const dataUrl =
+            movie.data?.max ||
+            movie.data?.["480"] ||
+            movie.preview ||
+            "";
+          return {
+            id: movie.id ? String(movie.id) : "",
+            name: movie.name ?? "",
+            site: "RAWG",
+            key: "",
+            type: "Trailer",
+            official: false,
+            language: "",
+            region: "",
+            url: dataUrl,
+          };
+        })
+        .filter((movie) => movie.url);
+    }
+  } catch {
+    trailers = [];
+  }
 
   return NextResponse.json({
     title: data.name ?? "",
@@ -76,5 +123,6 @@ export async function GET(
     released: data.released ?? "",
     poster: data.background_image ?? "",
     description,
+    trailers,
   });
 }

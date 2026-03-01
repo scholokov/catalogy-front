@@ -268,8 +268,9 @@ export default function FilmsManager({
     null,
   );
   const [trailerModal, setTrailerModal] = useState<{
-    url: string;
-    title: string;
+    trailers: Trailer[];
+    index: number;
+    baseTitle: string;
   } | null>(null);
   const [isTrailerLoading, setIsTrailerLoading] = useState(false);
   const [isRefreshPickerOpen, setIsRefreshPickerOpen] = useState(false);
@@ -1185,9 +1186,12 @@ export default function FilmsManager({
       setTrailerMessage("Трейлер недоступний.");
       return false;
     }
+    const safeTrailers = trailers ?? [];
+    const pickedIndex = safeTrailers.indexOf(picked);
     setTrailerModal({
-      url: picked.url,
-      title: picked.name?.trim() ? picked.name : title,
+      trailers: safeTrailers,
+      index: pickedIndex >= 0 ? pickedIndex : 0,
+      baseTitle: title,
     });
     return true;
   };
@@ -2884,22 +2888,79 @@ export default function FilmsManager({
             className={styles.trailerModal}
             onClick={(event) => event.stopPropagation()}
           >
-            <div className={styles.trailerHeader}>
-              <h3 className={styles.trailerTitle}>{trailerModal.title}</h3>
-              <CloseIconButton
-                className={styles.trailerCloseButton}
-                onClick={() => setTrailerModal(null)}
-              />
-            </div>
-            <div className={styles.trailerBody}>
-              <iframe
-                className={styles.trailerFrame}
-                src={`${toEmbedUrl(trailerModal.url)}?autoplay=1`}
-                title={trailerModal.title}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-              />
-            </div>
+            {trailerModal.trailers[trailerModal.index] ? (
+              <>
+                <div className={styles.trailerHeader}>
+                  <h3 className={styles.trailerTitle}>
+                    {trailerModal.trailers[trailerModal.index]?.name?.trim()
+                      ? trailerModal.trailers[trailerModal.index]?.name
+                      : trailerModal.baseTitle}
+                  </h3>
+                  <CloseIconButton
+                    className={styles.trailerCloseButton}
+                    onClick={() => setTrailerModal(null)}
+                  />
+                </div>
+                <div className={styles.trailerBody}>
+                  <iframe
+                    className={styles.trailerFrame}
+                    src={`${toEmbedUrl(
+                      trailerModal.trailers[trailerModal.index]?.url ?? "",
+                    )}?autoplay=1`}
+                    title={
+                      trailerModal.trailers[trailerModal.index]?.name?.trim()
+                        ? trailerModal.trailers[trailerModal.index]?.name
+                        : trailerModal.baseTitle
+                    }
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                  />
+                  {trailerModal.trailers.length > 1 ? (
+                    <>
+                      <button
+                        type="button"
+                        className={`${styles.trailerNavButton} ${styles.trailerNavLeft}`}
+                        onClick={() =>
+                          setTrailerModal((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  index:
+                                    (prev.index - 1 + prev.trailers.length) %
+                                    prev.trailers.length,
+                                }
+                              : prev,
+                          )
+                        }
+                        aria-label="Попередній трейлер"
+                      >
+                        ←
+                      </button>
+                      <button
+                        type="button"
+                        className={`${styles.trailerNavButton} ${styles.trailerNavRight}`}
+                        onClick={() =>
+                          setTrailerModal((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  index: (prev.index + 1) % prev.trailers.length,
+                                }
+                              : prev,
+                          )
+                        }
+                        aria-label="Наступний трейлер"
+                      >
+                        →
+                      </button>
+                      <div className={styles.trailerCounter}>
+                        {trailerModal.index + 1} / {trailerModal.trailers.length}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
           </div>
         </div>
       ) : null}

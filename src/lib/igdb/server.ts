@@ -18,6 +18,12 @@ type IgdbGame = {
   genres?: Array<{ name?: string }>;
 };
 
+type IgdbGameVideo = {
+  id?: number;
+  name?: string;
+  video_id?: string;
+};
+
 type IgdbSearchRow = {
   game?: number | null;
 };
@@ -32,6 +38,18 @@ type IgdbMappedGame = {
   genres: string;
 };
 
+type IgdbTrailer = {
+  id: string;
+  name: string;
+  site: string;
+  key: string;
+  type: string;
+  official: boolean;
+  language: string;
+  region: string;
+  url: string;
+};
+
 type IgdbMappedGameDetail = {
   title: string;
   rating: number | null;
@@ -39,6 +57,7 @@ type IgdbMappedGameDetail = {
   released: string;
   poster: string;
   description: string;
+  trailers?: IgdbTrailer[];
 };
 
 let cachedToken: { value: string; expiresAtMs: number } | null = null;
@@ -212,6 +231,32 @@ limit 1;
   const rows = await requestIgdb<IgdbGame>("games", body);
   const row = rows[0];
   if (!row) return null;
+  const videoBody = `
+fields name,video_id;
+where game = ${numericId};
+limit 10;
+`;
+  let trailers: IgdbTrailer[] | undefined;
+  try {
+    const videos = await requestIgdb<IgdbGameVideo>("game_videos", videoBody);
+    const mapped = videos
+      .filter((video) => video.video_id)
+      .map((video) => ({
+        id: video.id ? String(video.id) : "",
+        name: video.name ?? "",
+        site: "YouTube",
+        key: video.video_id ?? "",
+        type: "Trailer",
+        official: false,
+        language: "",
+        region: "",
+        url: video.video_id ? `https://www.youtube.com/watch?v=${video.video_id}` : "",
+      }));
+    if (mapped.length > 0) {
+      trailers = mapped;
+    }
+  } catch {
+  }
 
   return {
     title: row.name ?? "",
@@ -220,5 +265,6 @@ limit 1;
     released: toReleasedDate(row.first_release_date),
     poster: normalizeCoverUrl(row.cover?.url),
     description: row.summary ?? "",
+    trailers,
   };
 };
