@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Suspense } from "react";
 import AppShell from "@/components/nav/AppShell";
@@ -19,7 +19,6 @@ export const metadata: Metadata = {
   title: "Catalogy",
   description: "Catalogy",
   manifest: "/manifest.webmanifest",
-  themeColor: "#7C3AED",
   icons: {
     icon: "/icon.svg",
     apple: "/icon.svg",
@@ -29,6 +28,11 @@ export const metadata: Metadata = {
     statusBarStyle: "default",
     title: "Catalogy",
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#7C3AED",
+  colorScheme: "dark",
 };
 
 export default function RootLayout({

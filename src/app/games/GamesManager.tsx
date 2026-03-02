@@ -211,7 +211,31 @@ const getDefaultSortDirection = (sortBy: SortBy): SortDirection => {
   return "desc";
 };
 
-const getFiltersRequestKey = (filters: Filters) => JSON.stringify(filters);
+const getFiltersRequestKey = (filters: Filters) =>
+  JSON.stringify({
+    availabilityAll: filters.availabilityAll,
+    query: filters.query,
+    viewAll: filters.viewAll,
+    viewed: filters.viewed,
+    planned: filters.planned,
+    yearRange: [filters.yearRange[0], filters.yearRange[1]],
+    availability: [...filters.availability],
+    genres: filters.genres,
+    externalRatingRange: [
+      filters.externalRatingRange[0],
+      filters.externalRatingRange[1],
+    ],
+    personalRatingRange: [
+      filters.personalRatingRange[0],
+      filters.personalRatingRange[1],
+    ],
+    favoriteAll: filters.favoriteAll,
+    recommendSimilarOnly: filters.recommendSimilarOnly,
+    viewedDateFrom: filters.viewedDateFrom,
+    viewedDateTo: filters.viewedDateTo,
+    sortBy: filters.sortBy,
+    sortDirection: filters.sortDirection,
+  });
 
 const sortGameCollection = (
   items: GameCollectionItem[],
@@ -247,7 +271,25 @@ export default function GamesManager({
   ownerUserId,
   readOnly = false,
 }: GamesManagerProps) {
+  const [lazyDebug, setLazyDebug] = useState<string[]>([]);
+  const [lazyDebugEnabled, setLazyDebugEnabled] = useState(false);
+  const logLazy = useCallback(
+    (label: string, payload?: Record<string, unknown>) => {
+    if (typeof window === "undefined") return;
+      if (!lazyDebugEnabled) return;
+      const message = `${new Date().toISOString()} ${label}${
+        payload ? ` ${JSON.stringify(payload)}` : ""
+      }`;
+      setLazyDebug((prev) => {
+        const next = prev.length > 40 ? prev.slice(-40) : prev;
+        return [...next, message];
+      });
+      console.log("[lazy][games]", message);
+    },
+    [lazyDebugEnabled],
+  );
   const [collection, setCollection] = useState<GameCollectionItem[]>([]);
+  const collectionRef = useRef<GameCollectionItem[]>([]);
   const [appliedFilters, setAppliedFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [pendingFilters, setPendingFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [hasApplied, setHasApplied] = useState(false);
@@ -258,6 +300,7 @@ export default function GamesManager({
   const [message, setMessage] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
+  const totalCountRef = useRef(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -297,10 +340,17 @@ export default function GamesManager({
   );
   const fetchingSearchDescRef = useRef<Set<string>>(new Set());
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const observerFetchInFlightRef = useRef(false);
   const filtersQueryInputRef = useRef<HTMLInputElement | null>(null);
   const skipNextApplyRef = useRef(false);
+  const initialLoadRunRef = useRef(false);
+  const lastAppliedRequestKeyRef = useRef("");
   const loadingPagesRef = useRef<Set<number>>(new Set());
   const activeRequestKeyRef = useRef("");
+  const loadedPagesKeyRef = useRef("");
+  const loadedPagesRef = useRef<Set<number>>(new Set());
+  const nextPageToLoadKeyRef = useRef("");
+  const nextPageToLoadRef = useRef(1);
   const yearBoundsRef = useRef<[number, number]>([MIN_YEAR, MAX_YEAR]);
   const viewModeStorageKeyRef = useRef("games:view-mode:v2:guest");
   const isViewModeStorageReadyRef = useRef(false);
@@ -347,6 +397,33 @@ export default function GamesManager({
     applyPreferences();
     return undefined;
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const updateDebug = () => {
+      setLazyDebugEnabled(window.localStorage.getItem("debug:lazy") === "1");
+    };
+    updateDebug();
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === "debug:lazy") {
+        updateDebug();
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
+  useEffect(() => {
+    logLazy("enabled");
+  }, [logLazy]);
+
+  useEffect(() => {
+    collectionRef.current = collection;
+  }, [collection]);
+
+  useEffect(() => {
+    totalCountRef.current = totalCount;
+  }, [totalCount]);
 
   useEffect(() => {
     setSelectedViewItemDraft(null);
@@ -474,12 +551,28 @@ export default function GamesManager({
 
   const fetchPage = useCallback(async (pageIndex: number, filters: Filters) => {
     const requestKey = getFiltersRequestKey(filters);
+    if (pageIndex === 0) {
+      loadedPagesKeyRef.current = requestKey;
+      loadedPagesRef.current = new Set();
+      nextPageToLoadKeyRef.current = requestKey;
+      nextPageToLoadRef.current = 1;
+      activeRequestKeyRef.current = requestKey;
+    }
+    if (
+      pageIndex > 0 &&
+      loadedPagesKeyRef.current === requestKey &&
+      loadedPagesRef.current.has(pageIndex)
+    ) {
+      logLazy("skip:page-already-loaded", { pageIndex, requestKey });
+      return false;
+    }
 
     const {
       data: { user },
     } = await supabase.auth.getUser();
 
     if (!user) {
+      logLazy("abort:no-user", { pageIndex });
       setCollection([]);
       setMessage("Потрібна авторизація.");
       setRecommendedItemIds(new Set());
@@ -492,6 +585,7 @@ export default function GamesManager({
     }
 
     if (readOnly && ownerUserId && friendAccessState !== "allowed") {
+      logLazy("abort:friend-access", { pageIndex, friendAccessState });
       setCollection([]);
       setHasMore(false);
       setTotalCount(0);
@@ -506,6 +600,7 @@ export default function GamesManager({
     const effectiveViewed = filters.viewAll ? true : filters.viewed;
     const effectivePlanned = filters.viewAll ? true : filters.planned;
     if (!effectiveViewed && !effectivePlanned) {
+      logLazy("abort:no-filters", { pageIndex });
       if (pageIndex === 0) {
         setCollection([]);
         setHasMore(false);
@@ -516,18 +611,20 @@ export default function GamesManager({
       return false;
     }
 
-    if (loadingPagesRef.current.has(pageIndex)) {
+    if (pageIndex > 0 && loadingPagesRef.current.has(pageIndex)) {
+      logLazy("skip:already-loading", { pageIndex });
       return false;
     }
     loadingPagesRef.current.add(pageIndex);
     const needsClientSort = filters.sortBy === "title" || filters.sortBy === "year";
     if (needsClientSort && pageIndex > 0) {
+      logLazy("skip:client-sort", { pageIndex });
       loadingPagesRef.current.delete(pageIndex);
       return false;
     }
 
     if (pageIndex === 0) {
-      activeRequestKeyRef.current = requestKey;
+      logLazy("start:first-page", { requestKey });
     }
 
     if (pageIndex === 0) {
@@ -536,6 +633,7 @@ export default function GamesManager({
     } else {
       setIsLoadingMore(true);
     }
+    logLazy("start:fetch", { pageIndex });
 
     let query = supabase
       .from("user_views")
@@ -714,16 +812,21 @@ export default function GamesManager({
     }
 
     if (requestKey !== activeRequestKeyRef.current) {
+      logLazy("abort:stale-request", { pageIndex, requestKey });
+      if (pageIndex > 0) {
+        setIsLoadingMore(false);
+      }
       loadingPagesRef.current.delete(pageIndex);
       return false;
     }
 
     if (error) {
+      logLazy("error", { pageIndex, message: error.message });
       if (pageIndex === 0) {
         setMessage("Не вдалося завантажити колекцію.");
         setCollection([]);
-        setHasMore(false);
       }
+      setHasMore(false);
       setIsLoading(false);
       setIsLoadingMore(false);
       loadingPagesRef.current.delete(pageIndex);
@@ -732,22 +835,49 @@ export default function GamesManager({
       const nextCollection = needsClientSort
         ? sortGameCollection(data ?? [], filters.sortBy, filters.sortDirection)
         : ((data as unknown as GameCollectionItem[]) ?? []);
-      setCollection((prev) => {
-        if (pageIndex === 0) {
-          return nextCollection;
-        }
-        const existingIds = new Set(prev.map((item) => item.id));
-        const merged = [...prev];
-        nextCollection.forEach((item) => {
-          if (!existingIds.has(item.id)) {
-            merged.push(item);
-          }
-        });
-        return merged;
-      });
-      const nextHasMore = nextCollection.length === PAGE_SIZE;
-      setHasMore(needsClientSort ? false : nextHasMore);
+      const previousCollection = collectionRef.current;
+      const mergedCollection =
+        pageIndex === 0
+          ? nextCollection
+          : (() => {
+              const existingIds = new Set(previousCollection.map((item) => item.id));
+              const merged = [...previousCollection];
+              nextCollection.forEach((item) => {
+                if (!existingIds.has(item.id)) {
+                  merged.push(item);
+                }
+              });
+              return merged;
+            })();
+      const hasNewItems =
+        pageIndex === 0
+          ? nextCollection.length > 0
+          : mergedCollection.length > previousCollection.length;
+      const mergedCount = mergedCollection.length;
+      collectionRef.current = mergedCollection;
+      setCollection(mergedCollection);
+      const hasClientFilters = Boolean(filters.genres.trim());
+      const hasTotalCount = totalCountRef.current > 0 && !hasClientFilters;
+      const nextHasMore = needsClientSort
+        ? false
+        : hasTotalCount
+          ? hasNewItems && mergedCount < totalCountRef.current
+          : hasNewItems && nextCollection.length === PAGE_SIZE;
+      setHasMore(nextHasMore);
       setPage(pageIndex);
+      if (nextPageToLoadKeyRef.current === requestKey) {
+        nextPageToLoadRef.current = pageIndex + 1;
+      }
+      if (loadedPagesKeyRef.current === requestKey) {
+        loadedPagesRef.current.add(pageIndex);
+      }
+      logLazy("done", {
+        pageIndex,
+        received: nextCollection.length,
+        mergedCount,
+        totalCount: totalCountRef.current,
+        hasMore: nextHasMore,
+      });
       if (pageIndex === 0 && nextCollection.length === 0) {
         const hasActiveFilters = Boolean(
           trimmedQuery ||
@@ -777,7 +907,7 @@ export default function GamesManager({
       loadingPagesRef.current.delete(pageIndex);
       return nextHasMore;
     }
-  }, [friendAccessState, loadRecommendations, ownerUserId, readOnly, yearBounds]);
+  }, [friendAccessState, loadRecommendations, logLazy, ownerUserId, readOnly, yearBounds]);
 
   useEffect(() => {
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
@@ -786,21 +916,22 @@ export default function GamesManager({
       skipNextApplyRef.current = false;
       return;
     }
+    const requestKey = getFiltersRequestKey(appliedFilters);
+    if (lastAppliedRequestKeyRef.current === requestKey) return;
+    lastAppliedRequestKeyRef.current = requestKey;
     void fetchPage(0, appliedFilters);
   }, [appliedFilters, fetchPage, friendAccessState, hasApplied, ownerUserId, readOnly]);
 
   useEffect(() => {
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
+    if (initialLoadRunRef.current) return;
     if (hasApplied) return;
+    initialLoadRunRef.current = true;
     skipNextApplyRef.current = true;
     setAppliedFilters(DEFAULT_FILTERS);
     setHasApplied(true);
-    void (async () => {
-      const canLoadMore = await fetchPage(0, DEFAULT_FILTERS);
-      if (canLoadMore) {
-        await fetchPage(1, DEFAULT_FILTERS);
-      }
-    })();
+    lastAppliedRequestKeyRef.current = getFiltersRequestKey(DEFAULT_FILTERS);
+    void fetchPage(0, DEFAULT_FILTERS);
   }, [fetchPage, friendAccessState, hasApplied, ownerUserId, readOnly]);
 
   const loadYearBounds = useCallback(async () => {
@@ -862,7 +993,20 @@ export default function GamesManager({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry.isIntersecting) return;
-        void fetchPage(page + 1, appliedFilters);
+        if (observerFetchInFlightRef.current) return;
+        logLazy("observe:trigger", { page, hasMore, isLoadingMore });
+        const nextPage =
+          nextPageToLoadKeyRef.current === getFiltersRequestKey(appliedFilters)
+            ? nextPageToLoadRef.current
+            : page + 1;
+        observerFetchInFlightRef.current = true;
+        void (async () => {
+          try {
+            await fetchPage(nextPage, appliedFilters);
+          } finally {
+            observerFetchInFlightRef.current = false;
+          }
+        })();
       },
       {
         root: null,
@@ -880,6 +1024,7 @@ export default function GamesManager({
     hasMore,
     isLoading,
     isLoadingMore,
+    logLazy,
     ownerUserId,
     page,
     readOnly,
@@ -2169,7 +2314,15 @@ export default function GamesManager({
           ))}
         </div>
       ) : null}
-      {hasApplied && hasMore && isFriendAccessAllowed ? <div ref={loadMoreRef} /> : null}
+      {hasApplied && hasMore && isFriendAccessAllowed ? (
+        <div ref={loadMoreRef} className={styles.loadMoreTrigger} />
+      ) : null}
+      {lazyDebugEnabled ? (
+        <div className={styles.lazyDebugBadge}>Lazy debug увімкнено</div>
+      ) : null}
+      {lazyDebugEnabled ? (
+        <pre className={styles.lazyDebugPanel}>{lazyDebug.join("\n")}</pre>
+      ) : null}
       {isLoading ? (
         <div className={styles.loadingOverlay} aria-live="polite">
           <span className={styles.loadingOverlayText}>Завантаження...</span>
