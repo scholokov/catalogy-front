@@ -20,8 +20,14 @@ export const metadata: Metadata = {
   description: "Catalogy",
   manifest: "/manifest.webmanifest",
   icons: {
-    icon: "/icon.svg",
-    apple: "/icon.svg",
+    icon: [
+      { url: "/images/icon_192x192.png", sizes: "192x192", type: "image/png" },
+      { url: "/images/icon_512x512.png", sizes: "512x512", type: "image/png" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    apple: [
+      { url: "/images/icon_192x192.png", sizes: "192x192", type: "image/png" },
+    ],
   },
   appleWebApp: {
     capable: true,
