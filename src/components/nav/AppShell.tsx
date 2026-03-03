@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode, useEffect, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
@@ -143,7 +144,15 @@ export default function AppShell({ children }: AppShellProps) {
     <div className="appShell">
       <nav className="appSidebar">
         <div className="navHeader">
-          <div className="navTitle">Catalogy</div>
+          <Link className="navLogo" href="/" aria-label="Catalogy">
+            <Image
+              src="/images/logo_small.png"
+              alt="Catalogy"
+              width={36}
+              height={36}
+              priority
+            />
+          </Link>
           <button
             type="button"
             className="navToggle"

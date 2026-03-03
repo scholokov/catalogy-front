@@ -143,12 +143,14 @@ body {
   z-index: 10;
 }
 
-.navTitle {
-  font-size: 12px;
-  font-weight: var(--font-weight-medium);
-  letter-spacing: var(--letter-spacing-wide);
-  text-align: center;
-  color: var(--color-text-muted);
+.navLogo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: transparent;
 }
 
 .navHeader {
