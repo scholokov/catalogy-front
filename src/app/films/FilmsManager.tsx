@@ -3167,7 +3167,7 @@ export default function FilmsManager({
           key={selectedFilm.id}
           title={selectedFilm.title}
           posterUrl={selectedFilm.poster}
-          imageUrls={selectedFilm.imageUrls}
+          size="wide"
           onClose={() => {
             setSelectedFilm(null);
             setTrailerMessage("");
@@ -3224,11 +3224,7 @@ export default function FilmsManager({
           posterUrl={
             (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined
           }
-          imageUrls={
-            (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url)
-              ? [selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url ?? ""]
-              : []
-          }
+          size="wide"
           onClose={() => {
             setSelectedView(null);
             setTrailerMessage("");

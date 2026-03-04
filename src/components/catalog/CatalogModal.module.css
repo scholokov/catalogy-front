@@ -610,8 +610,8 @@
   .modalWide .posterPlaceholder {
     width: 100%;
     height: auto;
-    max-height: 440px;
-    aspect-ratio: 16 / 9;
+    aspect-ratio: auto;
+    padding-bottom: 12px;
   }
 
   .previewActionButton {

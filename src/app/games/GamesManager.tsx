@@ -2386,10 +2386,10 @@ export default function GamesManager({
                   <Image
                     className={styles.poster}
                     src={item.items.poster_url}
-                    alt={`Обкладинка ${item.items.title}`}
-                    width={324}
-                    height={180}
-                    sizes="(max-width: 600px) 224px, 324px"
+                    alt={`Постер ${item.items.title}`}
+                    width={180}
+                    height={270}
+                    sizes="(max-width: 600px) 100vw, 120px"
                     loading="lazy"
                     unoptimized
                   />
