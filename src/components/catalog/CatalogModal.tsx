@@ -132,8 +132,10 @@ export default function CatalogModal({
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isPlatformsOpen, setIsPlatformsOpen] = useState(false);
   const [isAvailabilityOpen, setIsAvailabilityOpen] = useState(false);
+  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const platformsRef = useRef<HTMLDivElement | null>(null);
   const availabilityRef = useRef<HTMLDivElement | null>(null);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!isEditMode) {
@@ -211,7 +213,7 @@ export default function CatalogModal({
   }, []);
 
   useEffect(() => {
-    if (!isPlatformsOpen && !isAvailabilityOpen) return;
+    if (!isPlatformsOpen && !isAvailabilityOpen && !isMoreMenuOpen) return;
     const handleOutsideClick = (event: MouseEvent) => {
       if (
         platformsRef.current &&
@@ -225,10 +227,16 @@ export default function CatalogModal({
       ) {
         setIsAvailabilityOpen(false);
       }
+      if (
+        moreMenuRef.current &&
+        !moreMenuRef.current.contains(event.target as Node)
+      ) {
+        setIsMoreMenuOpen(false);
+      }
     };
     window.addEventListener("mousedown", handleOutsideClick);
     return () => window.removeEventListener("mousedown", handleOutsideClick);
-  }, [isAvailabilityOpen, isPlatformsOpen]);
+  }, [isAvailabilityOpen, isPlatformsOpen, isMoreMenuOpen]);
 
   useEffect(() => {
     setActiveImageIndex(0);
@@ -465,64 +473,88 @@ export default function CatalogModal({
         <div className={styles.header}>
           <h2 className={styles.title}>{title}</h2>
           <div className={styles.headerActions}>
-            {onDelete ? (
-              <>
-                {onRefresh ? (
-                  <button
-                    type="button"
-                    className={`${styles.iconButton} ${styles.deleteButton}`}
-                    onClick={handleRefresh}
-                    aria-label="Оновити дані"
-                    disabled={isSaving || isDeleting || isRefreshing}
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      viewBox="0 -960 960 960"
-                      width="20"
-                      height="20"
-                      aria-hidden="true"
-                    >
-                      <path d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-110h80v280H520v-80h168q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q77 0 139-44t87-116h84q-28 106-114 173t-196 67Z" />
-                    </svg>
-                  </button>
-                ) : null}
+            {onDelete || onRefresh ? (
+              <div className={styles.headerMenu} ref={moreMenuRef}>
                 <button
                   type="button"
-                  className={`${styles.iconButton} ${styles.deleteButton}`}
-                  onClick={handleDelete}
-                  aria-label="Видалити"
+                  className={`${styles.iconButton} btnSecondary`}
+                  onClick={() => setIsMoreMenuOpen((prev) => !prev)}
+                  aria-label="Більше дій"
+                  aria-expanded={isMoreMenuOpen}
                   disabled={isSaving || isDeleting || isRefreshing}
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
+                    height="20"
                     viewBox="0 -960 960 960"
                     width="20"
-                    height="20"
                     aria-hidden="true"
                   >
-                    <path d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z" />
+                    <path
+                      fill="currentColor"
+                      d="M240-400q-33 0-56.5-23.5T160-480q0-33 23.5-56.5T240-560q33 0 56.5 23.5T320-480q0 33-23.5 56.5T240-400Zm240 0q-33 0-56.5-23.5T400-480q0-33 23.5-56.5T480-560q33 0 56.5 23.5T560-480q0 33-23.5 56.5T480-400Zm240 0q-33 0-56.5-23.5T640-480q0-33 23.5-56.5T720-560q33 0 56.5 23.5T800-480q0 33-23.5 56.5T720-400Z"
+                    />
                   </svg>
                 </button>
-              </>
-            ) : null}
-            {!onDelete && onRefresh ? (
-              <button
-                type="button"
-                className={`${styles.iconButton} ${styles.deleteButton}`}
-                onClick={handleRefresh}
-                aria-label="Оновити дані"
-                disabled={isSaving || isDeleting || isRefreshing}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 -960 960 960"
-                  width="20"
-                  height="20"
-                  aria-hidden="true"
-                >
-                  <path d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-110h80v280H520v-80h168q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q77 0 139-44t87-116h84q-28 106-114 173t-196 67Z" />
-                </svg>
-              </button>
+                {isMoreMenuOpen ? (
+                  <div className={styles.contextMenu} role="menu">
+                    {onRefresh ? (
+                      <button
+                        type="button"
+                        className={styles.contextMenuItem}
+                        onClick={() => {
+                          setIsMoreMenuOpen(false);
+                          void handleRefresh();
+                        }}
+                        role="menuitem"
+                        disabled={isSaving || isDeleting || isRefreshing}
+                      >
+                        <span className={styles.contextMenuIcon} aria-hidden="true">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 -960 960 960"
+                            width="18"
+                            height="18"
+                          >
+                            <path
+                              fill="currentColor"
+                              d="M480-160q-134 0-227-93t-93-227q0-134 93-227t227-93q69 0 132 28.5T720-690v-110h80v280H520v-80h168q-32-56-87.5-88T480-720q-100 0-170 70t-70 170q0 100 70 170t170 70q77 0 139-44t87-116h84q-28 106-114 173t-196 67Z"
+                            />
+                          </svg>
+                        </span>
+                        <span>Оновити</span>
+                      </button>
+                    ) : null}
+                    {onDelete ? (
+                      <button
+                        type="button"
+                        className={`${styles.contextMenuItem} ${styles.contextMenuDanger}`}
+                        onClick={() => {
+                          setIsMoreMenuOpen(false);
+                          void handleDelete();
+                        }}
+                        role="menuitem"
+                        disabled={isSaving || isDeleting || isRefreshing}
+                      >
+                        <span className={styles.contextMenuIcon} aria-hidden="true">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 -960 960 960"
+                            width="18"
+                            height="18"
+                          >
+                            <path
+                              fill="currentColor"
+                              d="M280-120q-33 0-56.5-23.5T200-200v-520h-40v-80h200v-40h240v40h200v80h-40v520q0 33-23.5 56.5T680-120H280Zm400-600H280v520h400v-520ZM360-280h80v-360h-80v360Zm160 0h80v-360h-80v360ZM280-720v520-520Z"
+                            />
+                          </svg>
+                        </span>
+                        <span>Видалити</span>
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             ) : null}
             <CloseIconButton
               className={`${styles.iconButton} btnSecondary`}

@@ -84,6 +84,77 @@
   margin-top: -2px;
 }
 
+.headerMenu {
+  position: relative;
+}
+
+.contextMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 160px;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-elevated);
+  box-shadow: var(--shadow-card);
+  display: grid;
+  gap: 4px;
+  z-index: 5;
+}
+
+.contextMenuItem {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: left;
+  padding: 10px 12px;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.contextMenuItem:hover {
+  background: var(--color-surface-subtle);
+}
+
+.contextMenuItem:hover .contextMenuIcon {
+  color: var(--color-text-primary);
+}
+
+.contextMenuIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  transition: color 0.2s ease;
+}
+
+.contextMenuItem:disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+.contextMenuItem:disabled .contextMenuIcon {
+  color: var(--color-text-muted);
+}
+
+.contextMenuDanger {
+  color: var(--color-danger);
+}
+
+.contextMenuDanger .contextMenuIcon {
+  color: var(--color-danger);
+}
+
+.contextMenuDanger:hover .contextMenuIcon {
+  color: var(--color-danger);
+}
+
 .title {
   margin: 0;
   font-size: var(--font-size-3xl);
