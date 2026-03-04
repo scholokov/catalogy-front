@@ -408,6 +408,20 @@ export default function GamesManager({
       if (event.key === "debug:lazy") {
         updateDebug();
       }
+      if (event.key === DISPLAY_PREFERENCES_STORAGE_KEY) {
+        const prefs = readDisplayPreferences();
+        setShowAvailability(prefs.showGameAvailability);
+        setVisiblePlatforms(prefs.visibleGamePlatforms);
+        setDefaultGamePlatform(prefs.defaultGamePlatform);
+        setDefaultGameAvailability(prefs.defaultGameAvailability);
+        setDefaultGameIsViewed(prefs.defaultGameIsViewed);
+      }
+      if (event.key === viewModeStorageKeyRef.current) {
+        const rawValue = event.newValue;
+        if (rawValue && GAMES_VIEW_MODES.includes(rawValue as GamesViewMode)) {
+          setViewMode(rawValue as GamesViewMode);
+        }
+      }
     };
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
@@ -2866,6 +2880,7 @@ export default function GamesManager({
 
       {selectedView ? (
         <CatalogModal
+          key={selectedView.id}
           title={selectedView.items.title}
           posterUrl={
             (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined

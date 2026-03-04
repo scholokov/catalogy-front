@@ -22,7 +22,7 @@ export type DisplayPreferences = {
   defaultGameIsViewed: boolean | null;
 };
 
-const STORAGE_KEY = "catalogy:display-preferences:v1";
+export const DISPLAY_PREFERENCES_STORAGE_KEY = "catalogy:display-preferences:v1";
 
 export const getDefaultDisplayPreferences = (): DisplayPreferences => ({
   showFilmAvailability: true,
@@ -40,7 +40,7 @@ export const readDisplayPreferences = (): DisplayPreferences => {
     return getDefaultDisplayPreferences();
   }
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(DISPLAY_PREFERENCES_STORAGE_KEY);
     if (!raw) return getDefaultDisplayPreferences();
     const parsed = JSON.parse(raw) as Partial<DisplayPreferences>;
     const visible = (parsed.visibleGamePlatforms ?? []).filter((platform) =>
@@ -80,5 +80,12 @@ export const readDisplayPreferences = (): DisplayPreferences => {
 
 export const writeDisplayPreferences = (prefs: DisplayPreferences) => {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+  // console.log("[prefs] write", prefs);
+  window.localStorage.setItem(DISPLAY_PREFERENCES_STORAGE_KEY, JSON.stringify(prefs));
+  window.dispatchEvent(
+    new StorageEvent("storage", {
+      key: DISPLAY_PREFERENCES_STORAGE_KEY,
+      newValue: JSON.stringify(prefs),
+    }),
+  );
 };

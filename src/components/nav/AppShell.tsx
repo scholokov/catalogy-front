@@ -8,6 +8,8 @@ import { supabase } from "@/lib/supabase/client";
 import LogoutButton from "@/components/nav/LogoutButton";
 import HomeUnauthPage from "@/app/HomeUnauthPage";
 
+import { syncDisplayPreferences } from "@/lib/settings/syncSettings";
+
 type AppShellProps = {
   children: ReactNode;
 };
@@ -30,6 +32,9 @@ export default function AppShell({ children }: AppShellProps) {
     supabase.auth.getSession().then(({ data }) => {
       if (isMounted) {
         setHasSession(Boolean(data.session));
+        if (data.session?.user) {
+          void syncDisplayPreferences(data.session.user.id);
+        }
       }
     });
 
@@ -38,6 +43,9 @@ export default function AppShell({ children }: AppShellProps) {
         setHasSession(Boolean(nextSession));
         if (!nextSession) {
           setFriendsPendingCount(0);
+        } else {
+          // Sync settings on login
+          void syncDisplayPreferences(nextSession.user.id);
         }
       },
     );

@@ -613,4 +613,12 @@
     max-height: 440px;
     aspect-ratio: 16 / 9;
   }
+
+  .previewActionButton {
+    margin-bottom: 24px;
+  }
+
+  .formBlock {
+    padding-top: 24px;
+  }
 }

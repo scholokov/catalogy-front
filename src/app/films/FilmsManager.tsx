@@ -16,7 +16,10 @@ import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
 import CloseIconButton from "@/components/ui/CloseIconButton";
 import { supabase } from "@/lib/supabase/client";
-import { readDisplayPreferences } from "@/lib/settings/displayPreferences";
+import {
+  readDisplayPreferences,
+  DISPLAY_PREFERENCES_STORAGE_KEY,
+} from "@/lib/settings/displayPreferences";
 import { getDisplayName } from "@/lib/users/displayName";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
@@ -390,6 +393,18 @@ export default function FilmsManager({
     const handleStorage = (event: StorageEvent) => {
       if (event.key === "debug:lazy") {
         updateDebug();
+      }
+      if (event.key === DISPLAY_PREFERENCES_STORAGE_KEY) {
+        const prefs = readDisplayPreferences();
+        setShowAvailability(prefs.showFilmAvailability);
+        setDefaultFilmAvailability(prefs.defaultFilmAvailability);
+        setDefaultFilmIsViewed(prefs.defaultFilmIsViewed);
+      }
+      if (event.key === viewModeStorageKeyRef.current) {
+        const rawValue = event.newValue;
+        if (rawValue && FILMS_VIEW_MODES.includes(rawValue as FilmsViewMode)) {
+          setViewMode(rawValue as FilmsViewMode);
+        }
       }
     };
     window.addEventListener("storage", handleStorage);
@@ -2864,6 +2879,7 @@ export default function FilmsManager({
 
       {selectedFilm ? (
         <CatalogModal
+          key={selectedFilm.id}
           title={selectedFilm.title}
           posterUrl={selectedFilm.poster}
           imageUrls={selectedFilm.imageUrls}
@@ -2918,6 +2934,7 @@ export default function FilmsManager({
 
       {selectedView ? (
         <CatalogModal
+          key={selectedView.id}
           title={selectedView.items.title}
           posterUrl={
             (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined
