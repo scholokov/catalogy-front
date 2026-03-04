@@ -243,6 +243,10 @@ body {
   color: var(--color-text-primary);
 }
 
+.navLinkActive {
+  color: var(--color-accent);
+}
+
 .navLogout {
   position: relative;
   margin-top: auto;

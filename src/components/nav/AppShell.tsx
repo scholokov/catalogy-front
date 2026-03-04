@@ -26,6 +26,13 @@ export default function AppShell({ children }: AppShellProps) {
   const router = useRouter();
   const isAuthRoute = pathname.startsWith("/auth");
 
+  const isCurrentPath = (path: string) => {
+    if (path === "/") {
+      return pathname === "/";
+    }
+    return pathname.startsWith(path);
+  };
+
   useEffect(() => {
     let isMounted = true;
 
@@ -179,7 +186,11 @@ export default function AppShell({ children }: AppShellProps) {
           </button>
         </div>
         <div className={`navLinks ${isNavOpen ? "navLinksOpen" : ""}`}>
-          <Link className="navLink" href="/" aria-label="Home">
+          <Link
+            className={`navLink ${isCurrentPath("/") ? "navLinkActive" : ""}`}
+            href="/"
+            aria-label="Home"
+          >
             <svg
               className="navIcon"
               xmlns="http://www.w3.org/2000/svg"
@@ -190,7 +201,11 @@ export default function AppShell({ children }: AppShellProps) {
             </svg>
             <span className="navLabel">Home</span>
           </Link>
-          <Link className="navLink" href="/games" aria-label="Games">
+          <Link
+            className={`navLink ${isCurrentPath("/games") ? "navLinkActive" : ""}`}
+            href="/games"
+            aria-label="Games"
+          >
             <svg
               className="navIcon"
               xmlns="http://www.w3.org/2000/svg"
@@ -201,7 +216,11 @@ export default function AppShell({ children }: AppShellProps) {
             </svg>
             <span className="navLabel">Games</span>
           </Link>
-          <Link className="navLink" href="/films" aria-label="Films">
+          <Link
+            className={`navLink ${isCurrentPath("/films") ? "navLinkActive" : ""}`}
+            href="/films"
+            aria-label="Films"
+          >
             <svg
               className="navIcon"
               xmlns="http://www.w3.org/2000/svg"
@@ -212,7 +231,11 @@ export default function AppShell({ children }: AppShellProps) {
             </svg>
             <span className="navLabel">Films</span>
           </Link>
-          <Link className="navLink" href="/friends" aria-label="Friends">
+          <Link
+            className={`navLink ${isCurrentPath("/friends") ? "navLinkActive" : ""}`}
+            href="/friends"
+            aria-label="Friends"
+          >
             <svg
               className="navIcon"
               xmlns="http://www.w3.org/2000/svg"
@@ -226,7 +249,11 @@ export default function AppShell({ children }: AppShellProps) {
               <span className="navBadge">{friendsPendingCount}</span>
             ) : null}
           </Link>
-          <Link className="navLink" href="/settings" aria-label="Settings">
+          <Link
+            className={`navLink ${isCurrentPath("/settings") ? "navLinkActive" : ""}`}
+            href="/settings"
+            aria-label="Settings"
+          >
             <svg
               className="navIcon"
               xmlns="http://www.w3.org/2000/svg"

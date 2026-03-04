@@ -19,6 +19,7 @@ import { supabase } from "@/lib/supabase/client";
 import {
   DEFAULT_GAME_PLATFORM_OPTIONS,
   readDisplayPreferences,
+  DISPLAY_PREFERENCES_STORAGE_KEY,
 } from "@/lib/settings/displayPreferences";
 import { getDisplayName } from "@/lib/users/displayName";
 import styles from "@/components/catalog/CatalogSearch.module.css";
