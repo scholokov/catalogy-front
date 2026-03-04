@@ -37,6 +37,73 @@
   flex-wrap: wrap;
 }
 
+.sortMenu {
+  position: relative;
+}
+
+.sortTooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--control-border);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  white-space: nowrap;
+  box-shadow: var(--shadow-card);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 35;
+}
+
+.sortMenu:hover .sortTooltip,
+.sortMenu:focus-within .sortTooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.sortMenu.sortMenuOpen .sortTooltip,
+.sortMenu.sortMenuOpen:hover .sortTooltip,
+.sortMenu.sortMenuOpen:focus-within .sortTooltip {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.sortIconButton {
+  width: 44px;
+  padding: 0;
+}
+
+.sortPopover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--control-border);
+  background: var(--color-surface-elevated);
+  box-shadow: var(--shadow-card);
+  display: none;
+  gap: 8px;
+  z-index: 30;
+}
+
+.sortRow {
+  display: grid;
+  grid-template-columns: 160px 44px;
+  align-items: end;
+  gap: 10px;
+}
+
+.sortMenuOpen .sortPopover {
+  display: grid;
+}
+
 .sortField {
   display: grid;
   gap: 4px;
@@ -44,7 +111,9 @@
 }
 
 .sortDirectionButton {
-  margin-left: -20px;
+  margin-left: 0;
+  width: 44px;
+  padding: 0;
 }
 
 .sortLabel {
@@ -59,7 +128,7 @@
   border: 1px solid var(--control-border);
   background-color: var(--control-bg);
   color: var(--control-text);
-  padding: 0 14px 10 10px;
+  padding: 0 14px 0 10px;
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
@@ -880,6 +949,14 @@
 }
 
 @media (max-width: 779px) {
+  .sortPopover {
+    display: none !important;
+  }
+
+  .sortTooltip {
+    display: none;
+  }
+
   .filtersInput {
     font-size: 16px;
   }

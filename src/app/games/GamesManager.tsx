@@ -117,6 +117,8 @@ type Filters = {
   viewedDateTo: string;
   sortBy: SortBy;
   sortDirection: SortDirection;
+  sortBySecondary: SortBy;
+  sortDirectionSecondary: SortDirection;
 };
 
 type SortBy = "created_at" | "title" | "rating" | "year";
@@ -164,6 +166,8 @@ const DEFAULT_FILTERS: Filters = {
   viewedDateTo: "",
   sortBy: "created_at",
   sortDirection: "desc",
+  sortBySecondary: "title",
+  sortDirectionSecondary: "asc",
 };
 
 const clampRange = (range: [number, number], bounds: [number, number]) => {
@@ -236,29 +240,65 @@ const getFiltersRequestKey = (filters: Filters) =>
     viewedDateTo: filters.viewedDateTo,
     sortBy: filters.sortBy,
     sortDirection: filters.sortDirection,
+    sortBySecondary: filters.sortBySecondary,
+    sortDirectionSecondary: filters.sortDirectionSecondary,
   });
+
+const compareGamesByField = (
+  left: GameCollectionItem,
+  right: GameCollectionItem,
+  sortBy: SortBy,
+  sortDirection: SortDirection,
+) => {
+  const direction = sortDirection === "asc" ? 1 : -1;
+  if (sortBy === "title") {
+    return (
+      left.items.title.localeCompare(right.items.title, "uk", {
+        sensitivity: "base",
+      }) * direction
+    );
+  }
+  if (sortBy === "year") {
+    const leftYear = left.items.year ?? null;
+    const rightYear = right.items.year ?? null;
+    if (leftYear === null && rightYear !== null) return 1;
+    if (leftYear !== null && rightYear === null) return -1;
+    if (leftYear !== null && rightYear !== null && leftYear !== rightYear) {
+      return (leftYear - rightYear) * direction;
+    }
+    return 0;
+  }
+  if (sortBy === "rating") {
+    const leftRating = left.rating ?? null;
+    const rightRating = right.rating ?? null;
+    if (leftRating === null && rightRating !== null) return 1;
+    if (leftRating !== null && rightRating === null) return -1;
+    if (leftRating !== null && rightRating !== null && leftRating !== rightRating) {
+      return (leftRating - rightRating) * direction;
+    }
+    return 0;
+  }
+  const createdDiff = Date.parse(left.created_at) - Date.parse(right.created_at);
+  if (createdDiff !== 0) return createdDiff * direction;
+  return 0;
+};
 
 const sortGameCollection = (
   items: GameCollectionItem[],
   sortBy: SortBy,
   sortDirection: SortDirection,
+  sortBySecondary: SortBy,
+  sortDirectionSecondary: SortDirection,
 ) => {
   const sorted = [...items];
-  const dir = sortDirection === "asc" ? 1 : -1;
+  const sortSequence: Array<[SortBy, SortDirection]> = [[sortBy, sortDirection]];
+  if (sortBySecondary !== sortBy) {
+    sortSequence.push([sortBySecondary, sortDirectionSecondary]);
+  }
   sorted.sort((left, right) => {
-    if (sortBy === "title") {
-      const cmp = left.items.title.localeCompare(right.items.title, "uk", {
-        sensitivity: "base",
-      });
-      if (cmp !== 0) return cmp * dir;
-    } else if (sortBy === "year") {
-      const leftYear = left.items.year ?? null;
-      const rightYear = right.items.year ?? null;
-      if (leftYear === null && rightYear !== null) return 1;
-      if (leftYear !== null && rightYear === null) return -1;
-      if (leftYear !== null && rightYear !== null && leftYear !== rightYear) {
-        return (leftYear - rightYear) * dir;
-      }
+    for (const [field, direction] of sortSequence) {
+      const cmp = compareGamesByField(left, right, field, direction);
+      if (cmp !== 0) return cmp;
     }
     const createdDiff = Date.parse(right.created_at) - Date.parse(left.created_at);
     if (createdDiff !== 0) return createdDiff;
@@ -308,6 +348,14 @@ export default function GamesManager({
   const [page, setPage] = useState(0);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [isSortPopoverOpen, setIsSortPopoverOpen] = useState(false);
+  const [isSortModalOpen, setIsSortModalOpen] = useState(false);
+  const [sortModalState, setSortModalState] = useState({
+    sortBy: DEFAULT_FILTERS.sortBy,
+    sortDirection: DEFAULT_FILTERS.sortDirection,
+    sortBySecondary: DEFAULT_FILTERS.sortBySecondary,
+    sortDirectionSecondary: DEFAULT_FILTERS.sortDirectionSecondary,
+  });
   const [viewMode, setViewMode] = useState<GamesViewMode>("cards");
   const [selectedGame, setSelectedGame] = useState<GameResult | null>(null);
   const [selectedView, setSelectedView] = useState<GameCollectionItem | null>(
@@ -343,6 +391,7 @@ export default function GamesManager({
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const observerFetchInFlightRef = useRef(false);
   const filtersQueryInputRef = useRef<HTMLInputElement | null>(null);
+  const sortMenuRef = useRef<HTMLDivElement | null>(null);
   const skipNextApplyRef = useRef(false);
   const initialLoadRunRef = useRef(false);
   const lastAppliedRequestKeyRef = useRef("");
@@ -631,7 +680,11 @@ export default function GamesManager({
       return false;
     }
     loadingPagesRef.current.add(pageIndex);
-    const needsClientSort = filters.sortBy === "title" || filters.sortBy === "year";
+    const needsClientSort =
+      filters.sortBy === "title" ||
+      filters.sortBy === "year" ||
+      filters.sortBySecondary === "title" ||
+      filters.sortBySecondary === "year";
     if (needsClientSort && pageIndex > 0) {
       logLazy("skip:client-sort", { pageIndex });
       loadingPagesRef.current.delete(pageIndex);
@@ -707,27 +760,35 @@ export default function GamesManager({
       query = query.lte("viewed_at", `${filters.viewedDateTo}T23:59:59.999Z`);
     }
 
-    const sortAscending = filters.sortDirection === "asc";
-    if (filters.sortBy === "title") {
-      query = query.order("title", {
-        foreignTable: "items",
-        ascending: sortAscending,
-      });
-    } else if (filters.sortBy === "rating") {
-      query = query.order("rating", {
-        ascending: sortAscending,
-        nullsFirst: false,
-      });
-    } else if (filters.sortBy === "year") {
-      query = query.order("year", {
-        foreignTable: "items",
-        ascending: sortAscending,
-        nullsFirst: false,
-      });
-    } else {
-      query = query.order("created_at", { ascending: sortAscending });
+    const sortSequence: Array<[SortBy, SortDirection]> = [
+      [filters.sortBy, filters.sortDirection],
+    ];
+    if (filters.sortBySecondary !== filters.sortBy) {
+      sortSequence.push([filters.sortBySecondary, filters.sortDirectionSecondary]);
     }
-    if (filters.sortBy !== "created_at") {
+    for (const [field, direction] of sortSequence) {
+      const ascending = direction === "asc";
+      if (field === "title") {
+        query = query.order("title", {
+          foreignTable: "items",
+          ascending,
+        });
+      } else if (field === "rating") {
+        query = query.order("rating", {
+          ascending,
+          nullsFirst: false,
+        });
+      } else if (field === "year") {
+        query = query.order("year", {
+          foreignTable: "items",
+          ascending,
+          nullsFirst: false,
+        });
+      } else {
+        query = query.order("created_at", { ascending });
+      }
+    }
+    if (!sortSequence.some(([field]) => field === "created_at")) {
       query = query.order("created_at", { ascending: false });
     }
     query = query.order("id", { ascending: false });
@@ -848,7 +909,13 @@ export default function GamesManager({
       return false;
     } else {
       const nextCollection = needsClientSort
-        ? sortGameCollection(data ?? [], filters.sortBy, filters.sortDirection)
+        ? sortGameCollection(
+            data ?? [],
+            filters.sortBy,
+            filters.sortDirection,
+            filters.sortBySecondary,
+            filters.sortDirectionSecondary,
+          )
         : ((data as unknown as GameCollectionItem[]) ?? []);
       const previousCollection = collectionRef.current;
       const mergedCollection =
@@ -1060,32 +1127,54 @@ export default function GamesManager({
     [visiblePlatforms],
   );
 
-  const handleSortByChange = (value: SortBy) => {
-    const defaultDirection = getDefaultSortDirection(value);
-    setAppliedFilters((prev) => ({
-      ...prev,
-      sortBy: value,
-      sortDirection: defaultDirection,
-    }));
-    setPendingFilters((prev) => ({
-      ...prev,
-      sortBy: value,
-      sortDirection: defaultDirection,
-    }));
+  const applySortState = (next: {
+    sortBy: SortBy;
+    sortDirection: SortDirection;
+    sortBySecondary: SortBy;
+    sortDirectionSecondary: SortDirection;
+  }) => {
+    setAppliedFilters((prev) => ({ ...prev, ...next }));
+    setPendingFilters((prev) => ({ ...prev, ...next }));
     setHasApplied(true);
   };
 
-  const handleToggleSortDirection = () => {
-    setAppliedFilters((prev) => {
-      const nextDirection: SortDirection = prev.sortDirection === "asc" ? "desc" : "asc";
-      return { ...prev, sortDirection: nextDirection };
-    });
-    setPendingFilters((prev) => {
-      const nextDirection: SortDirection = prev.sortDirection === "asc" ? "desc" : "asc";
-      return { ...prev, sortDirection: nextDirection };
-    });
-    setHasApplied(true);
+  const handleSortButtonClick = () => {
+    if (typeof window === "undefined") return;
+    const isMobile = window.matchMedia("(max-width: 779px)").matches;
+    if (isMobile) {
+      setSortModalState({
+        sortBy: appliedFilters.sortBy,
+        sortDirection: appliedFilters.sortDirection,
+        sortBySecondary: appliedFilters.sortBySecondary,
+        sortDirectionSecondary: appliedFilters.sortDirectionSecondary,
+      });
+      setIsSortModalOpen(true);
+      return;
+    }
+    setIsSortPopoverOpen((prev) => !prev);
   };
+
+  useEffect(() => {
+    if (!isSortPopoverOpen) return;
+    const handleOutsideClick = (event: globalThis.MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (!sortMenuRef.current?.contains(target)) {
+        setIsSortPopoverOpen(false);
+      }
+    };
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsSortPopoverOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handleOutsideClick);
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("mousedown", handleOutsideClick);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [isSortPopoverOpen]);
 
   useEffect(() => {
     const countToShow = appliedFilters.genres.trim() ? displayedCollection.length : totalCount;
@@ -2092,45 +2181,134 @@ export default function GamesManager({
         <div className={`${styles.toolbar} ${styles.filmsToolbar}`}>
           <div className={styles.toolbarSearch}>
             <div className={styles.sortControls}>
-              <button
-                type="button"
-                className="btnBase btnSecondary"
-                onClick={() => {
-                  setPendingFilters(appliedFilters);
-                  setIsFiltersOpen(true);
-                }}
-              >
-                Фільтри
-              </button>
-              <label className={styles.sortField}>
-                <span className={styles.sortLabel}>Сортування</span>
-                <select
-                  className={styles.sortSelect}
-                  value={appliedFilters.sortBy}
-                  onChange={(event) => handleSortByChange(event.target.value as SortBy)}
+              <div className={styles.sortMenu}>
+                <button
+                  type="button"
+                  className={`btnBase btnSecondary ${styles.sortIconButton}`}
+                  onClick={() => {
+                    setPendingFilters(appliedFilters);
+                    setIsFiltersOpen(true);
+                  }}
+                  aria-label="Фільтри"
+                  title="Фільтри"
                 >
-                  {SORT_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                className={`btnBase btnSecondary ${styles.sortDirectionButton}`}
-                onClick={handleToggleSortDirection}
-                aria-label={
-                  appliedFilters.sortDirection === "asc"
-                    ? "Змінити порядок на спадання"
-                    : "Змінити порядок на зростання"
-                }
-                title={
-                  appliedFilters.sortDirection === "asc" ? "Зростання" : "Спадання"
-                }
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    height="24px"
+                    viewBox="0 -960 960 960"
+                    width="24px"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path d="M440-160q-17 0-28.5-11.5T400-200v-240L168-736q-15-20-4.5-42t36.5-22h560q26 0 36.5 22t-4.5 42L560-440v240q0 17-11.5 28.5T520-160h-80Zm40-308 198-252H282l198 252Zm0 0Z" />
+                  </svg>
+                </button>
+                <span className={styles.sortTooltip}>Фільтри</span>
+              </div>
+              <div
+                ref={sortMenuRef}
+                className={`${styles.sortMenu} ${isSortPopoverOpen ? styles.sortMenuOpen : ""}`}
               >
-                {appliedFilters.sortDirection === "asc" ? "↑" : "↓"}
-              </button>
+                <button
+                  type="button"
+                  className={`btnBase btnSecondary ${styles.sortIconButton}`}
+                  onClick={handleSortButtonClick}
+                  aria-label="Сортування"
+                  aria-expanded={isSortPopoverOpen}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    height="24px"
+                    viewBox="0 -960 960 960"
+                    width="24px"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path d="M120-240v-80h240v80H120Zm0-200v-80h480v80H120Zm0-200v-80h720v80H120Z" />
+                  </svg>
+                </button>
+                <span className={styles.sortTooltip}>Сортування</span>
+                <div className={styles.sortPopover}>
+                  <div className={styles.sortRow}>
+                    <label className={styles.sortField}>
+                      <span className={styles.sortLabel}>Основне сортування</span>
+                      <select
+                        className={styles.sortSelect}
+                        value={appliedFilters.sortBy}
+                        onChange={(event) =>
+                          applySortState({
+                            sortBy: event.target.value as SortBy,
+                            sortDirection: getDefaultSortDirection(event.target.value as SortBy),
+                            sortBySecondary: appliedFilters.sortBySecondary,
+                            sortDirectionSecondary: appliedFilters.sortDirectionSecondary,
+                          })
+                        }
+                      >
+                        {SORT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className={`btnBase btnSecondary ${styles.sortDirectionButton}`}
+                      onClick={() =>
+                        applySortState({
+                          sortBy: appliedFilters.sortBy,
+                          sortDirection:
+                            appliedFilters.sortDirection === "asc" ? "desc" : "asc",
+                          sortBySecondary: appliedFilters.sortBySecondary,
+                          sortDirectionSecondary: appliedFilters.sortDirectionSecondary,
+                        })
+                      }
+                    >
+                      {appliedFilters.sortDirection === "asc" ? "↑" : "↓"}
+                    </button>
+                  </div>
+                  <div className={styles.sortRow}>
+                    <label className={styles.sortField}>
+                      <span className={styles.sortLabel}>Додаткове сортування</span>
+                      <select
+                        className={styles.sortSelect}
+                        value={appliedFilters.sortBySecondary}
+                        onChange={(event) =>
+                          applySortState({
+                            sortBy: appliedFilters.sortBy,
+                            sortDirection: appliedFilters.sortDirection,
+                            sortBySecondary: event.target.value as SortBy,
+                            sortDirectionSecondary: getDefaultSortDirection(
+                              event.target.value as SortBy,
+                            ),
+                          })
+                        }
+                      >
+                        {SORT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className={`btnBase btnSecondary ${styles.sortDirectionButton}`}
+                      onClick={() =>
+                        applySortState({
+                          sortBy: appliedFilters.sortBy,
+                          sortDirection: appliedFilters.sortDirection,
+                          sortBySecondary: appliedFilters.sortBySecondary,
+                          sortDirectionSecondary:
+                            appliedFilters.sortDirectionSecondary === "asc" ? "desc" : "asc",
+                        })
+                      }
+                    >
+                      {appliedFilters.sortDirectionSecondary === "asc" ? "↑" : "↓"}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
           <div className={styles.toolbarCenter}>
@@ -2765,7 +2943,7 @@ export default function GamesManager({
                   })
                 }
               >
-                Очищення
+                Очистити
               </button>
               <button
                 type="button"
@@ -2776,6 +2954,113 @@ export default function GamesManager({
               </button>
               <button type="submit" className="btnBase btnPrimary">
                 Відобразити
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {isSortModalOpen ? (
+        <div
+          className={styles.filtersOverlay}
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setIsSortModalOpen(false)}
+        >
+          <form
+            className={styles.filtersModal}
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              applySortState(sortModalState);
+              setIsSortModalOpen(false);
+            }}
+          >
+            <div className={styles.filtersHeader}>
+              <h2 className={styles.filtersTitle}>Сортування</h2>
+              <CloseIconButton onClick={() => setIsSortModalOpen(false)} />
+            </div>
+            <div className={styles.sortRow}>
+              <label className={styles.sortField}>
+                <span className={styles.sortLabel}>Основне сортування</span>
+                <select
+                  className={styles.sortSelect}
+                  value={sortModalState.sortBy}
+                  onChange={(event) =>
+                    setSortModalState((prev) => ({
+                      ...prev,
+                      sortBy: event.target.value as SortBy,
+                      sortDirection: getDefaultSortDirection(event.target.value as SortBy),
+                    }))
+                  }
+                >
+                  {SORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className={`btnBase btnSecondary ${styles.sortDirectionButton}`}
+                onClick={() =>
+                  setSortModalState((prev) => ({
+                    ...prev,
+                    sortDirection: prev.sortDirection === "asc" ? "desc" : "asc",
+                  }))
+                }
+              >
+                {sortModalState.sortDirection === "asc" ? "↑" : "↓"}
+              </button>
+            </div>
+            <div className={styles.sortRow}>
+              <label className={styles.sortField}>
+                <span className={styles.sortLabel}>Додаткове сортування</span>
+                <select
+                  className={styles.sortSelect}
+                  value={sortModalState.sortBySecondary}
+                  onChange={(event) =>
+                    setSortModalState((prev) => ({
+                      ...prev,
+                      sortBySecondary: event.target.value as SortBy,
+                      sortDirectionSecondary: getDefaultSortDirection(
+                        event.target.value as SortBy,
+                      ),
+                    }))
+                  }
+                >
+                  {SORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className={`btnBase btnSecondary ${styles.sortDirectionButton}`}
+                onClick={() =>
+                  setSortModalState((prev) => ({
+                    ...prev,
+                    sortDirectionSecondary:
+                      prev.sortDirectionSecondary === "asc" ? "desc" : "asc",
+                  }))
+                }
+              >
+                {sortModalState.sortDirectionSecondary === "asc" ? "↑" : "↓"}
+              </button>
+            </div>
+            <div className={styles.filtersActions}>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
+                onClick={() => setIsSortModalOpen(false)}
+              >
+                Скасувати
+              </button>
+              <button type="submit" className="btnBase btnPrimary">
+                Застосувати
               </button>
             </div>
           </form>
