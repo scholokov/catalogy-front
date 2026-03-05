@@ -663,11 +663,9 @@ export default function FilmsManager({
       return false;
     }
     loadingPagesRef.current.add(pageIndex);
-    const needsClientSort =
-      filters.sortBy === "title" ||
-      filters.sortBy === "year" ||
-      filters.sortBySecondary === "title" ||
-      filters.sortBySecondary === "year";
+    const needsClientSort = Boolean(
+      filters.genres.trim() || filters.director.trim(),
+    );
     if (needsClientSort && pageIndex > 0) {
       logLazy("skip:client-sort", { pageIndex });
       loadingPagesRef.current.delete(pageIndex);
