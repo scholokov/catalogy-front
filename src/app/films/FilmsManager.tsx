@@ -176,8 +176,8 @@ const DEFAULT_FILTERS: Filters = {
   viewedDateTo: "",
   sortBy: "created_at",
   sortDirection: "desc",
-  sortBySecondary: "title",
-  sortDirectionSecondary: "asc",
+  sortBySecondary: "created_at",
+  sortDirectionSecondary: "desc",
 };
 
 const clampRange = (range: [number, number], bounds: [number, number]) => {
@@ -663,9 +663,11 @@ export default function FilmsManager({
       return false;
     }
     loadingPagesRef.current.add(pageIndex);
-    const needsClientSort = Boolean(
-      filters.genres.trim() || filters.director.trim(),
-    );
+    const needsClientSort =
+      filters.sortBy === "title" ||
+      filters.sortBy === "year" ||
+      filters.sortBySecondary === "title" ||
+      filters.sortBySecondary === "year";
     if (needsClientSort && pageIndex > 0) {
       logLazy("skip:client-sort", { pageIndex });
       loadingPagesRef.current.delete(pageIndex);
@@ -2220,6 +2222,7 @@ export default function FilmsManager({
                   title="Фільтри"
                 >
                   <svg
+                    className={styles.sortIcon}
                     xmlns="http://www.w3.org/2000/svg"
                     height="24px"
                     viewBox="0 -960 960 960"
@@ -2244,6 +2247,7 @@ export default function FilmsManager({
                   aria-expanded={isSortPopoverOpen}
                 >
                   <svg
+                    className={styles.sortIcon}
                     xmlns="http://www.w3.org/2000/svg"
                     height="24px"
                     viewBox="0 -960 960 960"
