@@ -70,7 +70,7 @@ export default function LogoutButton({ showLabel = false }: LogoutButtonProps) {
               <div className="confirmActions">
                 <button
                   type="button"
-                  className="btnBase btnPrimary"
+                  className="btnBase btnSecondary confirmCancelButton"
                   onClick={cancelLogout}
                   disabled={isLoggingOut}
                 >
@@ -78,7 +78,8 @@ export default function LogoutButton({ showLabel = false }: LogoutButtonProps) {
                 </button>
                 <button
                   type="button"
-                  className="btnBase btnSecondary"
+                  className="btnBase btnPrimary confirmLogoutButton"
+                  autoFocus
                   onClick={confirmLogout}
                   disabled={isLoggingOut}
                 >
@@ -128,7 +129,7 @@ export default function LogoutButton({ showLabel = false }: LogoutButtonProps) {
             <div className="confirmActions">
               <button
                 type="button"
-                className="btnBase btnPrimary"
+                className="btnBase btnSecondary confirmCancelButton"
                 onClick={cancelLogout}
                 disabled={isLoggingOut}
               >
@@ -136,7 +137,8 @@ export default function LogoutButton({ showLabel = false }: LogoutButtonProps) {
               </button>
               <button
                 type="button"
-                className="btnBase btnSecondary"
+                className="btnBase btnPrimary confirmLogoutButton"
+                autoFocus
                 onClick={confirmLogout}
                 disabled={isLoggingOut}
               >

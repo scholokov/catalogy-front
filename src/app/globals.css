@@ -331,6 +331,17 @@ body {
   justify-content: flex-end;
 }
 
+.confirmCancelButton,
+.confirmLogoutButton {
+  min-width: 92px;
+}
+
+.confirmLogoutButton:focus,
+.confirmLogoutButton:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(122, 165, 255, 0.35);
+}
+
 .appMain {
   padding-left: 72px;
 }
