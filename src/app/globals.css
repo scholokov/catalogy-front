@@ -160,18 +160,6 @@ body {
   gap: 12px;
 }
 
-.navHeaderCenterLogo {
-  display: none;
-  pointer-events: none;
-  line-height: 0;
-}
-
-.navHeaderCenterLogoImage {
-  display: block;
-  width: min(120px, 13.333vw);
-  height: auto;
-}
-
 .navToggle {
   display: none;
   width: 40px;
@@ -669,6 +657,13 @@ body {
   height: auto;
 }
 
+@media (max-width: 900px) {
+  .joinLogoWrap {
+    left: 16px;
+    transform: translateY(-50%);
+  }
+}
+
 .joinButton {
   pointer-events: auto;
   font-size: 18px;
@@ -919,17 +914,8 @@ a {
 }
 
 @media (max-width: 900px) {
-  .navHeader {
-    position: relative;
-    min-height: 40px;
-  }
-
-  .navHeaderCenterLogo {
-    display: block;
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
+  .navLogo {
+    display: none;
   }
 
   .appSidebar {

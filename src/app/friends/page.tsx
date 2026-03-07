@@ -3,7 +3,7 @@ import FriendsManager from "./FriendsManager";
 
 export default function FriendsPage() {
   return (
-    <CatalogLayout title="Рекомендації друзів">
+    <CatalogLayout title="Рекомендації друзів" showBrandLogo>
       <FriendsManager />
     </CatalogLayout>
   );

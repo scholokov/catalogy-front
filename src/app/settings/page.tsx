@@ -221,7 +221,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <CatalogLayout title="Налаштування">
+    <CatalogLayout title="Налаштування" showBrandLogo>
       <div className={styles.content}>
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Ігри</h2>

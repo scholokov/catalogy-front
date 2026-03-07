@@ -1,0 +1,19 @@
+.link {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+    text-decoration: none;
+  }
+
+  .image {
+    display: block;
+    width: min(120px, 13.333vw);
+    height: auto;
+  }
+}

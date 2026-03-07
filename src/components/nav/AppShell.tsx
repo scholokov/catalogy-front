@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
+import AuthMobileHeaderLogo from "@/components/nav/AuthMobileHeaderLogo";
 import LogoutButton from "@/components/nav/LogoutButton";
 import HomeUnauthPage from "@/app/HomeUnauthPage";
 
@@ -25,8 +26,6 @@ export default function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isAuthRoute = pathname.startsWith("/auth");
-  const isMediaCatalogRoute =
-    pathname.startsWith("/games") || pathname.startsWith("/films");
 
   const isCurrentPath = (path: string) => {
     if (path === "/") {
@@ -170,18 +169,7 @@ export default function AppShell({ children }: AppShellProps) {
               priority
             />
           </Link>
-          {isMediaCatalogRoute ? (
-            <div className="navHeaderCenterLogo" aria-hidden="true">
-              <Image
-                src="/images/logo_c3.png"
-                alt=""
-                width={560}
-                height={160}
-                className="navHeaderCenterLogoImage"
-                priority
-              />
-            </div>
-          ) : null}
+          <AuthMobileHeaderLogo />
           <button
             type="button"
             className="navToggle"
