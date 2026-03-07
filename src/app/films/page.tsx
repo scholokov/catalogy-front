@@ -7,7 +7,7 @@ import FilmsManager from "./FilmsManager";
 export default function FilmsPage() {
   const [count, setCount] = useState(0);
   return (
-    <CatalogLayout title="Films" headerRight={`Кількість: ${count}`}>
+    <CatalogLayout title="Фільми" headerRight={`Кількість: ${count}`} showBrandLogo>
       <FilmsManager onCountChange={setCount} />
     </CatalogLayout>
   );

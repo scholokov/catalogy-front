@@ -1159,6 +1159,30 @@ export default function FilmsManager({
           return genresMatches && directorMatches;
         });
   }, [appliedFilters.director, appliedFilters.genres, collection]);
+  const [yearRangeFrom, yearRangeTo] = clampRange(appliedFilters.yearRange, yearBounds);
+  const isFiltersApplied =
+    Boolean(
+      appliedFilters.query.trim() ||
+        appliedFilters.genres.trim() ||
+        appliedFilters.director.trim() ||
+        appliedFilters.viewedDateFrom ||
+        appliedFilters.viewedDateTo,
+    ) ||
+    (appliedFilters.viewAll ? true : appliedFilters.viewed) !==
+      (appliedFilters.viewAll ? true : appliedFilters.planned) ||
+    !appliedFilters.availabilityAll ||
+    (!appliedFilters.favoriteAll && appliedFilters.recommendSimilarOnly) ||
+    yearRangeFrom !== yearBounds[0] ||
+    yearRangeTo !== yearBounds[1] ||
+    appliedFilters.externalRatingRange[0] !== EXTERNAL_MIN ||
+    appliedFilters.externalRatingRange[1] !== EXTERNAL_MAX ||
+    appliedFilters.personalRatingRange[0] !== PERSONAL_MIN ||
+    appliedFilters.personalRatingRange[1] !== PERSONAL_MAX;
+  const isSortApplied =
+    appliedFilters.sortBy !== DEFAULT_FILTERS.sortBy ||
+    appliedFilters.sortDirection !== DEFAULT_FILTERS.sortDirection ||
+    appliedFilters.sortBySecondary !== DEFAULT_FILTERS.sortBySecondary ||
+    appliedFilters.sortDirectionSecondary !== DEFAULT_FILTERS.sortDirectionSecondary;
 
   const applySortState = (next: {
     sortBy: SortBy;
@@ -2222,7 +2246,7 @@ export default function FilmsManager({
                   title="Фільтри"
                 >
                   <svg
-                    className={styles.sortIcon}
+                    className={`${styles.sortIcon} ${isFiltersApplied ? styles.sortIconActive : ""}`}
                     xmlns="http://www.w3.org/2000/svg"
                     height="24px"
                     viewBox="0 -960 960 960"
@@ -2247,7 +2271,7 @@ export default function FilmsManager({
                   aria-expanded={isSortPopoverOpen}
                 >
                   <svg
-                    className={styles.sortIcon}
+                    className={`${styles.sortIcon} ${isSortApplied ? styles.sortIconActive : ""}`}
                     xmlns="http://www.w3.org/2000/svg"
                     height="24px"
                     viewBox="0 -960 960 960"

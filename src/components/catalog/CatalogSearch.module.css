@@ -87,6 +87,10 @@
   flex: 0 0 24px;
 }
 
+.sortIconActive {
+  color: var(--color-accent);
+}
+
 .sortPopover {
   position: absolute;
   top: calc(100% + 8px);

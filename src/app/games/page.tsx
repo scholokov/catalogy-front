@@ -7,7 +7,7 @@ import GamesManager from "./GamesManager";
 export default function GamesPage() {
   const [count, setCount] = useState(0);
   return (
-    <CatalogLayout title="Games" headerRight={`Кількість: ${count}`}>
+    <CatalogLayout title="Ігри" headerRight={`Кількість: ${count}`} showBrandLogo>
       <GamesManager onCountChange={setCount} />
     </CatalogLayout>
   );

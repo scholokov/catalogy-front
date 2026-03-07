@@ -5,6 +5,16 @@ import styles from "./page.module.css";
 export default function Home() {
   return (
     <div className={styles.page}>
+      <div className={styles.brandLogoBar} aria-hidden="true">
+        <Image
+          className={styles.brandLogo}
+          src="/images/logo_c3.png"
+          alt=""
+          width={560}
+          height={160}
+          priority
+        />
+      </div>
       <main className={styles.main}>
         <div className={styles.ctas}>
           <Link className={styles.ctaCard} href="/games">
@@ -16,7 +26,7 @@ export default function Home() {
               height={320}
               unoptimized
             />
-            <span className={styles.ctaLabel}>Games</span>
+            <span className={styles.ctaLabel}>Ігри</span>
           </Link>
           <Link className={styles.ctaCard} href="/films">
             <Image
@@ -27,7 +37,7 @@ export default function Home() {
               height={320}
               unoptimized
             />
-            <span className={styles.ctaLabel}>Films</span>
+            <span className={styles.ctaLabel}>Фільми</span>
           </Link>
         </div>
       </main>

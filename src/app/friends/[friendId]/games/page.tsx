@@ -34,7 +34,7 @@ export default function FriendGamesPage({
   }, [friendId]);
 
   return (
-    <CatalogLayout title={`Бібліотека ${friendName}: Games`} headerRight={`Кількість: ${count}`}>
+    <CatalogLayout title={`Бібліотека ${friendName}: Ігри`} headerRight={`Кількість: ${count}`}>
       <GamesManager
         onCountChange={setCount}
         ownerUserId={friendId}

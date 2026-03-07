@@ -34,7 +34,7 @@ export default function FriendFilmsPage({
   }, [friendId]);
 
   return (
-    <CatalogLayout title={`Бібліотека ${friendName}: Films`} headerRight={`Кількість: ${count}`}>
+    <CatalogLayout title={`Бібліотека ${friendName}: Фільми`} headerRight={`Кількість: ${count}`}>
       <FilmsManager
         onCountChange={setCount}
         ownerUserId={friendId}
