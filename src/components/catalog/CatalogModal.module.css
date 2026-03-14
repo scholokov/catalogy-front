@@ -192,26 +192,9 @@
   height: 30px;
 }
 
-.iconButtonSecondary {
-  background: var(--control-bg);
-  color: var(--control-text);
-  border: 1px solid var(--control-border);
-}
-
-.iconButtonSecondary:hover {
-  background: var(--control-bg-hover);
-  border-color: var(--control-border-hover);
-}
-
-.iconButtonSecondary:active {
-  background: var(--control-bg-active);
-  border-color: var(--control-border-active);
-}
-
-.iconButtonSecondary:disabled {
-  background: var(--control-disabled-bg);
-  color: var(--control-disabled-text);
-  border-color: var(--control-disabled-border);
+.iconButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .deleteButton {

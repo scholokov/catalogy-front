@@ -476,7 +476,7 @@ export default function CatalogModal({
               <div className={styles.headerMenu} ref={moreMenuRef}>
                 <button
                   type="button"
-                  className={`${styles.iconButton} ${styles.iconButtonSecondary}`}
+                  className={styles.iconButton}
                   onClick={() => setIsMoreMenuOpen((prev) => !prev)}
                   aria-label="Більше дій"
                   aria-expanded={isMoreMenuOpen}
@@ -557,7 +557,7 @@ export default function CatalogModal({
             ) : null}
             <button
               type="button"
-              className={`${styles.iconButton} ${styles.iconButtonSecondary}`}
+              className={styles.iconButton}
               onClick={onClose}
               aria-label="Закрити"
               disabled={isSaving || isRefreshing}
