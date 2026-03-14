@@ -1,0 +1,28 @@
+.snackbarContainer {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 120;
+  pointer-events: none;
+}
+
+.snackbar {
+  min-width: 160px;
+  max-width: min(92vw, 420px);
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  box-shadow: var(--shadow-card);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.snackbarVisible {
+  opacity: 1;
+  transform: translateY(0);
+}

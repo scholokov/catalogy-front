@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import styles from "./CatalogModal.module.css";
 
 type CatalogModalProps = {
@@ -88,6 +89,7 @@ export default function CatalogModal({
   onReadOnlyPrimaryAction,
   children,
 }: CatalogModalProps) {
+  const { showSnackbar } = useSnackbar();
   const viewedAtId = useId();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const initialPlatformsKey = useMemo(
@@ -135,6 +137,8 @@ export default function CatalogModal({
   const platformsRef = useRef<HTMLDivElement | null>(null);
   const availabilityRef = useRef<HTMLDivElement | null>(null);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  const copyTooltipTimeoutRef = useRef<number | null>(null);
+  const [isTitleTooltipSuppressed, setIsTitleTooltipSuppressed] = useState(false);
 
   useEffect(() => {
     if (!isEditMode) {
@@ -212,6 +216,14 @@ export default function CatalogModal({
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (copyTooltipTimeoutRef.current !== null) {
+        window.clearTimeout(copyTooltipTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!isPlatformsOpen && !isAvailabilityOpen && !isMoreMenuOpen) return;
     const handleOutsideClick = (event: MouseEvent) => {
       if (
@@ -262,6 +274,7 @@ export default function CatalogModal({
       setSaveError("");
       try {
         await onReadOnlyPrimaryAction();
+        showSnackbar("Додано");
         onClose();
       } catch (error) {
         const message =
@@ -293,6 +306,7 @@ export default function CatalogModal({
         platforms,
         availability,
       });
+      showSnackbar(isEditMode ? "Збережено" : "Додано");
       onClose();
     } catch (error) {
       const message =
@@ -319,6 +333,7 @@ export default function CatalogModal({
     setSaveError("");
     try {
       await onRefresh();
+      showSnackbar("Оновлено");
     } catch (error) {
       const message =
         error instanceof Error && error.message
@@ -338,6 +353,7 @@ export default function CatalogModal({
 
     try {
       await onDelete();
+      showSnackbar("Видалено");
       onClose();
     } catch (error) {
       const message =
@@ -458,6 +474,35 @@ export default function CatalogModal({
     setViewPercentInput(String(normalized));
   };
 
+  const copyText = async (value: string) => {
+    const normalized = value.trim();
+    if (!normalized) return;
+    try {
+      await navigator.clipboard.writeText(normalized);
+    } catch {
+      const textArea = document.createElement("textarea");
+      textArea.value = normalized;
+      textArea.setAttribute("readonly", "");
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+    }
+    showSnackbar("Скопійовано");
+  };
+
+  const suppressTitleTooltip = () => {
+    setIsTitleTooltipSuppressed(true);
+    if (copyTooltipTimeoutRef.current !== null) {
+      window.clearTimeout(copyTooltipTimeoutRef.current);
+    }
+    copyTooltipTimeoutRef.current = window.setTimeout(() => {
+      setIsTitleTooltipSuppressed(false);
+    }, 900);
+  };
+
   return (
     <div
       className={styles.overlay}
@@ -470,7 +515,22 @@ export default function CatalogModal({
         onClick={(event) => event.stopPropagation()}
       >
         <div className={styles.header}>
-          <h2 className={styles.title}>{title}</h2>
+          <h2 className={styles.title}>
+            <button
+              type="button"
+              className={`${styles.copyableTitleButton} ${
+                isTitleTooltipSuppressed ? styles.copyTooltipHidden : ""
+              }`}
+              onClick={() => {
+                suppressTitleTooltip();
+                void copyText(title);
+              }}
+              data-copy-tooltip="Клікніть для копіювання."
+              aria-label={`Скопіювати назву: ${title}`}
+            >
+              {title}
+            </button>
+          </h2>
           <div className={styles.headerActions}>
             {onDelete || onRefresh ? (
               <div className={styles.headerMenu} ref={moreMenuRef}>

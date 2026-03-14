@@ -15,6 +15,7 @@ import CatalogModal from "@/components/catalog/CatalogModal";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
 import CloseIconButton from "@/components/ui/CloseIconButton";
+import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import { supabase } from "@/lib/supabase/client";
 import {
   readDisplayPreferences,
@@ -316,6 +317,7 @@ export default function FilmsManager({
   ownerUserId,
   readOnly = false,
 }: FilmsManagerProps) {
+  const { showSnackbar } = useSnackbar();
   const [lazyDebug, setLazyDebug] = useState<string[]>([]);
   const [lazyDebugEnabled, setLazyDebugEnabled] = useState(false);
   const logLazy = useCallback(
@@ -383,6 +385,7 @@ export default function FilmsManager({
   const [overflowDescriptions, setOverflowDescriptions] = useState<Set<string>>(
     new Set(),
   );
+  const [isCopyTooltipSuppressed, setIsCopyTooltipSuppressed] = useState(false);
   const [recommendedItemIds, setRecommendedItemIds] = useState<Set<string>>(
     new Set(),
   );
@@ -403,6 +406,7 @@ export default function FilmsManager({
   const nextPageToLoadKeyRef = useRef("");
   const nextPageToLoadRef = useRef(1);
   const yearBoundsRef = useRef<[number, number]>([MIN_YEAR, MAX_YEAR]);
+  const copyTooltipTimeoutRef = useRef<number | null>(null);
   const viewModeStorageKeyRef = useRef("films:view-mode:v2:guest");
   const isViewModeStorageReadyRef = useRef(false);
   const directorsHydrationRunRef = useRef(0);
@@ -525,6 +529,14 @@ export default function FilmsManager({
   useEffect(() => {
     yearBoundsRef.current = yearBounds;
   }, [yearBounds]);
+
+  useEffect(() => {
+    return () => {
+      if (copyTooltipTimeoutRef.current !== null) {
+        window.clearTimeout(copyTooltipTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let isCancelled = false;
@@ -1514,6 +1526,35 @@ export default function FilmsManager({
     if (!normalizedEnglish) return null;
     if (normalizedOriginal && normalizedEnglish === normalizedOriginal) return null;
     return normalizedEnglish;
+  };
+
+  const copyText = async (value: string) => {
+    const normalized = value.trim();
+    if (!normalized) return;
+    try {
+      await navigator.clipboard.writeText(normalized);
+    } catch {
+      const textArea = document.createElement("textarea");
+      textArea.value = normalized;
+      textArea.setAttribute("readonly", "");
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+    }
+    showSnackbar("Скопійовано");
+  };
+
+  const suppressCopyTooltip = () => {
+    setIsCopyTooltipSuppressed(true);
+    if (copyTooltipTimeoutRef.current !== null) {
+      window.clearTimeout(copyTooltipTimeoutRef.current);
+    }
+    copyTooltipTimeoutRef.current = window.setTimeout(() => {
+      setIsCopyTooltipSuppressed(false);
+    }, 900);
   };
 
   const selectPreferredTrailer = (trailers?: Trailer[] | null) => {
@@ -3394,7 +3435,21 @@ export default function FilmsManager({
             ) : null}
             {selectedFilm.originalTitle ? (
               <p className={styles.resultMeta}>
-                Оригінальна назва: {selectedFilm.originalTitle}
+                Оригінальна назва:{" "}
+                <button
+                  type="button"
+                  className={`${styles.copyableInlineButton} ${
+                    isCopyTooltipSuppressed ? styles.copyTooltipHidden : ""
+                  }`}
+                  onClick={() => {
+                    suppressCopyTooltip();
+                    void copyText(selectedFilm.originalTitle ?? "");
+                  }}
+                  data-copy-tooltip="Клікніть для копіювання."
+                  aria-label={`Скопіювати оригінальну назву: ${selectedFilm.originalTitle}`}
+                >
+                  {selectedFilm.originalTitle}
+                </button>
               </p>
             ) : null}
             {selectedFilm.englishTitle &&
@@ -3497,8 +3552,29 @@ export default function FilmsManager({
             <p className={styles.resultMeta}>
               Оригінальна назва:{" "}
               {selectedViewItemDraft?.title_original ??
-                selectedView.items.title_original ??
-                "—"}
+              selectedView.items.title_original ? (
+                <button
+                  type="button"
+                  className={`${styles.copyableInlineButton} ${
+                    isCopyTooltipSuppressed ? styles.copyTooltipHidden : ""
+                  }`}
+                  onClick={() => {
+                    suppressCopyTooltip();
+                    void copyText(
+                      selectedViewItemDraft?.title_original ??
+                        selectedView.items.title_original ??
+                        "",
+                    );
+                  }}
+                  data-copy-tooltip="Клікніть для копіювання."
+                  aria-label={`Скопіювати оригінальну назву: ${selectedViewItemDraft?.title_original ?? selectedView.items.title_original ?? ""}`}
+                >
+                  {selectedViewItemDraft?.title_original ??
+                    selectedView.items.title_original}
+                </button>
+              ) : (
+                "—"
+              )}
             </p>
             {(selectedViewItemDraft?.title_en ?? selectedView.items.title_en) &&
             (selectedViewItemDraft?.title_en ?? selectedView.items.title_en) !==

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Suspense } from "react";
 import AppShell from "@/components/nav/AppShell";
 import ServiceWorkerRegister from "@/components/pwa/ServiceWorkerRegister";
+import { SnackbarProvider } from "@/components/ui/SnackbarProvider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -56,8 +57,10 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         <Suspense fallback={null}>
-          <ServiceWorkerRegister />
-          <AppShell>{children}</AppShell>
+          <SnackbarProvider>
+            <ServiceWorkerRegister />
+            <AppShell>{children}</AppShell>
+          </SnackbarProvider>
         </Suspense>
       </body>
     </html>
