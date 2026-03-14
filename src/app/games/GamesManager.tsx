@@ -1147,7 +1147,7 @@ export default function GamesManager({
       rating: number | null;
       view_percent: number;
       platforms: string[] | null;
-      items: { title: string } | null;
+      items: { title: string }[];
     }> = [];
     while (true) {
       const { data, error } = await supabase
@@ -1166,7 +1166,7 @@ export default function GamesManager({
         rating: number | null;
         view_percent: number;
         platforms: string[] | null;
-        items: { title: string } | null;
+        items: { title: string }[];
       }>;
       if (chunk.length === 0) {
         break;
@@ -1194,7 +1194,7 @@ export default function GamesManager({
         "Дата перегляду",
       ];
       const rows = allRows.map((item) => [
-        item.items?.title ?? "",
+        item.items[0]?.title ?? "",
         item.platforms?.join("; ") ?? "",
         String(item.view_percent ?? 0),
         item.rating != null ? formatPersonalRating(item.rating) : "",
