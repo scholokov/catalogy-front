@@ -1147,7 +1147,7 @@ export default function GamesManager({
       rating: number | null;
       view_percent: number;
       platforms: string[] | null;
-      items: { title: string }[];
+      title: string;
     }> = [];
     while (true) {
       const { data, error } = await supabase
@@ -1160,19 +1160,28 @@ export default function GamesManager({
       if (error) {
         throw new Error("Не вдалося експортувати бібліотеку.");
       }
-      const chunk = (data ??
-        []) as Array<{
+      const chunkRaw = (data ?? []) as Array<{
         viewed_at: string;
         rating: number | null;
         view_percent: number;
         platforms: string[] | null;
-        items: { title: string }[];
+        items: { title?: string | null } | Array<{ title?: string | null }> | null;
       }>;
-      if (chunk.length === 0) {
+      if (chunkRaw.length === 0) {
         break;
       }
+      const chunk = chunkRaw.map((row) => {
+        const relatedItem = Array.isArray(row.items) ? row.items[0] : row.items;
+        return {
+          viewed_at: row.viewed_at,
+          rating: row.rating,
+          view_percent: row.view_percent,
+          platforms: row.platforms,
+          title: relatedItem?.title ?? "",
+        };
+      });
       allRows.push(...chunk);
-      if (chunk.length < pageSize) {
+      if (chunkRaw.length < pageSize) {
         break;
       }
       from += pageSize;
@@ -1194,7 +1203,7 @@ export default function GamesManager({
         "Дата перегляду",
       ];
       const rows = allRows.map((item) => [
-        item.items[0]?.title ?? "",
+        item.title,
         item.platforms?.join("; ") ?? "",
         String(item.view_percent ?? 0),
         item.rating != null ? formatPersonalRating(item.rating) : "",

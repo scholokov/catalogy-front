@@ -137,6 +137,7 @@ export default function CatalogModal({
   const platformsRef = useRef<HTMLDivElement | null>(null);
   const availabilityRef = useRef<HTMLDivElement | null>(null);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  const handleAddRef = useRef<(() => Promise<void>) | null>(null);
   const copyTooltipTimeoutRef = useRef<number | null>(null);
   const [isTitleTooltipSuppressed, setIsTitleTooltipSuppressed] = useState(false);
 
@@ -257,12 +258,20 @@ export default function CatalogModal({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         onClose();
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        if (isSaving || isConfirmOpen) {
+          return;
+        }
+        event.preventDefault();
+        void handleAddRef.current?.();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [isConfirmOpen, isSaving, onClose]);
 
   const handleAdd = async () => {
     if (readOnly) {
@@ -318,6 +327,7 @@ export default function CatalogModal({
       setIsSaving(false);
     }
   };
+  handleAddRef.current = handleAdd;
 
   const handleDelete = async () => {
     if (!onDelete) {

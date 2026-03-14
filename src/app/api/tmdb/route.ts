@@ -7,6 +7,7 @@ type TmdbMovie = {
   original_title?: string;
   name?: string;
   original_name?: string;
+  genre_ids?: number[];
   release_date?: string;
   first_air_date?: string;
   poster_path?: string | null;
@@ -17,6 +18,10 @@ type TmdbMovie = {
 type TmdbCredits = {
   cast?: { name: string }[];
   crew?: { job: string; name: string }[];
+};
+
+type TmdbGenreList = {
+  genres?: Array<{ id: number; name: string }>;
 };
 
 export async function GET(request: Request) {
@@ -103,14 +108,45 @@ export async function GET(request: Request) {
     }
   };
 
+  const fetchGenreMap = async (mediaType: "movie" | "tv") => {
+    const genreUrl = new URL(`https://api.themoviedb.org/3/genre/${mediaType}/list`);
+    genreUrl.searchParams.set("language", "uk-UA");
+    if (apiKey) {
+      genreUrl.searchParams.set("api_key", apiKey);
+    }
+    try {
+      const genreResponse = await fetch(genreUrl.toString(), {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      if (!genreResponse.ok) return new Map<number, string>();
+      const genreData = (await genreResponse.json()) as TmdbGenreList;
+      return new Map(
+        (genreData.genres ?? [])
+          .filter((genre) => Number.isFinite(genre.id) && Boolean(genre.name))
+          .map((genre) => [genre.id, genre.name]),
+      );
+    } catch {
+      return new Map<number, string>();
+    }
+  };
+
   const payload = data as { results?: TmdbMovie[] };
   const mediaResults = (payload.results ?? []).filter(
     (item): item is TmdbMovie & { media_type: "movie" | "tv" } =>
       item.media_type === "movie" || item.media_type === "tv",
   );
+  const [movieGenreMap, tvGenreMap] = await Promise.all([
+    fetchGenreMap("movie"),
+    fetchGenreMap("tv"),
+  ]);
   const results = await Promise.all(
     mediaResults.map(async (item) => {
       const { director, actors } = await fetchCredits(item.id, item.media_type);
+      const genreMap = item.media_type === "movie" ? movieGenreMap : tvGenreMap;
+      const genres = (item.genre_ids ?? [])
+        .map((genreId) => genreMap.get(genreId))
+        .filter((genreName): genreName is string => Boolean(genreName))
+        .join(", ");
       return {
         id: String(item.id),
         title: item.title ?? item.name ?? "",
@@ -120,7 +156,7 @@ export async function GET(request: Request) {
           ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
           : "",
         plot: item.overview ?? "",
-        genres: "",
+        genres,
         director,
         actors,
         imdbRating:

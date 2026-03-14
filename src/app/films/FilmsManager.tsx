@@ -1202,7 +1202,8 @@ export default function FilmsManager({
       viewed_at: string;
       rating: number | null;
       view_percent: number;
-      items: { title: string; director: string | null }[];
+      title: string;
+      director: string | null;
     }> = [];
     while (true) {
       const { data, error } = await supabase
@@ -1215,18 +1216,30 @@ export default function FilmsManager({
       if (error) {
         throw new Error("Не вдалося експортувати бібліотеку.");
       }
-      const chunk = (data ??
-        []) as Array<{
+      const chunkRaw = (data ?? []) as Array<{
         viewed_at: string;
         rating: number | null;
         view_percent: number;
-        items: { title: string; director: string | null }[];
+        items:
+          | { title?: string | null; director?: string | null }
+          | Array<{ title?: string | null; director?: string | null }>
+          | null;
       }>;
-      if (chunk.length === 0) {
+      if (chunkRaw.length === 0) {
         break;
       }
+      const chunk = chunkRaw.map((row) => {
+        const relatedItem = Array.isArray(row.items) ? row.items[0] : row.items;
+        return {
+          viewed_at: row.viewed_at,
+          rating: row.rating,
+          view_percent: row.view_percent,
+          title: relatedItem?.title ?? "",
+          director: relatedItem?.director ?? null,
+        };
+      });
       allRows.push(...chunk);
-      if (chunk.length < pageSize) {
+      if (chunkRaw.length < pageSize) {
         break;
       }
       from += pageSize;
@@ -1248,8 +1261,8 @@ export default function FilmsManager({
         "Дата перегляду",
       ];
       const rows = allRows.map((item) => [
-        item.items[0]?.title ?? "",
-        item.items[0]?.director ?? "",
+        item.title,
+        item.director ?? "",
         String(item.view_percent ?? 0),
         item.rating != null ? formatPersonalRating(item.rating) : "",
         item.viewed_at ? item.viewed_at.slice(0, 10) : "",
@@ -3321,13 +3334,13 @@ export default function FilmsManager({
                     </span>
                   ) : null}
                 </div>
-                {film.genres ? (
-                  <p className={styles.resultMeta}>{film.genres}</p>
-                ) : null}
                 {film.originalTitle ? (
                   <p className={styles.resultMeta}>
                     Оригінальна назва: {film.originalTitle}
                   </p>
+                ) : null}
+                {film.genres ? (
+                  <p className={styles.resultMeta}>Жанри: {film.genres}</p>
                 ) : null}
                 {film.director ? (
                   <p className={styles.resultMeta}>Режисер: {film.director}</p>
