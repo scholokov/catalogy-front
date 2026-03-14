@@ -39,6 +39,11 @@ type TmdbDetail = {
   };
 };
 
+type TmdbLocalizedTitleDetail = {
+  title?: string;
+  name?: string;
+};
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -46,10 +51,9 @@ export async function GET(
   const { id } = await params;
   const { searchParams } = new URL(request.url);
   const requestedMediaType = searchParams.get("mediaType");
-  const localeHeader = request.headers.get("accept-language") ?? "uk-UA";
-  const primaryLocale = localeHeader.split(",")[0]?.trim() || "uk-UA";
-  const localeLanguage = primaryLocale.split("-")[0] || "uk";
-  const localeRegion = primaryLocale.split("-")[1] || "UA";
+  const primaryLocale = "uk-UA";
+  const localeLanguage = "uk";
+  const localeRegion = "UA";
   const token = process.env.TMDB_READ_ACCESS_TOKEN;
   const apiKey = process.env.TMDB_API_KEY;
 
@@ -109,6 +113,27 @@ export async function GET(
     );
   }
 
+  const englishTitle = await (async () => {
+    const localizedUrl = new URL(
+      `https://api.themoviedb.org/3/${resolvedMediaType}/${detail.id}`,
+    );
+    localizedUrl.searchParams.set("language", "en-US");
+    localizedUrl.searchParams.set("region", "US");
+    if (apiKey) {
+      localizedUrl.searchParams.set("api_key", apiKey);
+    }
+    try {
+      const response = await fetch(localizedUrl.toString(), {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      if (!response.ok) return "";
+      const localized = (await response.json()) as TmdbLocalizedTitleDetail;
+      return localized.title ?? localized.name ?? "";
+    } catch {
+      return "";
+    }
+  })();
+
   const directorJobs =
     resolvedMediaType === "tv" ? ["Series Director", "Director", "Creator"] : ["Director"];
   const director =
@@ -158,6 +183,7 @@ export async function GET(
   return NextResponse.json({
     id: String(detail.id),
     title: detail.title ?? detail.name ?? "",
+    englishTitle,
     originalTitle: detail.original_title ?? detail.original_name ?? "",
     year: (detail.release_date ?? detail.first_air_date ?? "").slice(0, 4),
     poster: primaryPoster,

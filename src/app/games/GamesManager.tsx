@@ -3056,12 +3056,16 @@ export default function GamesManager({
               <button
                 type="button"
                 className="btnBase btnSecondary"
-                onClick={() =>
-                  setPendingFilters({
+                onClick={() => {
+                  const clearedFilters = {
                     ...DEFAULT_FILTERS,
                     yearRange: yearBounds,
-                  })
-                }
+                  };
+                  setPendingFilters(clearedFilters);
+                  setAppliedFilters(clearedFilters);
+                  setHasApplied(true);
+                  setIsFiltersOpen(false);
+                }}
               >
                 Очистити
               </button>

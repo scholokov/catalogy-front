@@ -718,6 +718,9 @@ export default function CatalogModal({
                     onChange={(event) => {
                       const nextIsViewed = event.target.checked;
                       setIsViewed(nextIsViewed);
+                      if (nextIsViewed) {
+                        setViewedAt(today);
+                      }
                       if (nextIsViewed && viewPercent <= 0) {
                         setViewPercent(100);
                         setViewPercentInput("100");

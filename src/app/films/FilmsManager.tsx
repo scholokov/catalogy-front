@@ -39,6 +39,7 @@ type Trailer = {
 type FilmResult = {
   id: string;
   title: string;
+  englishTitle?: string;
   originalTitle?: string;
   year: string;
   poster: string;
@@ -69,6 +70,8 @@ type FilmCollectionItem = {
   items: {
     id: string;
     title: string;
+    title_uk: string | null;
+    title_en: string | null;
     title_original: string | null;
     description: string | null;
     genres: string | null;
@@ -84,6 +87,9 @@ type FilmCollectionItem = {
 };
 
 type FilmItemDraft = {
+  title: string;
+  title_uk: string | null;
+  title_en: string | null;
   title_original: string | null;
   poster_url: string | null;
   year: number | null;
@@ -690,7 +696,7 @@ export default function FilmsManager({
     let query = supabase
       .from("user_views")
       .select(
-        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, title_original, description, genres, director, actors, poster_url, external_id, imdb_rating, trailers, year, type)",
+        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, imdb_rating, trailers, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "film");
@@ -702,7 +708,7 @@ export default function FilmsManager({
     if (trimmedQuery) {
       const escaped = trimmedQuery.replaceAll("%", "\\%");
       query = query.or(
-        `title.ilike.%${escaped}%,title_original.ilike.%${escaped}%,description.ilike.%${escaped}%`,
+        `title.ilike.%${escaped}%,title_uk.ilike.%${escaped}%,title_en.ilike.%${escaped}%,title_original.ilike.%${escaped}%`,
         {
         foreignTable: "items",
         },
@@ -794,7 +800,7 @@ export default function FilmsManager({
       if (trimmedQuery) {
         const escaped = trimmedQuery.replaceAll("%", "\\%");
         countQuery = countQuery.or(
-          `title.ilike.%${escaped}%,title_original.ilike.%${escaped}%,description.ilike.%${escaped}%`,
+          `title.ilike.%${escaped}%,title_uk.ilike.%${escaped}%,title_en.ilike.%${escaped}%,title_original.ilike.%${escaped}%`,
           {
             foreignTable: "items",
           },
@@ -1184,7 +1190,7 @@ export default function FilmsManager({
       viewed_at: string;
       rating: number | null;
       view_percent: number;
-      items: { title: string; director: string | null } | null;
+      items: { title: string; director: string | null }[];
     }> = [];
     while (true) {
       const { data, error } = await supabase
@@ -1202,7 +1208,7 @@ export default function FilmsManager({
         viewed_at: string;
         rating: number | null;
         view_percent: number;
-        items: { title: string; director: string | null } | null;
+        items: { title: string; director: string | null }[];
       }>;
       if (chunk.length === 0) {
         break;
@@ -1230,8 +1236,8 @@ export default function FilmsManager({
         "Дата перегляду",
       ];
       const rows = allRows.map((item) => [
-        item.items?.title ?? "",
-        item.items?.director ?? "",
+        item.items[0]?.title ?? "",
+        item.items[0]?.director ?? "",
         String(item.view_percent ?? 0),
         item.rating != null ? formatPersonalRating(item.rating) : "",
         item.viewed_at ? item.viewed_at.slice(0, 10) : "",
@@ -1494,6 +1500,22 @@ export default function FilmsManager({
   const normalizeTrailers = (trailers?: Trailer[] | null) =>
     trailers && trailers.length > 0 ? trailers : null;
 
+  const normalizeTitle = (value?: string | null) => {
+    const normalized = value?.trim();
+    return normalized ? normalized : null;
+  };
+
+  const normalizeEnglishTitle = (
+    englishTitle?: string | null,
+    originalTitle?: string | null,
+  ) => {
+    const normalizedEnglish = normalizeTitle(englishTitle);
+    const normalizedOriginal = normalizeTitle(originalTitle);
+    if (!normalizedEnglish) return null;
+    if (normalizedOriginal && normalizedEnglish === normalizedOriginal) return null;
+    return normalizedEnglish;
+  };
+
   const selectPreferredTrailer = (trailers?: Trailer[] | null) => {
     if (!trailers || trailers.length === 0) return null;
     const officialTrailer = trailers.find(
@@ -1707,11 +1729,24 @@ export default function FilmsManager({
       throw new Error("Потрібна авторизація.");
     }
 
+    const detailResponse = await fetch(
+      `/api/tmdb/${film.id}?mediaType=${film.mediaType ?? "movie"}`,
+    );
+    const detail = detailResponse.ok
+      ? ((await detailResponse.json()) as FilmResult)
+      : film;
+    const titleUk = normalizeTitle(detail.title) ?? normalizeTitle(film.title);
+    const titleOriginal =
+      normalizeTitle(detail.originalTitle) ?? normalizeTitle(film.originalTitle);
+    const titleEn = normalizeEnglishTitle(detail.englishTitle, titleOriginal);
+    const resolvedTitle =
+      titleUk ?? titleEn ?? titleOriginal ?? normalizeTitle(film.title) ?? "Без назви";
+
     const imdbRatingValue =
-      film.imdbRating && film.imdbRating !== "N/A" ? film.imdbRating : null;
-    const parsedYear = Number.parseInt(film.year, 10);
+      detail.imdbRating && detail.imdbRating !== "N/A" ? detail.imdbRating : null;
+    const parsedYear = Number.parseInt(detail.year, 10);
     const yearValue = Number.isNaN(parsedYear) ? null : parsedYear;
-    const trailers = normalizeTrailers(film.trailers ?? null);
+    const trailers = normalizeTrailers(detail.trailers ?? film.trailers ?? null);
 
     const { data: existingItem, error: findError } = await supabase
       .from("items")
@@ -1731,13 +1766,15 @@ export default function FilmsManager({
         .from("items")
         .insert({
           type: "film",
-          title: film.title,
-          title_original: film.originalTitle || null,
-          description: film.plot,
-          genres: film.genres || null,
-          director: film.director || null,
-          actors: film.actors || null,
-          poster_url: film.poster,
+          title: resolvedTitle,
+          title_uk: titleUk,
+          title_en: titleEn,
+          title_original: titleOriginal,
+          description: detail.plot || null,
+          genres: detail.genres || null,
+          director: detail.director || null,
+          actors: detail.actors || null,
+          poster_url: detail.poster,
           external_id: film.id,
           imdb_rating: imdbRatingValue,
           year: yearValue,
@@ -1767,9 +1804,13 @@ export default function FilmsManager({
     }
 
     const itemUpdates: {
+      title?: string;
+      title_uk?: string | null;
+      title_en?: string | null;
       title_original?: string | null;
       imdb_rating?: string | null;
       year?: number | null;
+      description?: string | null;
       genres?: string | null;
       director?: string | null;
       actors?: string | null;
@@ -1778,13 +1819,17 @@ export default function FilmsManager({
     if (imdbRatingValue) {
       itemUpdates.imdb_rating = imdbRatingValue;
     }
-    if (film.originalTitle) itemUpdates.title_original = film.originalTitle;
+    itemUpdates.title = resolvedTitle;
+    itemUpdates.title_uk = titleUk;
+    itemUpdates.title_en = titleEn;
+    itemUpdates.title_original = titleOriginal;
     if (yearValue) {
       itemUpdates.year = yearValue;
     }
-    if (film.genres) itemUpdates.genres = film.genres;
-    if (film.director) itemUpdates.director = film.director;
-    if (film.actors) itemUpdates.actors = film.actors;
+    if (detail.plot) itemUpdates.description = detail.plot;
+    if (detail.genres) itemUpdates.genres = detail.genres;
+    if (detail.director) itemUpdates.director = detail.director;
+    if (detail.actors) itemUpdates.actors = detail.actors;
     if (trailers) itemUpdates.trailers = trailers;
     if (itemId && Object.keys(itemUpdates).length > 0) {
       const { error: updateError } = await supabase
@@ -1874,6 +1919,9 @@ export default function FilmsManager({
 
     if (itemDraft) {
       const itemUpdatePayload = {
+        title: itemDraft.title,
+        title_uk: itemDraft.title_uk,
+        title_en: itemDraft.title_en,
         title_original: itemDraft.title_original,
         poster_url: itemDraft.poster_url,
         year: itemDraft.year,
@@ -1894,6 +1942,9 @@ export default function FilmsManager({
           const { error: retryError } = await supabase
             .from("items")
             .update({
+              title: itemDraft.title,
+              title_uk: itemDraft.title_uk,
+              title_en: itemDraft.title_en,
               title_original: itemDraft.title_original,
               poster_url: itemDraft.poster_url,
               year: itemDraft.year,
@@ -1928,6 +1979,9 @@ export default function FilmsManager({
           items: itemDraft
             ? {
                 ...item.items,
+                title: itemDraft.title,
+                title_uk: itemDraft.title_uk,
+                title_en: itemDraft.title_en,
                 title_original: itemDraft.title_original,
                 poster_url: itemDraft.poster_url,
                 year: itemDraft.year,
@@ -1957,6 +2011,9 @@ export default function FilmsManager({
         items: itemDraft
           ? {
               ...prev.items,
+              title: itemDraft.title,
+              title_uk: itemDraft.title_uk,
+              title_en: itemDraft.title_en,
               title_original: itemDraft.title_original,
               poster_url: itemDraft.poster_url,
               year: itemDraft.year,
@@ -1986,10 +2043,21 @@ export default function FilmsManager({
 
     const parsedYear = Number.parseInt(detail.year ?? "", 10);
     const trailers = normalizeTrailers(detail.trailers ?? null) ?? selectedView.items.trailers;
+    const titleUk = normalizeTitle(detail.title) ?? selectedView.items.title_uk ?? null;
+    const titleOriginal =
+      normalizeTitle(detail.originalTitle) ?? selectedView.items.title_original ?? null;
+    const titleEn = normalizeEnglishTitle(detail.englishTitle, titleOriginal);
+    const resolvedTitle =
+      titleUk ??
+      titleEn ??
+      titleOriginal ??
+      normalizeTitle(selectedView.items.title) ??
+      "Без назви";
     setSelectedViewItemDraft({
-      title_original: detail.originalTitle?.trim()
-        ? detail.originalTitle.trim()
-        : selectedView.items.title_original ?? null,
+      title: resolvedTitle,
+      title_uk: titleUk,
+      title_en: titleEn,
+      title_original: titleOriginal,
       poster_url: detail.poster?.trim()
         ? detail.poster.trim()
         : selectedView.items.poster_url ?? null,
@@ -3011,12 +3079,16 @@ export default function FilmsManager({
               <button
                 type="button"
                 className="btnBase btnSecondary"
-                onClick={() =>
-                  setPendingFilters({
+                onClick={() => {
+                  const clearedFilters = {
                     ...DEFAULT_FILTERS,
                     yearRange: yearBounds,
-                  })
-                }
+                  };
+                  setPendingFilters(clearedFilters);
+                  setAppliedFilters(clearedFilters);
+                  setHasApplied(true);
+                  setIsFiltersOpen(false);
+                }}
               >
                 Очистити
               </button>
@@ -3211,6 +3283,11 @@ export default function FilmsManager({
                 {film.genres ? (
                   <p className={styles.resultMeta}>{film.genres}</p>
                 ) : null}
+                {film.originalTitle ? (
+                  <p className={styles.resultMeta}>
+                    Оригінальна назва: {film.originalTitle}
+                  </p>
+                ) : null}
                 {film.director ? (
                   <p className={styles.resultMeta}>Режисер: {film.director}</p>
                 ) : null}
@@ -3315,6 +3392,17 @@ export default function FilmsManager({
             {selectedFilm.year ? (
               <p className={styles.resultMeta}>Рік: {selectedFilm.year}</p>
             ) : null}
+            {selectedFilm.originalTitle ? (
+              <p className={styles.resultMeta}>
+                Оригінальна назва: {selectedFilm.originalTitle}
+              </p>
+            ) : null}
+            {selectedFilm.englishTitle &&
+            selectedFilm.englishTitle !== selectedFilm.originalTitle ? (
+              <p className={styles.resultMeta}>
+                Англійська назва: {selectedFilm.englishTitle}
+              </p>
+            ) : null}
             {selectedFilm.director ? (
               <p className={styles.resultMeta}>
                 Режисер: {selectedFilm.director}
@@ -3412,6 +3500,15 @@ export default function FilmsManager({
                 selectedView.items.title_original ??
                 "—"}
             </p>
+            {(selectedViewItemDraft?.title_en ?? selectedView.items.title_en) &&
+            (selectedViewItemDraft?.title_en ?? selectedView.items.title_en) !==
+              (selectedViewItemDraft?.title_original ??
+                selectedView.items.title_original) ? (
+              <p className={styles.resultMeta}>
+                Англійська назва:{" "}
+                {selectedViewItemDraft?.title_en ?? selectedView.items.title_en}
+              </p>
+            ) : null}
             {(selectedViewItemDraft?.year ?? selectedView.items.year) ? (
               <p className={styles.resultMeta}>
                 Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
