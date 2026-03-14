@@ -165,12 +165,16 @@
 .iconButton {
   height: 54px;
   width: 54px;
+  padding: 0;
   border-radius: var(--radius-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 27px;
   border: none;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
   background: transparent;
   color: var(--color-text-muted);
   transition: color 0.2s ease;

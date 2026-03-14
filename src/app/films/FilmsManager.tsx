@@ -2552,7 +2552,7 @@ export default function FilmsManager({
               <>
                 <button
                   type="button"
-                  className="btnBase btnSecondary"
+                  className={`btnBase btnSecondary ${styles.desktopOnlyAction}`}
                   onClick={() => {
                     void handleExportCsv();
                   }}

@@ -160,6 +160,10 @@
   gap: 12px;
 }
 
+.desktopOnlyAction {
+  display: inline-flex;
+}
+
 .filmsToolbar .toolbarActions {
   justify-content: flex-end;
   width: fit-content;
@@ -950,6 +954,12 @@
 @media (max-width: 800px) {
   .collectionItem .resultTitle {
     font-size: var(--font-size-md);
+  }
+}
+
+@media (max-width: 900px) {
+  .desktopOnlyAction {
+    display: none;
   }
 }
 

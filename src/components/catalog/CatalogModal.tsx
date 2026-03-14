@@ -2,7 +2,6 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import CloseIconButton from "@/components/ui/CloseIconButton";
 import styles from "./CatalogModal.module.css";
 
 type CatalogModalProps = {
@@ -556,11 +555,23 @@ export default function CatalogModal({
                 ) : null}
               </div>
             ) : null}
-            <CloseIconButton
+            <button
+              type="button"
               className={`${styles.iconButton} btnSecondary`}
               onClick={onClose}
+              aria-label="Закрити"
               disabled={isSaving || isRefreshing}
-            />
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 -960 960 960"
+                width="20"
+                height="20"
+                aria-hidden="true"
+              >
+                <path d="M256-200 200-256l224-224-224-224 56-56 224 224 224-224 56 56-224 224 224 224-56 56-224-224-224 224Z" />
+              </svg>
+            </button>
           </div>
         </div>
 
