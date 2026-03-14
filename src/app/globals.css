@@ -156,7 +156,7 @@ body {
 .navHeader {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 12px;
 }
 
@@ -251,6 +251,10 @@ body {
   position: relative;
   margin-top: auto;
   margin-bottom: 50px;
+}
+
+.navLogout .navLink {
+  width: 100%;
 }
 
 .navLogout::after {
@@ -914,6 +918,10 @@ a {
 }
 
 @media (max-width: 900px) {
+  .navHeader {
+    justify-content: space-between;
+  }
+
   .navLogo {
     display: none;
   }

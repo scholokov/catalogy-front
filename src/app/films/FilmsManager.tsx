@@ -20,6 +20,7 @@ import {
   readDisplayPreferences,
   DISPLAY_PREFERENCES_STORAGE_KEY,
 } from "@/lib/settings/displayPreferences";
+import { downloadCsvFile } from "@/lib/csv/downloadCsv";
 import { getDisplayName } from "@/lib/users/displayName";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
@@ -1159,6 +1160,87 @@ export default function FilmsManager({
           return genresMatches && directorMatches;
         });
   }, [appliedFilters.director, appliedFilters.genres, collection]);
+  const getCsvTimestamp = () => {
+    const now = new Date();
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(
+      now.getHours(),
+    )}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  };
+  const fetchAllFilmsLibraryForCsv = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      throw new Error("Потрібна авторизація.");
+    }
+    if (readOnly && ownerUserId && friendAccessState !== "allowed") {
+      throw new Error("Немає доступу до бібліотеки.");
+    }
+    const effectiveOwnerId = ownerUserId ?? user.id;
+    const pageSize = 1000;
+    let from = 0;
+    const allRows: Array<{
+      viewed_at: string;
+      rating: number | null;
+      view_percent: number;
+      items: { title: string; director: string | null } | null;
+    }> = [];
+    while (true) {
+      const { data, error } = await supabase
+        .from("user_views")
+        .select("viewed_at, rating, view_percent, items:items!inner(title, director, type)")
+        .eq("user_id", effectiveOwnerId)
+        .eq("items.type", "film")
+        .order("created_at", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) {
+        throw new Error("Не вдалося експортувати бібліотеку.");
+      }
+      const chunk = (data ??
+        []) as Array<{
+        viewed_at: string;
+        rating: number | null;
+        view_percent: number;
+        items: { title: string; director: string | null } | null;
+      }>;
+      if (chunk.length === 0) {
+        break;
+      }
+      allRows.push(...chunk);
+      if (chunk.length < pageSize) {
+        break;
+      }
+      from += pageSize;
+    }
+    return allRows;
+  };
+  const handleExportCsv = async () => {
+    try {
+      const allRows = await fetchAllFilmsLibraryForCsv();
+      if (allRows.length === 0) {
+        setMessage("Бібліотека порожня.");
+        return;
+      }
+      const headers = [
+        "Назва",
+        "Режисер",
+        "Переглянуто у відсотках",
+        "Особистий рейтинг",
+        "Дата перегляду",
+      ];
+      const rows = allRows.map((item) => [
+        item.items?.title ?? "",
+        item.items?.director ?? "",
+        String(item.view_percent ?? 0),
+        item.rating != null ? formatPersonalRating(item.rating) : "",
+        item.viewed_at ? item.viewed_at.slice(0, 10) : "",
+      ]);
+      downloadCsvFile(`films_export_${getCsvTimestamp()}.csv`, headers, rows);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не вдалося експортувати бібліотеку.");
+    }
+  };
   const [yearRangeFrom, yearRangeTo] = clampRange(appliedFilters.yearRange, yearBounds);
   const isFiltersApplied =
     Boolean(
@@ -2399,13 +2481,24 @@ export default function FilmsManager({
           </div>
           <div className={styles.toolbarActions}>
             {!readOnly ? (
-              <button
-                type="button"
-                className="btnBase btnPrimary"
-                onClick={() => setIsAddOpen(true)}
-              >
-                Додати
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btnBase btnSecondary"
+                  onClick={() => {
+                    void handleExportCsv();
+                  }}
+                >
+                  Експорт CSV
+                </button>
+                <button
+                  type="button"
+                  className="btnBase btnPrimary"
+                  onClick={() => setIsAddOpen(true)}
+                >
+                  Додати
+                </button>
+              </>
             ) : null}
           </div>
         </div>

@@ -162,7 +162,7 @@ export default function AppShell({ children }: AppShellProps) {
         <div className="navHeader">
           <Link className="navLogo" href="/" aria-label="Catalogy">
             <Image
-              src="/images/logo_small.png"
+              src="/images/48x48.png"
               alt="Catalogy"
               width={36}
               height={36}
