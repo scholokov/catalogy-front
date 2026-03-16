@@ -1,4 +1,4 @@
-const CACHE_NAME = "catalogy-pwa-v2";
+const CACHE_NAME = "catalogy-pwa-v3";
 const CORE_ASSETS = ["/", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {

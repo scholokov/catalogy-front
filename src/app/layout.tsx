@@ -22,13 +22,33 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
-      { url: "/images/16х16.png", sizes: "16x16", type: "image/png" },
-      { url: "/images/32x32.png", sizes: "32x32", type: "image/png" },
-      { url: "/images/48x48.png", sizes: "48x48", type: "image/png" },
-      { url: "/images/192x192.png", sizes: "192x192", type: "image/png" },
-      { url: "/images/512x512.png", sizes: "512x512", type: "image/png" },
+      {
+        url: "/images/16х16.png",
+        sizes: "16x16",
+        type: "image/png",
+        media: "(prefers-color-scheme: dark)",
+      },
+      {
+        url: "/images/16x16_light.png",
+        sizes: "16x16",
+        type: "image/png",
+        media: "(prefers-color-scheme: light)",
+      },
     ],
-    shortcut: [{ url: "/images/32x32.png", sizes: "32x32", type: "image/png" }],
+    shortcut: [
+      {
+        url: "/images/16х16.png",
+        sizes: "16x16",
+        type: "image/png",
+        media: "(prefers-color-scheme: dark)",
+      },
+      {
+        url: "/images/16x16_light.png",
+        sizes: "16x16",
+        type: "image/png",
+        media: "(prefers-color-scheme: light)",
+      },
+    ],
     apple: [
       { url: "/images/180x180.png", sizes: "180x180", type: "image/png" },
     ],
