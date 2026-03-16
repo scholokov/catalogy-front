@@ -3458,7 +3458,7 @@ export default function FilmsManager({
                     suppressCopyTooltip();
                     void copyText(selectedFilm.originalTitle ?? "");
                   }}
-                  data-copy-tooltip="Клікніть для копіювання."
+                  data-copy-tooltip="Клікніть для копіювання"
                   aria-label={`Скопіювати оригінальну назву: ${selectedFilm.originalTitle}`}
                 >
                   {selectedFilm.originalTitle}
@@ -3579,7 +3579,7 @@ export default function FilmsManager({
                         "",
                     );
                   }}
-                  data-copy-tooltip="Клікніть для копіювання."
+                  data-copy-tooltip="Клікніть для копіювання"
                   aria-label={`Скопіювати оригінальну назву: ${selectedViewItemDraft?.title_original ?? selectedView.items.title_original ?? ""}`}
                 >
                   {selectedViewItemDraft?.title_original ??

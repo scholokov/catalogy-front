@@ -535,7 +535,7 @@ export default function CatalogModal({
                 suppressTitleTooltip();
                 void copyText(title);
               }}
-              data-copy-tooltip="Клікніть для копіювання."
+              data-copy-tooltip="Клікніть для копіювання"
               aria-label={`Скопіювати назву: ${title}`}
             >
               {title}
