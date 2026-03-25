@@ -17,6 +17,7 @@ const AVAILABILITY_OPTIONS = [
 ];
 
 export default function SettingsPage() {
+  const [activeTab, setActiveTab] = useState<"films" | "games">("films");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -223,159 +224,172 @@ export default function SettingsPage() {
   return (
     <CatalogLayout title="Налаштування" showBrandLogo>
       <div className={styles.content}>
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Ігри</h2>
-          <label className={styles.checkboxRow}>
-            <input
-              className={styles.checkbox}
-              type="checkbox"
-              checked={showGameAvailability}
-              onChange={(event) => setShowGameAvailability(event.target.checked)}
-              disabled={isLoading || isSaving}
-            />
-            Відображати &quot;Наявність&quot;
-          </label>
-          <div className={`${styles.field} ${styles.platformsField}`} ref={platformsRef}>
-            Наявні платформи
-            <button
-              type="button"
-              className={styles.multiSelectTrigger}
-              onClick={() => setIsPlatformsOpen((prev) => !prev)}
-              disabled={isLoading || isSaving}
-            >
-              <span className={styles.multiSelectText}>{selectedPlatformsLabel}</span>
-              <span className={styles.multiSelectChevron}>▾</span>
-            </button>
-            {isPlatformsOpen ? (
-              <div className={styles.multiSelectMenu}>
-                {DEFAULT_GAME_PLATFORM_OPTIONS.map((platform) => (
-                  <label key={platform} className={styles.multiSelectOption}>
-                    <input
-                      className={styles.checkbox}
-                      type="checkbox"
-                      checked={visiblePlatformSet.has(platform)}
-                      onChange={() => togglePlatform(platform)}
-                      disabled={isLoading || isSaving}
-                    />
-                    {platform}
-                  </label>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <label className={styles.field}>
-            Значення за замовчанням
-            <select
-              className={styles.select}
-              value={defaultGamePlatform ?? ""}
-              onChange={(event) =>
-                setDefaultGamePlatform(event.target.value || null)
-              }
-              disabled={isLoading || isSaving}
-            >
-              <option value="">-</option>
-              {DEFAULT_GAME_PLATFORM_OPTIONS.filter((platform) =>
-                visibleGamePlatforms.includes(platform),
-              ).map((platform) => (
-                <option key={platform} value={platform}>
-                  {platform}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className={styles.field}>
-            Наявність за замовчанням
-            <select
-              className={styles.select}
-              value={defaultGameAvailability ?? ""}
-              onChange={(event) =>
-                setDefaultGameAvailability(event.target.value || null)
-              }
-              disabled={isLoading || isSaving}
-            >
-              <option value="">-</option>
-              {AVAILABILITY_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className={styles.field}>
-            Переглянуто за замовчанням
-            <select
-              className={styles.select}
-              value={
-                defaultGameIsViewed === null ? "" : defaultGameIsViewed ? "viewed" : "planned"
-              }
-              onChange={(event) =>
-                setDefaultGameIsViewed(
-                  event.target.value === ""
-                    ? null
-                    : event.target.value === "viewed",
-                )
-              }
-              disabled={isLoading || isSaving}
-            >
-              <option value="">-</option>
-              <option value="viewed">Переглянуто</option>
-              <option value="planned">Заплановано</option>
-            </select>
-          </label>
-        </section>
+        <div className={styles.tabSwitch}>
+          <button
+            type="button"
+            className={`${styles.tabButton} ${
+              activeTab === "films" ? styles.tabButtonActive : ""
+            }`}
+            onClick={() => setActiveTab("films")}
+          >
+            Кіно
+          </button>
+          <button
+            type="button"
+            className={`${styles.tabButton} ${
+              activeTab === "games" ? styles.tabButtonActive : ""
+            }`}
+            onClick={() => setActiveTab("games")}
+          >
+            Ігри
+          </button>
+        </div>
 
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Фільми</h2>
-          <label className={styles.checkboxRow}>
-            <input
-              className={styles.checkbox}
-              type="checkbox"
-              checked={showFilmAvailability}
-              onChange={(event) => setShowFilmAvailability(event.target.checked)}
-              disabled={isLoading || isSaving}
-            />
-            Відображати &quot;Наявність&quot;
-          </label>
-          <label className={styles.field}>
-            Наявність за замовчанням
-            <select
-              className={styles.select}
-              value={defaultFilmAvailability ?? ""}
-              onChange={(event) =>
-                setDefaultFilmAvailability(event.target.value || null)
-              }
-              disabled={isLoading || isSaving}
-            >
-              <option value="">-</option>
-              {AVAILABILITY_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className={styles.field}>
-            Переглянуто за замовчанням
-            <select
-              className={styles.select}
-              value={
-                defaultFilmIsViewed === null ? "" : defaultFilmIsViewed ? "viewed" : "planned"
-              }
-              onChange={(event) =>
-                setDefaultFilmIsViewed(
-                  event.target.value === ""
-                    ? null
-                    : event.target.value === "viewed",
-                )
-              }
-              disabled={isLoading || isSaving}
-            >
-              <option value="">-</option>
-              <option value="viewed">Переглянуто</option>
-              <option value="planned">Заплановано</option>
-            </select>
-          </label>
-        </section>
+        {activeTab === "films" ? (
+          <section className={styles.section}>
+            <h2 className={styles.sectionTitle}>Кіно</h2>
+            <label className={styles.checkboxRow}>
+              <input
+                className={styles.checkbox}
+                type="checkbox"
+                checked={showFilmAvailability}
+                onChange={(event) => setShowFilmAvailability(event.target.checked)}
+                disabled={isLoading || isSaving}
+              />
+              Відображати &quot;Наявність&quot;
+            </label>
+            <label className={styles.field}>
+              Наявність за замовчанням
+              <select
+                className={styles.select}
+                value={defaultFilmAvailability ?? ""}
+                onChange={(event) => setDefaultFilmAvailability(event.target.value || null)}
+                disabled={isLoading || isSaving}
+              >
+                <option value="">-</option>
+                {AVAILABILITY_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              Переглянуто за замовчанням
+              <select
+                className={styles.select}
+                value={
+                  defaultFilmIsViewed === null ? "" : defaultFilmIsViewed ? "viewed" : "planned"
+                }
+                onChange={(event) =>
+                  setDefaultFilmIsViewed(
+                    event.target.value === "" ? null : event.target.value === "viewed",
+                  )
+                }
+                disabled={isLoading || isSaving}
+              >
+                <option value="">-</option>
+                <option value="viewed">Переглянуто</option>
+                <option value="planned">Заплановано</option>
+              </select>
+            </label>
+          </section>
+        ) : (
+          <section className={styles.section}>
+            <h2 className={styles.sectionTitle}>Ігри</h2>
+            <label className={styles.checkboxRow}>
+              <input
+                className={styles.checkbox}
+                type="checkbox"
+                checked={showGameAvailability}
+                onChange={(event) => setShowGameAvailability(event.target.checked)}
+                disabled={isLoading || isSaving}
+              />
+              Відображати &quot;Наявність&quot;
+            </label>
+            <div className={`${styles.field} ${styles.platformsField}`} ref={platformsRef}>
+              Наявні платформи
+              <button
+                type="button"
+                className={styles.multiSelectTrigger}
+                onClick={() => setIsPlatformsOpen((prev) => !prev)}
+                disabled={isLoading || isSaving}
+              >
+                <span className={styles.multiSelectText}>{selectedPlatformsLabel}</span>
+                <span className={styles.multiSelectChevron}>▾</span>
+              </button>
+              {isPlatformsOpen ? (
+                <div className={styles.multiSelectMenu}>
+                  {DEFAULT_GAME_PLATFORM_OPTIONS.map((platform) => (
+                    <label key={platform} className={styles.multiSelectOption}>
+                      <input
+                        className={styles.checkbox}
+                        type="checkbox"
+                        checked={visiblePlatformSet.has(platform)}
+                        onChange={() => togglePlatform(platform)}
+                        disabled={isLoading || isSaving}
+                      />
+                      {platform}
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <label className={styles.field}>
+              Значення за замовчанням
+              <select
+                className={styles.select}
+                value={defaultGamePlatform ?? ""}
+                onChange={(event) => setDefaultGamePlatform(event.target.value || null)}
+                disabled={isLoading || isSaving}
+              >
+                <option value="">-</option>
+                {DEFAULT_GAME_PLATFORM_OPTIONS.filter((platform) =>
+                  visibleGamePlatforms.includes(platform),
+                ).map((platform) => (
+                  <option key={platform} value={platform}>
+                    {platform}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              Наявність за замовчанням
+              <select
+                className={styles.select}
+                value={defaultGameAvailability ?? ""}
+                onChange={(event) => setDefaultGameAvailability(event.target.value || null)}
+                disabled={isLoading || isSaving}
+              >
+                <option value="">-</option>
+                {AVAILABILITY_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.field}>
+              Переглянуто за замовчанням
+              <select
+                className={styles.select}
+                value={
+                  defaultGameIsViewed === null ? "" : defaultGameIsViewed ? "viewed" : "planned"
+                }
+                onChange={(event) =>
+                  setDefaultGameIsViewed(
+                    event.target.value === "" ? null : event.target.value === "viewed",
+                  )
+                }
+                disabled={isLoading || isSaving}
+              >
+                <option value="">-</option>
+                <option value="viewed">Переглянуто</option>
+                <option value="planned">Заплановано</option>
+              </select>
+            </label>
+          </section>
+        )}
 
         <div className={styles.actions}>
           <button

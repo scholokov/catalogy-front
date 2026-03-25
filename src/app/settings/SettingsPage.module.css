@@ -3,6 +3,33 @@
   gap: 16px;
 }
 
+.tabSwitch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+}
+
+.tabButton {
+  min-width: 120px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
+.tabButtonActive {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
 .section {
   display: grid;
   gap: 12px;
