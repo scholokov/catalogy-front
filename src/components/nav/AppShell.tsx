@@ -252,6 +252,21 @@ export default function AppShell({ children }: AppShellProps) {
             ) : null}
           </Link>
           <Link
+            className={`navLink ${isCurrentPath("/statistics") ? "navLinkActive" : ""}`}
+            href="/statistics"
+            aria-label="Статистика"
+          >
+            <svg
+              className="navIcon"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 -960 960 960"
+              aria-hidden="true"
+            >
+              <path d="M120-120v-80h720v80H120Zm80-160v-320h120v320H200Zm220 0v-560h120v560H420Zm220 0v-200h120v200H640Z" />
+            </svg>
+            <span className="navLabel">Статистика</span>
+          </Link>
+          <Link
             className={`navLink ${isCurrentPath("/settings") ? "navLinkActive" : ""}`}
             href="/settings"
             aria-label="Settings"

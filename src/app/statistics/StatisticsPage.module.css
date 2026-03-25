@@ -1,0 +1,209 @@
+.content {
+  display: grid;
+  gap: 18px;
+}
+
+.tabSwitch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+  margin-bottom: 18px;
+}
+
+.tabButton {
+  min-width: 120px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
+.tabButtonActive {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+.message {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.kpiCard {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+}
+
+.kpiLabel {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.kpiValue {
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: var(--font-weight-semibold);
+}
+
+.sectionGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.section {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+}
+
+.sectionFull {
+  grid-column: 1 / -1;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--font-size-xl);
+}
+
+.sectionText {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.list {
+  display: grid;
+  gap: 10px;
+}
+
+.listItem {
+  display: grid;
+  gap: 6px;
+}
+
+.listRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.listLabel {
+  min-width: 0;
+  font-weight: var(--font-weight-medium);
+}
+
+.listValue {
+  white-space: nowrap;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.listMeta {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.barTrack {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--color-accent), #9d8bff);
+}
+
+.emptyBox {
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.nestedGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.nestedCard {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.nestedTitle {
+  margin: 0;
+  font-size: var(--font-size-lg);
+}
+
+.showMoreButton {
+  justify-self: start;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.showMoreButton:hover {
+  background: var(--color-surface-elevated);
+}
+
+@media (max-width: 900px) {
+  .kpiGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sectionGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .nestedGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .kpiGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .nestedGrid {
+    grid-template-columns: 1fr;
+  }
+}
