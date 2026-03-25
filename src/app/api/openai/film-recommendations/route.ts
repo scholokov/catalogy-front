@@ -1,0 +1,317 @@
+import { NextResponse } from "next/server";
+import {
+  buildKnownTitlesForLlm,
+  buildLlmRecoContextText,
+  type FilmLlmExportRow,
+} from "@/app/statistics/filmLlmCsv";
+
+type OpenAiMessage = {
+  content?: string;
+};
+
+type OpenAiChoice = {
+  message?: OpenAiMessage;
+};
+
+type OpenAiResponse = {
+  choices?: OpenAiChoice[];
+  error?: {
+    message?: string;
+  };
+};
+
+type ParsedRecommendation = {
+  title: string;
+  year: string;
+  type: string;
+  why: string;
+  fitTag: string;
+  raw: string;
+};
+
+const OPENAI_MODEL = process.env.OPENAI_RECOMMENDATION_MODEL || "gpt-4.1-mini";
+
+const buildPrompt = (context: string, requestedCount: number) => `You are given a compact recommendation context for one user.
+Your task: Suggest ${requestedCount} candidate movie or series titles that fit the user's taste profile extremely well.
+
+Critical rules:
+1. Recommend only strong-fit candidates, not broad genre matches.
+2. Prefer titles with a high probability of emotional/taste resonance, not just cultural importance.
+3. Avoid generic, formulaic, safe, or obvious filler picks.
+4. Avoid titles too similar to each other; keep the ${requestedCount} suggestions distinct in tone or subtype while still matching the same taste core.
+5. You are generating a candidate pool. Some titles may later be filtered out by code if they already exist in the user's collection, so prioritize quality and fit.
+6. Do not explain the full user profile back to me.
+7. Do not recommend anything from the "Representative positive titles", "Representative negative titles", or "Current interest vector" if those titles are explicitly listed there.
+8. Prefer internationally known titles with stable naming to reduce ambiguity.
+
+Output format:
+Return exactly ${requestedCount} items as a numbered list.
+For each item use this format:
+1. Original Title (Year) — type: movie/series/miniseries
+Why it fits: 1-2 short sentences in Ukrainian.
+Fit tag: one short label only.
+
+Important:
+- "Why it fits" must explain why this title matches this specific user's taste.
+- Do not write plot summary, synopsis, or generic description of the title.
+
+Allowed fit tag examples:
+- dark moral pressure
+- black absurdity
+- authorial crime
+- harsh historical weight
+- stylized genre energy
+- competent people under pressure
+- sovereign tone
+
+Keep the writing compact.
+Do not add intros or conclusions.
+
+=== USER CONTEXT START ===
+${context}
+=== USER CONTEXT END ===`;
+
+const buildRetryPrompt = (context: string, requestedCount: number) => `You previously generated candidates that were either malformed, too overlapping, or not usable after filtering.
+Generate ${requestedCount} new candidates with stricter diversity and better formatting.
+
+Hard requirements:
+1. Return exactly ${requestedCount} items.
+2. Do not repeat obvious canon already implied by representative titles.
+3. Prefer less obvious but still high-fit candidates.
+4. Keep formatting exact.
+5. Write "Why it fits" content in Ukrainian.
+
+Output format:
+1. Original Title (Year) — type: movie/series/miniseries
+Why it fits: 1-2 short sentences in Ukrainian.
+Fit tag: one short label only.
+
+Important:
+- "Why it fits" must explain the user-fit, not the plot.
+- Do not write synopsis.
+
+=== USER CONTEXT START ===
+${context}
+=== USER CONTEXT END ===`;
+
+const normalizeTitle = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-zа-яіїєґ0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const stripMarkdown = (value: string) =>
+  value
+    .replace(/\*\*/g, "")
+    .replace(/^[-•]\s*/, "")
+    .trim();
+
+const buildKnownTitleSet = (rows: FilmLlmExportRow[]) => {
+  const titles = new Set<string>();
+  rows.forEach((row) => {
+    [
+      row.titleOriginal,
+      row.titleEn,
+      row.titleUk,
+      row.title,
+      row.year ? `${row.titleOriginal} (${row.year})` : "",
+      row.year ? `${row.titleEn} (${row.year})` : "",
+      row.year ? `${row.titleUk} (${row.year})` : "",
+      row.year ? `${row.title} (${row.year})` : "",
+    ]
+      .filter(Boolean)
+      .forEach((title) => {
+        titles.add(normalizeTitle(title));
+      });
+  });
+  return titles;
+};
+
+const parseRecommendations = (text: string): ParsedRecommendation[] => {
+  const normalizedText = text.replace(/\r\n/g, "\n").trim();
+  const blocks = normalizedText
+    .split(/\n(?=\s*\d+[.)]\s+)/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  return blocks
+    .map((block) => {
+      const lines = block
+        .split("\n")
+        .map((line) => stripMarkdown(line))
+        .filter(Boolean);
+      if (lines.length === 0) return null;
+
+      const firstLine = lines[0].replace(/^\d+[.)]\s*/, "").trim();
+      const titleMatch = firstLine.match(
+        /^(.*?)\s*\((\d{4})\)\s*[—–-]\s*type:\s*(movie|series|miniseries|tv series|tv|miniseries\/series)$/i,
+      );
+      if (!titleMatch) return null;
+
+      const whyLineIndex = lines.findIndex((line) => /^Why it fits:/i.test(line));
+      const fitLine = lines.find((line) => /^Fit tag:/i.test(line));
+      const whyText =
+        whyLineIndex >= 0
+          ? (() => {
+              const collected: string[] = [];
+              for (let index = whyLineIndex; index < lines.length; index += 1) {
+                const line = lines[index];
+                if (index > whyLineIndex && /^Fit tag:/i.test(line)) {
+                  break;
+                }
+                collected.push(line);
+              }
+              return collected.join(" ").replace(/^Why it fits:\s*/i, "").trim();
+            })()
+          : "";
+      const normalizedType = titleMatch[3].toLowerCase().includes("mini")
+        ? "miniseries"
+        : titleMatch[3].toLowerCase().includes("series") || titleMatch[3].toLowerCase() === "tv"
+          ? "series"
+          : "movie";
+
+      return {
+        title: stripMarkdown(titleMatch[1].trim()),
+        year: titleMatch[2],
+        type: normalizedType,
+        why: whyText,
+        fitTag: fitLine?.replace(/^Fit tag:\s*/i, "").trim() ?? "",
+        raw: block,
+      };
+    })
+    .filter((entry): entry is ParsedRecommendation => Boolean(entry));
+};
+
+const filterRecommendations = (
+  recommendations: ParsedRecommendation[],
+  knownTitles: Set<string>,
+) => {
+  const seen = new Set<string>();
+  return recommendations.filter((entry) => {
+    const normalizedTitle = normalizeTitle(entry.title);
+    const normalizedWithYear = normalizeTitle(`${entry.title} (${entry.year})`);
+    if (knownTitles.has(normalizedTitle) || knownTitles.has(normalizedWithYear)) {
+      return false;
+    }
+    if (seen.has(normalizedTitle)) {
+      return false;
+    }
+    seen.add(normalizedTitle);
+    return true;
+  });
+};
+
+const callOpenAi = async (
+  context: string,
+  requestedCount: number,
+  promptBuilder: (context: string, requestedCount: number) => string = buildPrompt,
+) => {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing OPENAI_API_KEY.");
+  }
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      temperature: 0.9,
+      messages: [
+        {
+          role: "user",
+          content: promptBuilder(context, requestedCount),
+        },
+      ],
+    }),
+  });
+
+  const data = (await response.json()) as OpenAiResponse;
+
+  if (!response.ok) {
+    throw new Error(data.error?.message || "OpenAI request failed.");
+  }
+
+  return data.choices?.[0]?.message?.content?.trim() ?? "";
+};
+
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json()) as { rows?: FilmLlmExportRow[] };
+    const rows = Array.isArray(body.rows) ? body.rows : [];
+
+    if (rows.length === 0) {
+      return NextResponse.json({ error: "Missing film rows." }, { status: 400 });
+    }
+
+    const context = buildLlmRecoContextText(rows, { includeKnownTitles: false });
+    const knownTitles = buildKnownTitleSet(rows);
+
+    const firstResponse = await callOpenAi(context, 4);
+    const firstFiltered = filterRecommendations(parseRecommendations(firstResponse), knownTitles);
+
+    let finalRecommendations = firstFiltered;
+
+    if (finalRecommendations.length < 3) {
+      const secondResponse = await callOpenAi(context, 6, buildRetryPrompt);
+      const secondFiltered = filterRecommendations(parseRecommendations(secondResponse), knownTitles);
+      const merged = [...firstFiltered];
+      secondFiltered.forEach((entry) => {
+        if (
+          !merged.some(
+            (existing) => normalizeTitle(existing.title) === normalizeTitle(entry.title),
+          )
+        ) {
+          merged.push(entry);
+        }
+      });
+      finalRecommendations = merged;
+    }
+
+    if (finalRecommendations.length < 3) {
+      const thirdResponse = await callOpenAi(context, 8, buildRetryPrompt);
+      const thirdFiltered = filterRecommendations(parseRecommendations(thirdResponse), knownTitles);
+      const merged = [...finalRecommendations];
+      thirdFiltered.forEach((entry) => {
+        if (
+          !merged.some(
+            (existing) => normalizeTitle(existing.title) === normalizeTitle(entry.title),
+          )
+        ) {
+          merged.push(entry);
+        }
+      });
+      finalRecommendations = merged;
+    }
+
+    const outputRecommendations = finalRecommendations.slice(0, 3);
+    const message =
+      outputRecommendations.length > 0
+        ? outputRecommendations
+            .map(
+              (entry, index) =>
+                `${index + 1}. ${entry.title} (${entry.year}) — type: ${entry.type}\nWhy it fits: ${entry.why}\nFit tag: ${entry.fitTag}`,
+            )
+            .join("\n\n")
+        : "Не вдалося підібрати рекомендації. Спробуйте ще раз — модель повернула або вже відомі тайтли, або нестабільний формат відповіді.";
+
+    return NextResponse.json({
+      message,
+      recommendations: outputRecommendations,
+      knownTitlesCount: buildKnownTitlesForLlm(rows).length,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "Не вдалося згенерувати рекомендації.",
+      },
+      { status: 500 },
+    );
+  }
+}

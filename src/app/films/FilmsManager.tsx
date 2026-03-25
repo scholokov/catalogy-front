@@ -23,6 +23,7 @@ import {
 } from "@/lib/settings/displayPreferences";
 import { downloadCsvFile } from "@/lib/csv/downloadCsv";
 import { getDisplayName } from "@/lib/users/displayName";
+import type { FilmLlmExportRow } from "@/app/statistics/filmLlmCsv";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
 type Trailer = {
@@ -85,6 +86,15 @@ type FilmCollectionItem = {
     year?: number | null;
     type: string;
   };
+};
+
+type AiRecommendation = {
+  title: string;
+  year: string;
+  type: string;
+  why: string;
+  fitTag: string;
+  raw: string;
 };
 
 type FilmItemDraft = {
@@ -214,6 +224,28 @@ const formatPersonalRating = (value: number | null) => {
   if (value === null) return "—";
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 };
+
+const normalizePipeList = (value?: string | null) => {
+  if (!value) return [];
+  const unique = new Set<string>();
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => {
+      if (unique.has(entry)) return false;
+      unique.add(entry);
+      return true;
+    });
+};
+
+const normalizeComparableTitle = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-zа-яіїєґ0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 const getDefaultSortDirection = (sortBy: SortBy): SortDirection => {
   if (sortBy === "title") return "asc";
@@ -345,10 +377,13 @@ export default function FilmsManager({
     MAX_YEAR,
   ]);
   const [message, setMessage] = useState("");
+  const [, setRecommendationMessage] = useState("");
+  const [aiRecommendationComment, setAiRecommendationComment] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
   const totalCountRef = useRef(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGeneratingRecommendations, setIsGeneratingRecommendations] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(0);
@@ -1246,6 +1281,90 @@ export default function FilmsManager({
     }
     return allRows;
   };
+  const fetchAllFilmsLibraryForRecommendations = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      throw new Error("Потрібна авторизація.");
+    }
+    if (readOnly && ownerUserId && friendAccessState !== "allowed") {
+      throw new Error("Немає доступу до бібліотеки.");
+    }
+    const effectiveOwnerId = ownerUserId ?? user.id;
+    const pageSize = 1000;
+    let from = 0;
+    const allRows: FilmLlmExportRow[] = [];
+    while (true) {
+      const { data, error } = await supabase
+        .from("user_views")
+        .select(
+          "item_id, rating, view_percent, items:items!inner(title, title_uk, title_en, title_original, year, external_id, genres, director, type)",
+        )
+        .eq("user_id", effectiveOwnerId)
+        .eq("items.type", "film")
+        .order("created_at", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (error) {
+        throw new Error("Не вдалося підготувати дані для рекомендацій.");
+      }
+      const chunkRaw = (data ?? []) as Array<{
+        item_id: string | null;
+        rating: number | null;
+        view_percent: number | null;
+        items:
+          | {
+              title?: string | null;
+              title_uk?: string | null;
+              title_en?: string | null;
+              title_original?: string | null;
+              year?: number | null;
+              external_id?: string | null;
+              genres?: string | null;
+              director?: string | null;
+              type?: string | null;
+            }
+          | Array<{
+              title?: string | null;
+              title_uk?: string | null;
+              title_en?: string | null;
+              title_original?: string | null;
+              year?: number | null;
+              external_id?: string | null;
+              genres?: string | null;
+              director?: string | null;
+              type?: string | null;
+            }>
+          | null;
+      }>;
+      if (chunkRaw.length === 0) {
+        break;
+      }
+      const chunk = chunkRaw.map((row) => {
+        const relatedItem = Array.isArray(row.items) ? row.items[0] : row.items;
+        return {
+          itemId: row.item_id ?? "",
+          externalId: relatedItem?.external_id?.trim() ?? "",
+          title: relatedItem?.title?.trim() ?? "",
+          titleUk: relatedItem?.title_uk?.trim() ?? "",
+          titleEn: relatedItem?.title_en?.trim() ?? "",
+          titleOriginal: relatedItem?.title_original?.trim() ?? "",
+          year: relatedItem?.year == null ? "" : String(relatedItem.year),
+          type: relatedItem?.type?.trim() || "film",
+          progress: Math.max(0, Math.min(100, row.view_percent ?? 0)),
+          rating: row.rating,
+          genres: normalizePipeList(relatedItem?.genres),
+          directors: normalizePipeList(relatedItem?.director),
+        };
+      });
+      allRows.push(...chunk);
+      if (chunkRaw.length < pageSize) {
+        break;
+      }
+      from += pageSize;
+    }
+    return allRows;
+  };
   const handleExportCsv = async () => {
     try {
       const allRows = await fetchAllFilmsLibraryForCsv();
@@ -1270,6 +1389,114 @@ export default function FilmsManager({
       downloadCsvFile(`films_export_${getCsvTimestamp()}.csv`, headers, rows);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не вдалося експортувати бібліотеку.");
+    }
+  };
+  const resolveRecommendedFilm = async (recommendation: AiRecommendation) => {
+    const searchResults = await handleTmdbSearch(recommendation.title);
+    if (searchResults.length === 0) {
+      return null;
+    }
+
+    const normalizedTitle = normalizeComparableTitle(recommendation.title);
+    const preferredMediaType =
+      recommendation.type === "series" || recommendation.type === "miniseries" ? "tv" : "movie";
+
+    const sortedResults = [...searchResults].sort((left, right) => {
+      const leftTitle = normalizeComparableTitle(left.originalTitle || left.title);
+      const rightTitle = normalizeComparableTitle(right.originalTitle || right.title);
+      const leftExact = leftTitle === normalizedTitle ? 1 : 0;
+      const rightExact = rightTitle === normalizedTitle ? 1 : 0;
+      if (rightExact !== leftExact) return rightExact - leftExact;
+
+      const leftYearExact = left.year === recommendation.year ? 1 : 0;
+      const rightYearExact = right.year === recommendation.year ? 1 : 0;
+      if (rightYearExact !== leftYearExact) return rightYearExact - leftYearExact;
+
+      const leftMediaExact = left.mediaType === preferredMediaType ? 1 : 0;
+      const rightMediaExact = right.mediaType === preferredMediaType ? 1 : 0;
+      if (rightMediaExact !== leftMediaExact) return rightMediaExact - leftMediaExact;
+
+      return 0;
+    });
+
+    const bestMatch = sortedResults.find(
+      (item) => !item.inCollection && !(item.existingViewId || existingViewsByExternalId.get(item.id)),
+    );
+    if (!bestMatch) {
+      return null;
+    }
+
+    try {
+      const detailResponse = await fetch(
+        `/api/tmdb/${bestMatch.id}?mediaType=${bestMatch.mediaType ?? preferredMediaType}`,
+      );
+      if (detailResponse.ok) {
+        return (await detailResponse.json()) as FilmResult;
+      }
+    } catch {
+      // fallback to search result
+    }
+
+    return bestMatch;
+  };
+  const handleRecommend = async () => {
+    setMessage("");
+    setRecommendationMessage("");
+    setIsGeneratingRecommendations(true);
+    try {
+      const allRows = await fetchAllFilmsLibraryForRecommendations();
+      if (allRows.length === 0) {
+        setMessage("Бібліотека порожня.");
+        return;
+      }
+      const response = await fetch("/api/openai/film-recommendations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ rows: allRows }),
+      });
+      const data = (await response.json()) as {
+        message?: string;
+        error?: string;
+        recommendations?: AiRecommendation[];
+      };
+      if (!response.ok) {
+        setMessage(data.error || "Не вдалося згенерувати рекомендації.");
+        return;
+      }
+
+      const recommendations = data.recommendations ?? [];
+      if (recommendations.length === 0) {
+        setRecommendationMessage(data.message || "Не вдалося згенерувати рекомендації.");
+        return;
+      }
+
+      for (const recommendation of recommendations) {
+        const recommendedFilm = await resolveRecommendedFilm(recommendation);
+        if (!recommendedFilm) {
+          continue;
+        }
+
+        setAiRecommendationComment(recommendation.why);
+        setSelectedFilm(recommendedFilm);
+        setRecommendationMessage(
+          `${recommendation.title} (${recommendation.year})\nWhy it fits: ${recommendation.why}\nFit tag: ${recommendation.fitTag}`,
+        );
+        showSnackbar("Рекомендацію відкрито");
+        return;
+      }
+
+      setRecommendationMessage(
+        data.message || "Не вдалося відкрити картку рекомендації після перевірки на дублікати.",
+      );
+      showSnackbar("Рекомендації готові");
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Не вдалося згенерувати рекомендації.",
+      );
+    } finally {
+      setIsGeneratingRecommendations(false);
     }
   };
   const [yearRangeFrom, yearRangeTo] = clampRange(appliedFilters.yearRange, yearBounds);
@@ -2610,13 +2837,25 @@ export default function FilmsManager({
                   onClick={() => {
                     void handleExportCsv();
                   }}
+                  disabled={isGeneratingRecommendations}
                 >
                   Експорт CSV
                 </button>
                 <button
                   type="button"
+                  className={`btnBase btnSecondary ${styles.desktopOnlyAction}`}
+                  onClick={() => {
+                    void handleRecommend();
+                  }}
+                  disabled={isGeneratingRecommendations}
+                >
+                  {isGeneratingRecommendations ? "Рекомендуємо..." : "Рекомендувати"}
+                </button>
+                <button
+                  type="button"
                   className="btnBase btnPrimary"
                   onClick={() => setIsAddOpen(true)}
+                  disabled={isGeneratingRecommendations}
                 >
                   Додати
                 </button>
@@ -2635,7 +2874,6 @@ export default function FilmsManager({
         <p className={styles.message}>{friendAccessMessage}</p>
       ) : null}
       {message ? <p className={styles.message}>{message}</p> : null}
-
       {viewMode === "default" && isFriendAccessAllowed ? (
         <div className={styles.results}>{displayedCollection.map((item) => renderDefaultFilmItem(item))}</div>
       ) : null}
@@ -3294,6 +3532,7 @@ export default function FilmsManager({
               );
               if (detailResponse.ok) {
                 const detail = (await detailResponse.json()) as FilmResult;
+                setAiRecommendationComment("");
                 setSelectedFilm(detail);
                 setIsAddOpen(false);
                 return;
@@ -3302,6 +3541,7 @@ export default function FilmsManager({
               // fallback to search data
             }
 
+            setAiRecommendationComment("");
             setSelectedFilm(film);
             setIsAddOpen(false);
           }}
@@ -3420,11 +3660,13 @@ export default function FilmsManager({
           size="wide"
           onClose={() => {
             setSelectedFilm(null);
+            setAiRecommendationComment("");
             setTrailerMessage("");
           }}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
           initialValues={{
             availability: showAvailability ? defaultFilmAvailability : null,
+            comment: aiRecommendationComment || null,
             isViewed: defaultFilmIsViewed ?? undefined,
           }}
           onAdd={(payload) => handleAddFilm(selectedFilm, payload)}

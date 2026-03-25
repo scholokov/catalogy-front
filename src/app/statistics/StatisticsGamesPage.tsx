@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { downloadCsvFile } from "@/lib/csv/downloadCsv";
+import { getCsvTimestamp } from "@/lib/csv/getCsvTimestamp";
 import StatisticsMonthlyList from "./StatisticsMonthlyList";
 import StatisticsRankedList from "./StatisticsRankedList";
 import styles from "./StatisticsPage.module.css";
 
 type StatisticsGamesPageProps = {
   onTotalChange: (count: number) => void;
+  onExportReady?: (handler: (() => void) | null) => void;
 };
 
 type RawStatsRow = {
@@ -18,10 +21,12 @@ type RawStatsRow = {
   platforms: string[] | null;
   items:
     | {
+        title?: string | null;
         genres?: string | null;
         type?: string | null;
       }
     | Array<{
+        title?: string | null;
         genres?: string | null;
         type?: string | null;
       }>
@@ -29,6 +34,7 @@ type RawStatsRow = {
 };
 
 type GameStatsRow = {
+  title: string;
   viewedAt: string | null;
   isViewed: boolean;
   rating: number | null;
@@ -130,7 +136,7 @@ const buildMonthlyEntries = (rows: GameStatsRow[]) => {
   });
 
   return Array.from(aggregate.entries())
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => right.localeCompare(left))
     .map(([key, count]) => {
       const date = new Date(`${key}-01T00:00:00Z`);
       return {
@@ -193,7 +199,10 @@ const buildPlatformGenrePreferences = (rows: GameStatsRow[]) => {
     .slice(0, 6);
 };
 
-export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPageProps) {
+export default function StatisticsGamesPage({
+  onTotalChange,
+  onExportReady,
+}: StatisticsGamesPageProps) {
   const [rows, setRows] = useState<GameStatsRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
@@ -227,7 +236,7 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
           const { data, error } = await supabase
             .from("user_views")
             .select(
-              "viewed_at, is_viewed, rating, view_percent, platforms, items:items!inner(genres, type)",
+              "viewed_at, is_viewed, rating, view_percent, platforms, items:items!inner(title, genres, type)",
             )
             .eq("user_id", user.id)
             .eq("items.type", "game")
@@ -251,6 +260,7 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
           const chunk = chunkRaw.map((row) => {
             const item = Array.isArray(row.items) ? row.items[0] : row.items;
             return {
+              title: item?.title?.trim() || "Без назви",
               viewedAt: row.viewed_at,
               isViewed: Boolean(row.is_viewed),
               rating: row.rating,
@@ -306,6 +316,8 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
     const totalGames = rows.length;
     const viewedCount = viewedRows.length;
     const plannedCount = totalGames - viewedCount;
+    const viewedShare = totalGames > 0 ? (viewedCount / totalGames) * 100 : null;
+    const plannedShare = totalGames > 0 ? (plannedCount / totalGames) * 100 : null;
     const startedCount = startedRows.length;
     const fullyViewedCount = fullyViewedRows.length;
     const partiallyViewedCount = partiallyViewedRows.length;
@@ -320,6 +332,8 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
       totalGames,
       viewedCount,
       plannedCount,
+      viewedShare,
+      plannedShare,
       fullyViewedCount,
       partiallyViewedCount,
       completionRate,
@@ -335,6 +349,80 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
       platformGenrePreferences: buildPlatformGenrePreferences(viewedRows),
     };
   }, [rows]);
+
+  const handleExportCsv = useCallback(() => {
+    if (rows.length === 0) {
+      return;
+    }
+
+    const summaryRows = [
+      ["Всього ігор", String(statistics.totalGames)],
+      ["Пройдено", `${statistics.viewedCount} (${formatPercent(statistics.viewedShare)})`],
+      ["Заплановано", `${statistics.plannedCount} (${formatPercent(statistics.plannedShare)})`],
+      ["Сер. мій рейтинг", formatAverageRating(statistics.averageRating)],
+      [
+        "Повністю пройдено",
+        `${statistics.fullyViewedCount} (${formatPercent(statistics.completionRate)})`,
+      ],
+      [
+        "Частково пройдено",
+        `${statistics.partiallyViewedCount} (${formatPercent(statistics.partialRate)})`,
+      ],
+    ];
+
+    const rankedColumns = [
+      { label: "Топ жанрів пройдено", entries: statistics.topViewedGenres },
+      { label: "Топ платформ пройдено", entries: statistics.topViewedPlatforms },
+      { label: "Топ жанрів сподобались", entries: statistics.topLikedGenres },
+      { label: "Топ платформ сподобались", entries: statistics.topLikedPlatforms },
+      { label: "Топ жанрів кинуто", entries: statistics.topDroppedGenres },
+      { label: "Топ платформ кинуто", entries: statistics.topDroppedPlatforms },
+      {
+        label: "Улюблені жанри по платформах",
+        entries: statistics.platformGenrePreferences.flatMap((entry) =>
+          entry.entries.map((genreEntry) => ({
+            label: `${entry.platform} → ${genreEntry.label}`,
+            value: genreEntry.value,
+            itemCount: genreEntry.itemCount,
+          })),
+        ),
+      },
+    ];
+
+    const csvHeaders = [
+      "Метрика",
+      "Значення",
+      ...rankedColumns.flatMap((column) => [column.label, "Значення"]),
+      "Перелік ігор",
+    ];
+
+    const maxLength = Math.max(
+      summaryRows.length,
+      rows.length,
+      ...rankedColumns.map((column) => column.entries.length),
+    );
+
+    const rowsForCsv = Array.from({ length: maxLength }, (_, index) => [
+      summaryRows[index]?.[0] ?? "",
+      summaryRows[index]?.[1] ?? "",
+      ...rankedColumns.flatMap((column) => [
+        column.entries[index]?.label ?? "",
+        column.entries[index] ? String(column.entries[index].value) : "",
+      ]),
+      rows[index]?.title ?? "",
+    ]);
+
+    downloadCsvFile(
+      `games_statistics_export_${getCsvTimestamp()}.csv`,
+      csvHeaders,
+      rowsForCsv,
+    );
+  }, [rows, statistics]);
+
+  useEffect(() => {
+    onExportReady?.(rows.length > 0 ? handleExportCsv : null);
+    return () => onExportReady?.(null);
+  }, [handleExportCsv, onExportReady, rows.length]);
 
   if (isLoading) {
     return <p className={styles.message}>Завантаження статистики ігор…</p>;
@@ -357,11 +445,19 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
         </div>
         <div className={styles.kpiCard}>
           <span className={styles.kpiLabel}>Пройдено</span>
-          <strong className={styles.kpiValue}>{statistics.viewedCount}</strong>
+          <strong className={styles.kpiValue}>
+            {statistics.viewedCount}{" "}
+            <span className={styles.kpiValueMuted}>({formatPercent(statistics.viewedShare)})</span>
+          </strong>
         </div>
         <div className={styles.kpiCard}>
           <span className={styles.kpiLabel}>Заплановано</span>
-          <strong className={styles.kpiValue}>{statistics.plannedCount}</strong>
+          <strong className={styles.kpiValue}>
+            {statistics.plannedCount}{" "}
+            <span className={styles.kpiValueMuted}>
+              ({formatPercent(statistics.plannedShare)})
+            </span>
+          </strong>
         </div>
         <div className={styles.kpiCard}>
           <span className={styles.kpiLabel}>Сер. мій рейтинг</span>
@@ -370,32 +466,25 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
       </div>
 
       <div className={styles.sectionGrid}>
-        <section className={`${styles.section} ${styles.sectionFull}`}>
-          <h2 className={styles.sectionTitle}>Частково / повністю пройдено</h2>
-          <p className={styles.sectionText}>Рахуємо від усіх розпочатих ігор з view percent більше 0.</p>
-          <div className={styles.kpiGrid}>
-            <div className={styles.kpiCard}>
-              <span className={styles.kpiLabel}>Повністю пройдено</span>
-              <strong className={styles.kpiValue}>{statistics.fullyViewedCount}</strong>
-            </div>
-            <div className={styles.kpiCard}>
-              <span className={styles.kpiLabel}>Частково пройдено</span>
-              <strong className={styles.kpiValue}>{statistics.partiallyViewedCount}</strong>
-            </div>
-            <div className={styles.kpiCard}>
-              <span className={styles.kpiLabel}>Дограю до кінця</span>
-              <strong className={styles.kpiValue}>{formatPercent(statistics.completionRate)}</strong>
-            </div>
-            <div className={styles.kpiCard}>
-              <span className={styles.kpiLabel}>Кидаю частково</span>
-              <strong className={styles.kpiValue}>{formatPercent(statistics.partialRate)}</strong>
-            </div>
+        <div className={`${styles.kpiGridCompact} ${styles.sectionFull}`}>
+          <div className={styles.kpiCard}>
+            <span className={styles.kpiLabel}>Повністю пройдено</span>
+            <strong className={styles.kpiValue}>
+              {statistics.fullyViewedCount}{" "}
+              <span className={styles.kpiValueMuted}>({formatPercent(statistics.completionRate)})</span>
+            </strong>
           </div>
-        </section>
+          <div className={styles.kpiCard}>
+            <span className={styles.kpiLabel}>Частково пройдено</span>
+            <strong className={styles.kpiValue}>
+              {statistics.partiallyViewedCount}{" "}
+              <span className={styles.kpiValueMuted}>({formatPercent(statistics.partialRate)})</span>
+            </strong>
+          </div>
+        </div>
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 жанрів пройдено</h2>
-          <p className={styles.sectionText}>Лічимо ігри, позначені як пройдені.</p>
           <StatisticsRankedList
             entries={statistics.topViewedGenres}
             valueLabel="games"
@@ -405,7 +494,6 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 платформ пройдено</h2>
-          <p className={styles.sectionText}>Платформи беремо з вибору користувача у записі гри.</p>
           <StatisticsRankedList
             entries={statistics.topViewedPlatforms}
             valueLabel="games"
@@ -415,7 +503,6 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 жанрів, які сподобались</h2>
-          <p className={styles.sectionText}>Беремо тільки пройдені ігри з рейтингом.</p>
           <StatisticsRankedList
             entries={statistics.topLikedGenres}
             valueLabel="points"
@@ -425,7 +512,6 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 платформ, які сподобались</h2>
-          <p className={styles.sectionText}>Показує, на чому найчастіше заходять улюблені ігри.</p>
           <StatisticsRankedList
             entries={statistics.topLikedPlatforms}
             valueLabel="points"
@@ -435,7 +521,6 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 жанрів, які кинуто</h2>
-          <p className={styles.sectionText}>Кинуті = розпочаті ігри з view percent нижче 80.</p>
           <StatisticsRankedList
             entries={statistics.topDroppedGenres}
             valueLabel="games"
@@ -445,7 +530,6 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 платформ, які кинуто</h2>
-          <p className={styles.sectionText}>Показує, на яких платформах найчастіше не дограєш.</p>
           <StatisticsRankedList
             entries={statistics.topDroppedPlatforms}
             valueLabel="games"
@@ -455,7 +539,6 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
 
         <section className={`${styles.section} ${styles.sectionFull}`}>
           <h2 className={styles.sectionTitle}>Улюблені жанри по платформах</h2>
-          <p className={styles.sectionText}>Для кожної платформи беремо топ жанрів за сумою ваг ваших рейтингів.</p>
           {statistics.platformGenrePreferences.length === 0 ? (
             <div className={styles.emptyBox}>
               Поставте більше оцінок на різних платформах, щоб побачити звʼязку платформа × жанр.
@@ -478,7 +561,6 @@ export default function StatisticsGamesPage({ onTotalChange }: StatisticsGamesPa
 
         <section className={`${styles.section} ${styles.sectionFull}`}>
           <h2 className={styles.sectionTitle}>Ігри по місяцях</h2>
-          <p className={styles.sectionText}>Групування за датою проходження.</p>
           <StatisticsMonthlyList
             entries={statistics.monthlyEntries}
             itemLabel="games"

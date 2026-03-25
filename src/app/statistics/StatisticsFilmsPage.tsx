@@ -1,28 +1,47 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { downloadCsvFile } from "@/lib/csv/downloadCsv";
+import { getCsvTimestamp } from "@/lib/csv/getCsvTimestamp";
+import { downloadTextFile } from "@/lib/csv/downloadText";
+import { buildLlmRecoContextText } from "./filmLlmCsv";
 import StatisticsMonthlyList from "./StatisticsMonthlyList";
 import styles from "./StatisticsPage.module.css";
 import StatisticsRankedList from "./StatisticsRankedList";
 
 type StatisticsFilmsPageProps = {
   onTotalChange: (count: number) => void;
+  onExportReady?: (handler: (() => void) | null) => void;
+  onLlmExportReady?: (handler: (() => void) | null) => void;
 };
 
 type RawStatsRow = {
+  item_id: string | null;
   viewed_at: string | null;
   is_viewed: boolean | null;
   rating: number | null;
   view_percent: number | null;
   items:
     | {
+        title?: string | null;
+        title_uk?: string | null;
+        title_en?: string | null;
+        title_original?: string | null;
+        year?: number | null;
+        external_id?: string | null;
         genres?: string | null;
         director?: string | null;
         actors?: string | null;
         type?: string | null;
       }
     | Array<{
+        title?: string | null;
+        title_uk?: string | null;
+        title_en?: string | null;
+        title_original?: string | null;
+        year?: number | null;
+        external_id?: string | null;
         genres?: string | null;
         director?: string | null;
         actors?: string | null;
@@ -32,12 +51,21 @@ type RawStatsRow = {
 };
 
 type FilmStatsRow = {
+  itemId: string;
+  externalId: string;
+  title: string;
+  titleUk: string;
+  titleEn: string;
+  titleOriginal: string;
+  year: string;
+  type: string;
   viewedAt: string | null;
   isViewed: boolean;
   rating: number | null;
   viewPercent: number;
   genres: string[];
   director: string | null;
+  directors: string[];
   actors: string[];
 };
 
@@ -162,7 +190,7 @@ const buildMonthlyEntries = (rows: FilmStatsRow[]) => {
   });
 
   return Array.from(aggregate.entries())
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => right.localeCompare(left))
     .map(([key, count]) => {
       const date = new Date(`${key}-01T00:00:00Z`);
       return {
@@ -177,7 +205,11 @@ const buildMonthlyEntries = (rows: FilmStatsRow[]) => {
     });
 }
 
-export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPageProps) {
+export default function StatisticsFilmsPage({
+  onTotalChange,
+  onExportReady,
+  onLlmExportReady,
+}: StatisticsFilmsPageProps) {
   const [rows, setRows] = useState<FilmStatsRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
@@ -211,7 +243,7 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
           const { data, error } = await supabase
             .from("user_views")
             .select(
-              "viewed_at, is_viewed, rating, view_percent, items:items!inner(genres, director, actors, type)",
+              "item_id, viewed_at, is_viewed, rating, view_percent, items:items!inner(title, title_uk, title_en, title_original, year, external_id, genres, director, actors, type)",
             )
             .eq("user_id", user.id)
             .eq("items.type", "film")
@@ -234,13 +266,29 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
           const chunk = chunkRaw.map((row) => {
             const item = Array.isArray(row.items) ? row.items[0] : row.items;
+            const director = normalizeDirector(item?.director);
+            const directors = director
+              ? director
+                  .split(",")
+                  .map((entry) => entry.trim())
+                  .filter(Boolean)
+              : [];
             return {
+              itemId: row.item_id ?? "",
+              externalId: item?.external_id?.trim() || "",
+              title: item?.title?.trim() || "Без назви",
+              titleUk: item?.title_uk?.trim() || "",
+              titleEn: item?.title_en?.trim() || "",
+              titleOriginal: item?.title_original?.trim() || "",
+              year: item?.year == null ? "" : String(item.year),
+              type: item?.type?.trim() || "film",
               viewedAt: row.viewed_at,
               isViewed: Boolean(row.is_viewed),
               rating: row.rating,
               viewPercent: Math.max(0, Math.min(100, row.view_percent ?? 0)),
               genres: normalizeGenres(item?.genres),
-              director: normalizeDirector(item?.director),
+              director,
+              directors,
               actors: normalizeActors(item?.actors),
             };
           });
@@ -291,6 +339,8 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
     const totalFilms = rows.length;
     const viewedCount = viewedRows.length;
     const plannedCount = totalFilms - viewedCount;
+    const viewedShare = totalFilms > 0 ? (viewedCount / totalFilms) * 100 : null;
+    const plannedShare = totalFilms > 0 ? (plannedCount / totalFilms) * 100 : null;
     const startedCount = startedRows.length;
     const fullyViewedCount = fullyViewedRows.length;
     const partiallyViewedCount = partiallyViewedRows.length;
@@ -307,6 +357,8 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
       totalFilms,
       viewedCount,
       plannedCount,
+      viewedShare,
+      plannedShare,
       startedCount,
       fullyViewedCount,
       partiallyViewedCount,
@@ -326,6 +378,102 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
       monthlyEntries: buildMonthlyEntries(viewedRows),
     };
   }, [rows]);
+
+  const handleExportCsv = useCallback(() => {
+    if (rows.length === 0) {
+      return;
+    }
+
+    const summaryRows = [
+      ["Всього фільмів", String(statistics.totalFilms)],
+      ["Переглянуто", `${statistics.viewedCount} (${formatPercent(statistics.viewedShare)})`],
+      ["Заплановано", `${statistics.plannedCount} (${formatPercent(statistics.plannedShare)})`],
+      ["Сер. мій рейтинг", formatAverageRating(statistics.averageRating)],
+      [
+        "Повністю переглянуто",
+        `${statistics.fullyViewedCount} (${formatPercent(statistics.completionRate)})`,
+      ],
+      [
+        "Частково переглянуто",
+        `${statistics.partiallyViewedCount} (${formatPercent(statistics.partialRate)})`,
+      ],
+    ];
+
+    const rankedColumns = [
+      { label: "Топ жанрів переглянуто", entries: statistics.topViewedGenres },
+      { label: "Топ режисерів переглянуто", entries: statistics.topViewedDirectors },
+      { label: "Топ акторів переглянуто", entries: statistics.topViewedActors },
+      { label: "Топ жанрів сподобались", entries: statistics.topLikedGenres },
+      { label: "Топ режисерів сподобались", entries: statistics.topLikedDirectors },
+      { label: "Топ акторів сподобались", entries: statistics.topLikedActors },
+      { label: "Топ жанрів не зайшли", entries: statistics.topDislikedGenres },
+      { label: "Топ режисерів не зайшли", entries: statistics.topDislikedDirectors },
+      { label: "Топ жанрів кинуто", entries: statistics.topDroppedGenres },
+      { label: "Топ режисерів кинуто", entries: statistics.topDroppedDirectors },
+    ];
+
+    const csvHeaders = [
+      "Метрика",
+      "Значення",
+      ...rankedColumns.flatMap((column) => [column.label, "Значення"]),
+      "Перелік фільмів",
+    ];
+
+    const maxLength = Math.max(
+      summaryRows.length,
+      rows.length,
+      ...rankedColumns.map((column) => column.entries.length),
+    );
+
+    const rowsForCsv = Array.from({ length: maxLength }, (_, index) => [
+      summaryRows[index]?.[0] ?? "",
+      summaryRows[index]?.[1] ?? "",
+      ...rankedColumns.flatMap((column) => [
+        column.entries[index]?.label ?? "",
+        column.entries[index] ? String(column.entries[index].value) : "",
+      ]),
+      rows[index]?.title ?? "",
+    ]);
+
+    downloadCsvFile(
+      `films_statistics_export_${getCsvTimestamp()}.csv`,
+      csvHeaders,
+      rowsForCsv,
+    );
+  }, [rows, statistics]);
+
+  const handleLlmExportCsv = useCallback(() => {
+    if (rows.length === 0) {
+      return;
+    }
+
+    const llmRows = rows.map((row) => ({
+      itemId: row.itemId,
+      externalId: row.externalId,
+      title: row.title,
+      titleUk: row.titleUk,
+      titleEn: row.titleEn,
+      titleOriginal: row.titleOriginal,
+      year: row.year,
+      type: row.type,
+      progress: row.viewPercent,
+      rating: row.rating,
+      genres: row.genres,
+      directors: row.directors,
+    }));
+
+    downloadTextFile("llm_reco_context.txt", buildLlmRecoContextText(llmRows));
+  }, [rows]);
+
+  useEffect(() => {
+    onExportReady?.(rows.length > 0 ? handleExportCsv : null);
+    return () => onExportReady?.(null);
+  }, [handleExportCsv, onExportReady, rows.length]);
+
+  useEffect(() => {
+    onLlmExportReady?.(rows.length > 0 ? handleLlmExportCsv : null);
+    return () => onLlmExportReady?.(null);
+  }, [handleLlmExportCsv, onLlmExportReady, rows.length]);
 
   if (isLoading) {
     return <p className={styles.message}>Завантаження статистики…</p>;
@@ -348,11 +496,19 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
         </div>
         <div className={styles.kpiCard}>
           <span className={styles.kpiLabel}>Переглянуто</span>
-          <strong className={styles.kpiValue}>{statistics.viewedCount}</strong>
+          <strong className={styles.kpiValue}>
+            {statistics.viewedCount}{" "}
+            <span className={styles.kpiValueMuted}>({formatPercent(statistics.viewedShare)})</span>
+          </strong>
         </div>
         <div className={styles.kpiCard}>
           <span className={styles.kpiLabel}>Заплановано</span>
-          <strong className={styles.kpiValue}>{statistics.plannedCount}</strong>
+          <strong className={styles.kpiValue}>
+            {statistics.plannedCount}{" "}
+            <span className={styles.kpiValueMuted}>
+              ({formatPercent(statistics.plannedShare)})
+            </span>
+          </strong>
         </div>
         <div className={styles.kpiCard}>
           <span className={styles.kpiLabel}>Сер. мій рейтинг</span>
@@ -361,32 +517,25 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
       </div>
 
       <div className={styles.sectionGrid}>
-        <section className={`${styles.section} ${styles.sectionFull}`}>
-          <h2 className={styles.sectionTitle}>Частково / повністю переглянуто</h2>
-          <p className={styles.sectionText}>Рахуємо від усіх розпочатих фільмів з view percent більше 0.</p>
-          <div className={styles.kpiGrid}>
-            <div className={styles.kpiCard}>
-              <span className={styles.kpiLabel}>Повністю переглянуто</span>
-              <strong className={styles.kpiValue}>{statistics.fullyViewedCount}</strong>
-            </div>
-            <div className={styles.kpiCard}>
-              <span className={styles.kpiLabel}>Частково переглянуто</span>
-              <strong className={styles.kpiValue}>{statistics.partiallyViewedCount}</strong>
-            </div>
-            <div className={styles.kpiCard}>
-              <span className={styles.kpiLabel}>Доглядаю до кінця</span>
-              <strong className={styles.kpiValue}>{formatPercent(statistics.completionRate)}</strong>
-            </div>
-            <div className={styles.kpiCard}>
-              <span className={styles.kpiLabel}>Кидаю частково</span>
-              <strong className={styles.kpiValue}>{formatPercent(statistics.partialRate)}</strong>
-            </div>
+        <div className={`${styles.kpiGridCompact} ${styles.sectionFull}`}>
+          <div className={styles.kpiCard}>
+            <span className={styles.kpiLabel}>Повністю переглянуто</span>
+            <strong className={styles.kpiValue}>
+              {statistics.fullyViewedCount}{" "}
+              <span className={styles.kpiValueMuted}>({formatPercent(statistics.completionRate)})</span>
+            </strong>
           </div>
-        </section>
+          <div className={styles.kpiCard}>
+            <span className={styles.kpiLabel}>Частково переглянуто</span>
+            <strong className={styles.kpiValue}>
+              {statistics.partiallyViewedCount}{" "}
+              <span className={styles.kpiValueMuted}>({formatPercent(statistics.partialRate)})</span>
+            </strong>
+          </div>
+        </div>
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 жанрів переглянуто</h2>
-          <p className={styles.sectionText}>Лічимо лише переглянуті фільми.</p>
           <StatisticsRankedList
             entries={statistics.topViewedGenres}
             valueLabel="films"
@@ -396,7 +545,6 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 режисерів переглянуто</h2>
-          <p className={styles.sectionText}>Режисер поки рахується як цілий рядок.</p>
           <StatisticsRankedList
             entries={statistics.topViewedDirectors}
             valueLabel="films"
@@ -406,7 +554,6 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 акторів переглянуто</h2>
-          <p className={styles.sectionText}>Актори діляться по комах, з trim і дедуплікацією.</p>
           <StatisticsRankedList
             entries={statistics.topViewedActors}
             valueLabel="films"
@@ -416,7 +563,6 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 жанрів, які сподобались</h2>
-          <p className={styles.sectionText}>Беремо тільки переглянуті фільми з рейтингом.</p>
           <StatisticsRankedList
             entries={statistics.topLikedGenres}
             valueLabel="points"
@@ -426,7 +572,6 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 режисерів, які сподобались</h2>
-          <p className={styles.sectionText}>Вага рахується за нелінійною шкалою рейтингу.</p>
           <StatisticsRankedList
             entries={statistics.topLikedDirectors}
             valueLabel="points"
@@ -436,7 +581,6 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 акторів, які сподобались</h2>
-          <p className={styles.sectionText}>Для кожного актора додається вага рейтингу фільму.</p>
           <StatisticsRankedList
             entries={statistics.topLikedActors}
             valueLabel="points"
@@ -446,7 +590,6 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 жанрів, які не зайшли</h2>
-          <p className={styles.sectionText}>Беремо тільки низькі оцінки нижче 3.</p>
           <StatisticsRankedList
             entries={statistics.topDislikedGenres}
             valueLabel="points"
@@ -456,7 +599,6 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 режисерів, які не зайшли</h2>
-          <p className={styles.sectionText}>Антирейтинг рахується окремою негативною шкалою.</p>
           <StatisticsRankedList
             entries={statistics.topDislikedDirectors}
             valueLabel="points"
@@ -466,7 +608,6 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 жанрів, які кинуто</h2>
-          <p className={styles.sectionText}>Кинуті = розпочаті фільми з view percent нижче 80.</p>
           <StatisticsRankedList
             entries={statistics.topDroppedGenres}
             valueLabel="films"
@@ -476,7 +617,6 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
         <section className={styles.section}>
           <h2 className={styles.sectionTitle}>Топ 5 режисерів, яких кинуто</h2>
-          <p className={styles.sectionText}>Показує, кого найчастіше не додивляєшся до кінця.</p>
           <StatisticsRankedList
             entries={statistics.topDroppedDirectors}
             valueLabel="films"
@@ -486,7 +626,6 @@ export default function StatisticsFilmsPage({ onTotalChange }: StatisticsFilmsPa
 
         <section className={`${styles.section} ${styles.sectionFull}`}>
           <h2 className={styles.sectionTitle}>Перегляди по місяцях</h2>
-          <p className={styles.sectionText}>Групування за датою перегляду.</p>
           <StatisticsMonthlyList entries={statistics.monthlyEntries} />
         </section>
       </div>
