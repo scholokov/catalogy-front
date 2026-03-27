@@ -2283,6 +2283,7 @@ export default function GamesManager({
         },
         body: JSON.stringify({
           rows: scopedRows,
+          knownTitleRows: recommendationScopeState?.rows ?? scopedRows,
           scopeLabel: platform,
           userWishes: wishes,
         }),

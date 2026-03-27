@@ -1419,12 +1419,28 @@ export default function FilmsManager({
     });
 
     const bestMatch = sortedResults.find(
-      (item) =>
-        !item.inCollection &&
-        !(
+      (item) => {
+        if (
+          item.inCollection ||
           item.existingViewId ||
           existingViewsByExternalId.get(getFilmExternalKey(item.id, item.mediaType) ?? "")
-        ),
+        ) {
+          return false;
+        }
+
+        const normalizedItemTitles = [
+          item.title,
+          item.originalTitle,
+          item.englishTitle,
+        ]
+          .map((title) => normalizeComparableTitle(title ?? ""))
+          .filter(Boolean);
+        const itemYear = item.year.trim();
+
+        return !normalizedItemTitles.some(
+          (title) => existingFilmKeys.has(title) || (itemYear && existingFilmKeys.has(`${title}__${itemYear}`)),
+        );
+      },
     );
     if (!bestMatch) {
       return null;
@@ -1462,6 +1478,7 @@ export default function FilmsManager({
         },
         body: JSON.stringify({
           rows: scopedRows,
+          knownTitleRows: recommendationScopeState?.rows ?? scopedRows,
           scopeLabel: mediaType === "tv" ? "Серіали" : "Кіно",
           userWishes: wishes,
         }),
@@ -1647,6 +1664,31 @@ export default function FilmsManager({
       }
     });
     return map;
+  }, [collection]);
+  const existingFilmKeys = useMemo(() => {
+    const keys = new Set<string>();
+    collection.forEach((item) => {
+      const titles = [
+        item.items.title,
+        item.items.title_uk,
+        item.items.title_en,
+        item.items.title_original,
+      ];
+      const year =
+        item.items.year == null || Number.isNaN(item.items.year) ? "" : String(item.items.year);
+
+      titles.forEach((title) => {
+        const normalizedTitle = normalizeComparableTitle(title ?? "");
+        if (!normalizedTitle) {
+          return;
+        }
+        keys.add(normalizedTitle);
+        if (year) {
+          keys.add(`${normalizedTitle}__${year}`);
+        }
+      });
+    });
+    return keys;
   }, [collection]);
 
   const loadContacts = async (itemIdForCheck?: string) => {

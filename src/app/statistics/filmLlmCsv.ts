@@ -775,7 +775,7 @@ export const buildLlmRecoContextText = (
     "USER COLLECTION RECOMMENDATION CONTEXT",
     "",
     "RULES",
-    "- Recommend only titles not present in KNOWN TITLES.",
+    "- Recommend only titles not present in the user's collection.",
     "- progress=100 means completed.",
     "- progress=1..99 means dropped / not finished.",
     "- progress=0 means planned.",

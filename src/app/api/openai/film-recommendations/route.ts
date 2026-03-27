@@ -261,17 +261,22 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
       rows?: FilmLlmExportRow[];
+      knownTitleRows?: FilmLlmExportRow[];
       scopeLabel?: string;
       userWishes?: string;
     };
     const rows = Array.isArray(body.rows) ? body.rows : [];
+    const knownTitleRows =
+      Array.isArray(body.knownTitleRows) && body.knownTitleRows.length > 0
+        ? body.knownTitleRows
+        : rows;
 
     if (rows.length === 0) {
       return NextResponse.json({ error: "Missing film rows." }, { status: 400 });
     }
 
     const context = buildLlmRecoContextText(rows, { includeKnownTitles: false });
-    const knownTitles = buildKnownTitleSet(rows);
+    const knownTitles = buildKnownTitleSet(knownTitleRows);
 
     const firstResponse = await callOpenAi(context, 4, (nextContext, requestedCount) =>
       buildPrompt(nextContext, requestedCount, body.scopeLabel, body.userWishes),
@@ -330,7 +335,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       message,
       recommendations: outputRecommendations,
-      knownTitlesCount: buildKnownTitlesForLlm(rows).length,
+      knownTitlesCount: buildKnownTitlesForLlm(knownTitleRows).length,
     });
   } catch (error) {
     return NextResponse.json(
