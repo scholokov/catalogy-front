@@ -64,6 +64,7 @@ create unique index if not exists profiles_username_lower_unique_idx
 create table if not exists items (
   id uuid primary key default gen_random_uuid(),
   type text not null check (type in ('film', 'game')),
+  film_media_type text check (film_media_type in ('movie', 'tv')),
   title text not null,
   title_original text,
   description text,
@@ -92,9 +93,16 @@ add column if not exists trailers jsonb;
 alter table items
 add column if not exists title_original text;
 
-create unique index if not exists items_type_external_id_idx
+alter table items
+add column if not exists film_media_type text;
+
+create unique index if not exists items_game_external_id_idx
   on items (type, external_id)
-  where external_id is not null;
+  where type = 'game' and external_id is not null;
+
+create unique index if not exists items_film_media_external_id_idx
+  on items (type, film_media_type, external_id)
+  where type = 'film' and external_id is not null;
 
 create table if not exists user_views (
   id uuid primary key default gen_random_uuid(),

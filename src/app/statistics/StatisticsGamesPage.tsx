@@ -6,6 +6,15 @@ import { downloadCsvFile } from "@/lib/csv/downloadCsv";
 import { getCsvTimestamp } from "@/lib/csv/getCsvTimestamp";
 import StatisticsMonthlyList from "./StatisticsMonthlyList";
 import StatisticsRankedList from "./StatisticsRankedList";
+import type {
+  GlobalSummary,
+} from "./statisticsTypes";
+import {
+  buildScopeBreakdownEntry,
+  calculateMedian,
+  deriveProfileInterpretation,
+  formatNullableMetric,
+} from "./lib/scopeReadiness";
 import styles from "./StatisticsPage.module.css";
 
 type StatisticsGamesPageProps = {
@@ -14,6 +23,7 @@ type StatisticsGamesPageProps = {
 };
 
 type RawStatsRow = {
+  created_at: string | null;
   viewed_at: string | null;
   is_viewed: boolean | null;
   rating: number | null;
@@ -35,6 +45,7 @@ type RawStatsRow = {
 
 type GameStatsRow = {
   title: string;
+  createdAt: string | null;
   viewedAt: string | null;
   isViewed: boolean;
   rating: number | null;
@@ -43,14 +54,12 @@ type GameStatsRow = {
   genres: string[];
 };
 
-const formatAverageRating = (value: number | null) => {
-  if (value === null) return "—";
-  return value.toFixed(2);
-};
+const HIGH_RATED_THRESHOLD = 4;
+const LOW_RATED_THRESHOLD = 2;
 
-const formatPercent = (value: number | null) => {
-  if (value === null) return "—";
-  return `${value.toFixed(0)}%`;
+const formatShare = (count: number, total: number) => {
+  if (total <= 0) return "0%";
+  return `${Math.round((count / total) * 100)}%`;
 };
 
 const normalizeGenres = (value?: string | null) => {
@@ -80,32 +89,33 @@ const normalizePlatforms = (value?: string[] | null) => {
     });
 };
 
-const getPreferenceWeight = (rating: number | null) => {
-  if (rating === null || rating < 3) return 0;
-  if (rating === 3) return 1;
-  if (rating === 3.5) return 3;
-  if (rating === 4) return 9;
-  if (rating === 4.5) return 27;
-  if (rating === 5) return 81;
-  return 0;
+const isCompletedGame = (row: GameStatsRow) => row.isViewed && row.viewPercent >= 100;
+
+const isDroppedGame = (row: GameStatsRow) =>
+  row.isViewed && row.viewPercent < 100;
+
+const isTriedOnlyGame = (row: GameStatsRow) =>
+  !row.isViewed && row.viewPercent > 0 && row.viewPercent < 100;
+
+const isPlannedGame = (row: GameStatsRow) => !row.isViewed;
+
+const isAddedInLast30Days = (row: GameStatsRow, now: Date) => {
+  if (!row.createdAt) return false;
+  const createdAt = new Date(row.createdAt);
+  if (Number.isNaN(createdAt.getTime())) return false;
+  return now.getTime() - createdAt.getTime() <= 30 * 24 * 60 * 60 * 1000;
 };
 
-const buildRankedEntries = (
-  rows: GameStatsRow[],
-  mode: "genres" | "platforms",
-  scoreMode: "viewed" | "liked",
-) => {
+const buildRankedEntries = (rows: GameStatsRow[], mode: "genres" | "platforms") => {
   const aggregate = new Map<string, { value: number; itemCount: number }>();
 
   rows.forEach((row) => {
     const labels = mode === "genres" ? row.genres : row.platforms;
     if (labels.length === 0) return;
-    const increment = scoreMode === "liked" ? getPreferenceWeight(row.rating) : 1;
-    if (scoreMode === "liked" && increment <= 0) return;
     labels.forEach((label) => {
       const current = aggregate.get(label) ?? { value: 0, itemCount: 0 };
       aggregate.set(label, {
-        value: current.value + increment,
+        value: current.value + 1,
         itemCount: current.itemCount + 1,
       });
     });
@@ -151,54 +161,6 @@ const buildMonthlyEntries = (rows: GameStatsRow[]) => {
     });
 };
 
-const buildPlatformGenrePreferences = (rows: GameStatsRow[]) => {
-  const platformGenreMap = new Map<string, Map<string, { value: number; itemCount: number }>>();
-
-  rows.forEach((row) => {
-    const increment = getPreferenceWeight(row.rating);
-    if (increment <= 0 || row.platforms.length === 0 || row.genres.length === 0) {
-      return;
-    }
-
-    row.platforms.forEach((platform) => {
-      const genreMap = platformGenreMap.get(platform) ?? new Map<string, { value: number; itemCount: number }>();
-      row.genres.forEach((genre) => {
-        const current = genreMap.get(genre) ?? { value: 0, itemCount: 0 };
-        genreMap.set(genre, {
-          value: current.value + increment,
-          itemCount: current.itemCount + 1,
-        });
-      });
-      platformGenreMap.set(platform, genreMap);
-    });
-  });
-
-  return Array.from(platformGenreMap.entries())
-    .map(([platform, genreMap]) => ({
-      platform,
-      entries: Array.from(genreMap.entries())
-        .map(([label, entry]) => ({
-          label,
-          value: entry.value,
-          itemCount: entry.itemCount,
-        }))
-        .sort((left, right) => {
-          if (right.value !== left.value) return right.value - left.value;
-          if (right.itemCount !== left.itemCount) return right.itemCount - left.itemCount;
-          return left.label.localeCompare(right.label, "uk");
-        })
-        .slice(0, 3),
-    }))
-    .filter((entry) => entry.entries.length > 0)
-    .sort((left, right) => {
-      const leftValue = left.entries.reduce((sum, entry) => sum + entry.value, 0);
-      const rightValue = right.entries.reduce((sum, entry) => sum + entry.value, 0);
-      if (rightValue !== leftValue) return rightValue - leftValue;
-      return left.platform.localeCompare(right.platform, "uk");
-    })
-    .slice(0, 6);
-};
-
 export default function StatisticsGamesPage({
   onTotalChange,
   onExportReady,
@@ -236,7 +198,7 @@ export default function StatisticsGamesPage({
           const { data, error } = await supabase
             .from("user_views")
             .select(
-              "viewed_at, is_viewed, rating, view_percent, platforms, items:items!inner(title, genres, type)",
+              "created_at, viewed_at, is_viewed, rating, view_percent, platforms, items:items!inner(title, genres, type)",
             )
             .eq("user_id", user.id)
             .eq("items.type", "game")
@@ -261,6 +223,7 @@ export default function StatisticsGamesPage({
             const item = Array.isArray(row.items) ? row.items[0] : row.items;
             return {
               title: item?.title?.trim() || "Без назви",
+              createdAt: row.created_at,
               viewedAt: row.viewed_at,
               isViewed: Boolean(row.is_viewed),
               rating: row.rating,
@@ -306,47 +269,113 @@ export default function StatisticsGamesPage({
   }, [onTotalChange]);
 
   const statistics = useMemo(() => {
-    const viewedRows = rows.filter((row) => row.isViewed);
-    const ratedViewedRows = viewedRows.filter((row) => row.rating !== null);
-    const startedRows = rows.filter((row) => row.viewPercent > 0);
-    const fullyViewedRows = rows.filter((row) => row.viewPercent >= 100);
-    const partiallyViewedRows = rows.filter((row) => row.viewPercent > 0 && row.viewPercent < 100);
-    const droppedRows = rows.filter((row) => row.viewPercent > 0 && row.viewPercent < 80);
+    const now = new Date();
+    const completedRows = rows.filter(isCompletedGame);
+    const droppedRows = rows.filter(isDroppedGame);
+    const plannedRows = rows.filter(isPlannedGame);
+    const engagedRows = rows.filter(
+      (row) => isCompletedGame(row) || isDroppedGame(row) || isTriedOnlyGame(row),
+    );
+    const ratedRows = rows.filter((row) => row.rating !== null);
+    const addedLast30DaysRows = rows.filter((row) => isAddedInLast30Days(row, now));
+    const summary: GlobalSummary = {
+      totalTitles: rows.length,
+      ratedTitles: ratedRows.length,
+      engagedTitles: engagedRows.length,
+      completedTitles: completedRows.length,
+      droppedTitles: droppedRows.length,
+      plannedTitles: plannedRows.length,
+      addedLast30Days: addedLast30DaysRows.length,
+      averageRating:
+        ratedRows.length > 0
+          ? ratedRows.reduce((sum, row) => sum + (row.rating ?? 0), 0) / ratedRows.length
+          : null,
+      medianRating: calculateMedian(
+        ratedRows
+          .map((row) => row.rating)
+          .filter((rating): rating is number => rating !== null),
+      ),
+      numberOfWorkingScopes: 0,
+      profileType: "insufficient",
+      recommendationReadiness: "not_ready",
+      defaultScope: null,
+    };
 
-    const totalGames = rows.length;
-    const viewedCount = viewedRows.length;
-    const plannedCount = totalGames - viewedCount;
-    const viewedShare = totalGames > 0 ? (viewedCount / totalGames) * 100 : null;
-    const plannedShare = totalGames > 0 ? (plannedCount / totalGames) * 100 : null;
-    const startedCount = startedRows.length;
-    const fullyViewedCount = fullyViewedRows.length;
-    const partiallyViewedCount = partiallyViewedRows.length;
-    const averageRating =
-      ratedViewedRows.length > 0
-        ? ratedViewedRows.reduce((sum, row) => sum + (row.rating ?? 0), 0) / ratedViewedRows.length
-        : null;
-    const completionRate = startedCount > 0 ? (fullyViewedCount / startedCount) * 100 : null;
-    const partialRate = startedCount > 0 ? (partiallyViewedCount / startedCount) * 100 : null;
+    const platformBuckets = new Map<string, GameStatsRow[]>();
+    rows.forEach((row) => {
+      row.platforms.forEach((platform) => {
+        const bucket = platformBuckets.get(platform);
+        if (bucket) {
+          bucket.push(row);
+        } else {
+          platformBuckets.set(platform, [row]);
+        }
+      });
+    });
+
+    const platformEntries = Array.from(platformBuckets.entries())
+      .map(([platform, platformRows]) => {
+        const now = new Date();
+        const platformRatedRows = platformRows.filter((row) => row.rating !== null);
+        const platformCompletedRows = platformRows.filter(isCompletedGame);
+        const platformDroppedRows = platformRows.filter(isDroppedGame);
+        const platformPlannedRows = platformRows.filter(isPlannedGame);
+        const platformAddedLast30DaysRows = platformRows.filter((row) =>
+          isAddedInLast30Days(row, now),
+        );
+        const platformEngagedRows = platformRows.filter(
+          (row) => isCompletedGame(row) || isDroppedGame(row) || isTriedOnlyGame(row),
+        );
+        const platformLikedRows = platformRows.filter(
+          (row) => row.rating !== null && row.rating >= HIGH_RATED_THRESHOLD,
+        );
+        const platformDislikedRows = platformRows.filter(
+          (row) => row.rating !== null && row.rating <= LOW_RATED_THRESHOLD,
+        );
+
+        return buildScopeBreakdownEntry({
+          scopeType: "platform",
+          scopeValue: platform,
+          totalTitles: platformRows.length,
+          ratedTitles: platformRatedRows.length,
+          engagedTitles: platformEngagedRows.length,
+          completedTitles: platformCompletedRows.length,
+          droppedTitles: platformDroppedRows.length,
+          plannedTitles: platformPlannedRows.length,
+          addedLast30Days: platformAddedLast30DaysRows.length,
+          ratings: platformRatedRows
+            .map((row) => row.rating)
+            .filter((rating): rating is number => rating !== null),
+          highRatedCount: platformRatedRows.filter(
+            (row) => row.rating !== null && row.rating >= HIGH_RATED_THRESHOLD,
+          ).length,
+          lowRatedCount: platformRatedRows.filter(
+            (row) => row.rating !== null && row.rating <= LOW_RATED_THRESHOLD,
+          ).length,
+          topLikedGenres: buildRankedEntries(platformLikedRows, "genres"),
+          topDislikedGenres: buildRankedEntries(platformDislikedRows, "genres"),
+          topDroppedGenres: buildRankedEntries(platformDroppedRows, "genres"),
+          monthlyEntries: buildMonthlyEntries(platformEngagedRows),
+        });
+      })
+      .sort((left, right) => {
+        const statusOrder = { working: 0, exploratory: 1, insufficient: 2 };
+        const statusDiff = statusOrder[left.maturityStatus] - statusOrder[right.maturityStatus];
+        if (statusDiff !== 0) return statusDiff;
+        if (right.totalTitles !== left.totalTitles) return right.totalTitles - left.totalTitles;
+        return left.scopeValue.localeCompare(right.scopeValue, "uk");
+      });
+
+    const interpretation = deriveProfileInterpretation("platform", platformEntries);
+    summary.numberOfWorkingScopes = interpretation.workingScopes.length;
+    summary.profileType = interpretation.profileType;
+    summary.recommendationReadiness = interpretation.recommendationReadiness;
+    summary.defaultScope = interpretation.defaultScope;
 
     return {
-      totalGames,
-      viewedCount,
-      plannedCount,
-      viewedShare,
-      plannedShare,
-      fullyViewedCount,
-      partiallyViewedCount,
-      completionRate,
-      partialRate,
-      averageRating,
-      topViewedGenres: buildRankedEntries(viewedRows, "genres", "viewed"),
-      topViewedPlatforms: buildRankedEntries(viewedRows, "platforms", "viewed"),
-      topLikedGenres: buildRankedEntries(viewedRows, "genres", "liked"),
-      topLikedPlatforms: buildRankedEntries(viewedRows, "platforms", "liked"),
-      topDroppedGenres: buildRankedEntries(droppedRows, "genres", "viewed"),
-      topDroppedPlatforms: buildRankedEntries(droppedRows, "platforms", "viewed"),
-      monthlyEntries: buildMonthlyEntries(viewedRows),
-      platformGenrePreferences: buildPlatformGenrePreferences(viewedRows),
+      summary,
+      scopeEntries: platformEntries,
+      interpretation,
     };
   }, [rows]);
 
@@ -354,70 +383,28 @@ export default function StatisticsGamesPage({
     if (rows.length === 0) {
       return;
     }
-
-    const summaryRows = [
-      ["Всього ігор", String(statistics.totalGames)],
-      ["Пройдено", `${statistics.viewedCount} (${formatPercent(statistics.viewedShare)})`],
-      ["Заплановано", `${statistics.plannedCount} (${formatPercent(statistics.plannedShare)})`],
-      ["Сер. мій рейтинг", formatAverageRating(statistics.averageRating)],
-      [
-        "Повністю пройдено",
-        `${statistics.fullyViewedCount} (${formatPercent(statistics.completionRate)})`,
-      ],
-      [
-        "Частково пройдено",
-        `${statistics.partiallyViewedCount} (${formatPercent(statistics.partialRate)})`,
-      ],
-    ];
-
-    const rankedColumns = [
-      { label: "Топ жанрів пройдено", entries: statistics.topViewedGenres },
-      { label: "Топ платформ пройдено", entries: statistics.topViewedPlatforms },
-      { label: "Топ жанрів сподобались", entries: statistics.topLikedGenres },
-      { label: "Топ платформ сподобались", entries: statistics.topLikedPlatforms },
-      { label: "Топ жанрів кинуто", entries: statistics.topDroppedGenres },
-      { label: "Топ платформ кинуто", entries: statistics.topDroppedPlatforms },
-      {
-        label: "Улюблені жанри по платформах",
-        entries: statistics.platformGenrePreferences.flatMap((entry) =>
-          entry.entries.map((genreEntry) => ({
-            label: `${entry.platform} → ${genreEntry.label}`,
-            value: genreEntry.value,
-            itemCount: genreEntry.itemCount,
-          })),
-        ),
-      },
-    ];
-
     const csvHeaders = [
-      "Метрика",
-      "Значення",
-      ...rankedColumns.flatMap((column) => [column.label, "Значення"]),
-      "Перелік ігор",
+      "Назва",
+      "Платформа",
+      "Переглянуто у відсотках",
+      "Особистий рейтинг",
+      "Дата перегляду",
     ];
 
-    const maxLength = Math.max(
-      summaryRows.length,
-      rows.length,
-      ...rankedColumns.map((column) => column.entries.length),
-    );
-
-    const rowsForCsv = Array.from({ length: maxLength }, (_, index) => [
-      summaryRows[index]?.[0] ?? "",
-      summaryRows[index]?.[1] ?? "",
-      ...rankedColumns.flatMap((column) => [
-        column.entries[index]?.label ?? "",
-        column.entries[index] ? String(column.entries[index].value) : "",
-      ]),
-      rows[index]?.title ?? "",
+    const rowsForCsv = rows.map((row) => [
+      row.title,
+      row.platforms.join("; "),
+      String(row.viewPercent),
+      row.rating == null ? "" : String(row.rating),
+      row.viewedAt ? row.viewedAt.slice(0, 10) : "",
     ]);
 
     downloadCsvFile(
-      `games_statistics_export_${getCsvTimestamp()}.csv`,
+      `games_export_${getCsvTimestamp()}.csv`,
       csvHeaders,
       rowsForCsv,
     );
-  }, [rows, statistics]);
+  }, [rows]);
 
   useEffect(() => {
     onExportReady?.(rows.length > 0 ? handleExportCsv : null);
@@ -432,140 +419,238 @@ export default function StatisticsGamesPage({
     return <p className={styles.message}>{errorMessage}</p>;
   }
 
-  if (statistics.totalGames === 0) {
+  if (statistics.summary.totalTitles === 0) {
     return <p className={styles.message}>Додайте ігри до бібліотеки, щоб побачити статистику.</p>;
   }
+
+  const platformGroups = [
+    {
+      title: "Для рекомендацій",
+      entries: statistics.scopeEntries.filter((entry) => entry.maturityStatus === "working"),
+    },
+    {
+      title: "Попередній профіль",
+      entries: statistics.scopeEntries.filter((entry) => entry.maturityStatus === "exploratory"),
+    },
+    {
+      title: "Недостатньо даних",
+      entries: statistics.scopeEntries.filter((entry) => entry.maturityStatus === "insufficient"),
+    },
+  ].filter((group) => group.entries.length > 0);
 
   return (
     <div className={styles.content}>
       <div className={styles.kpiGrid}>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Всього ігор</span>
-          <strong className={styles.kpiValue}>{statistics.totalGames}</strong>
+          <span className={styles.kpiLabel}>Усього</span>
+          <strong className={styles.kpiValue}>{statistics.summary.totalTitles}</strong>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Пройдено</span>
+          <span className={styles.kpiLabel}>Частково зіграно</span>
           <strong className={styles.kpiValue}>
-            {statistics.viewedCount}{" "}
-            <span className={styles.kpiValueMuted}>({formatPercent(statistics.viewedShare)})</span>
-          </strong>
-        </div>
-        <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Заплановано</span>
-          <strong className={styles.kpiValue}>
-            {statistics.plannedCount}{" "}
+            {statistics.summary.droppedTitles}{" "}
             <span className={styles.kpiValueMuted}>
-              ({formatPercent(statistics.plannedShare)})
+              ({formatShare(statistics.summary.droppedTitles, statistics.summary.totalTitles)})
             </span>
           </strong>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Сер. мій рейтинг</span>
-          <strong className={styles.kpiValue}>{formatAverageRating(statistics.averageRating)}</strong>
+          <span className={styles.kpiLabel}>Повністю зіграно</span>
+          <strong className={styles.kpiValue}>
+            {statistics.summary.completedTitles}{" "}
+            <span className={styles.kpiValueMuted}>
+              ({formatShare(statistics.summary.completedTitles, statistics.summary.totalTitles)})
+            </span>
+          </strong>
+        </div>
+        <div className={styles.kpiCard}>
+          <span className={styles.kpiLabel}>Не зіграно</span>
+          <strong className={styles.kpiValue}>
+            {statistics.summary.plannedTitles}{" "}
+            <span className={styles.kpiValueMuted}>
+              ({formatShare(statistics.summary.plannedTitles, statistics.summary.totalTitles)})
+            </span>
+          </strong>
+        </div>
+        <div className={`${styles.kpiCard} ${styles.kpiCardWide}`}>
+          <span className={styles.kpiLabel}>Середня оцінка</span>
+          <strong className={styles.kpiValue}>
+            {formatNullableMetric(statistics.summary.averageRating)}
+          </strong>
+        </div>
+        <div className={`${styles.kpiCard} ${styles.kpiCardWide}`}>
+          <span className={styles.kpiLabel}>Додано за 30 днів</span>
+          <strong className={styles.kpiValue}>{statistics.summary.addedLast30Days}</strong>
         </div>
       </div>
 
       <div className={styles.sectionGrid}>
-        <div className={`${styles.kpiGridCompact} ${styles.sectionFull}`}>
-          <div className={styles.kpiCard}>
-            <span className={styles.kpiLabel}>Повністю пройдено</span>
-            <strong className={styles.kpiValue}>
-              {statistics.fullyViewedCount}{" "}
-              <span className={styles.kpiValueMuted}>({formatPercent(statistics.completionRate)})</span>
-            </strong>
-          </div>
-          <div className={styles.kpiCard}>
-            <span className={styles.kpiLabel}>Частково пройдено</span>
-            <strong className={styles.kpiValue}>
-              {statistics.partiallyViewedCount}{" "}
-              <span className={styles.kpiValueMuted}>({formatPercent(statistics.partialRate)})</span>
-            </strong>
-          </div>
-        </div>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 жанрів пройдено</h2>
-          <StatisticsRankedList
-            entries={statistics.topViewedGenres}
-            valueLabel="games"
-            emptyMessage="Недостатньо даних по жанрах."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 платформ пройдено</h2>
-          <StatisticsRankedList
-            entries={statistics.topViewedPlatforms}
-            valueLabel="games"
-            emptyMessage="Недостатньо даних по платформах."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 жанрів, які сподобались</h2>
-          <StatisticsRankedList
-            entries={statistics.topLikedGenres}
-            valueLabel="points"
-            emptyMessage="Поставте більше оцінок, щоб побачити смакову статистику."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 платформ, які сподобались</h2>
-          <StatisticsRankedList
-            entries={statistics.topLikedPlatforms}
-            valueLabel="points"
-            emptyMessage="Поставте більше оцінок, щоб побачити смакову статистику."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 жанрів, які кинуто</h2>
-          <StatisticsRankedList
-            entries={statistics.topDroppedGenres}
-            valueLabel="games"
-            emptyMessage="Поки немає достатньо кинутих ігор по жанрах."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 платформ, які кинуто</h2>
-          <StatisticsRankedList
-            entries={statistics.topDroppedPlatforms}
-            valueLabel="games"
-            emptyMessage="Поки немає достатньо кинутих ігор по платформах."
-          />
-        </section>
-
         <section className={`${styles.section} ${styles.sectionFull}`}>
-          <h2 className={styles.sectionTitle}>Улюблені жанри по платформах</h2>
-          {statistics.platformGenrePreferences.length === 0 ? (
+          {platformGroups.length === 0 ? (
             <div className={styles.emptyBox}>
-              Поставте більше оцінок на різних платформах, щоб побачити звʼязку платформа × жанр.
+              Додайте платформи до ігор, щоб сформувати шар зрілості платформ.
             </div>
           ) : (
-            <div className={styles.nestedGrid}>
-              {statistics.platformGenrePreferences.map((entry) => (
-                <section key={entry.platform} className={styles.nestedCard}>
-                  <h3 className={styles.nestedTitle}>{entry.platform}</h3>
-                  <StatisticsRankedList
-                    entries={entry.entries}
-                    valueLabel="points"
-                    emptyMessage="Недостатньо даних."
-                  />
-                </section>
+            <div className={styles.list}>
+              {platformGroups.map((group) => (
+                group.entries.map((entry) => (
+                  <details
+                    key={entry.scopeValue}
+                    className={styles.nestedCard}
+                    open={entry.maturityStatus === "working"}
+                  >
+                    <summary className={styles.accordionSummary}>
+                      <span className={styles.accordionSummaryInner}>
+                        <h3 className={styles.nestedTitle}>{entry.scopeValue}</h3>
+                        {entry.maturityStatus === "insufficient" ? (
+                          <span className={styles.accordionMeta}>Недостатньо даних</span>
+                        ) : null}
+                      </span>
+                    </summary>
+                    <div className={styles.accordionContent}>
+                    <div className={styles.kpiGridCompact}>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Усього</span>
+                        <strong className={styles.kpiValue}>{entry.totalTitles}</strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Частково зіграно</span>
+                        <strong className={styles.kpiValue}>
+                          {entry.droppedTitles}{" "}
+                          <span className={styles.kpiValueMuted}>
+                            ({formatShare(entry.droppedTitles, entry.totalTitles)})
+                          </span>
+                        </strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Не зіграно</span>
+                        <strong className={styles.kpiValue}>
+                          {entry.plannedTitles}{" "}
+                          <span className={styles.kpiValueMuted}>
+                            ({formatShare(entry.plannedTitles, entry.totalTitles)})
+                          </span>
+                        </strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Повністю зіграно</span>
+                        <strong className={styles.kpiValue}>
+                          {entry.completedTitles}{" "}
+                          <span className={styles.kpiValueMuted}>
+                            ({formatShare(entry.completedTitles, entry.totalTitles)})
+                          </span>
+                        </strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Середня оцінка</span>
+                        <strong className={styles.kpiValue}>
+                          {formatNullableMetric(entry.averageRating)}
+                        </strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Додано за 30 днів</span>
+                        <strong className={styles.kpiValue}>{entry.addedLast30Days}</strong>
+                      </div>
+                    </div>
+                    <div className={styles.statsBlocksGrid}>
+                      {entry.topLikedGenres.length > 0 ? (
+                        <section className={styles.section}>
+                          <h3 className={styles.sectionTitle}>Топ жанрів, які сподобались</h3>
+                          <StatisticsRankedList
+                            entries={entry.topLikedGenres}
+                            valueLabel="games"
+                            emptyMessage="Недостатньо даних."
+                          />
+                        </section>
+                      ) : null}
+                      {entry.topDislikedGenres.length > 0 ? (
+                        <section className={styles.section}>
+                          <h3 className={styles.sectionTitle}>Топ жанрів, які не зайшли</h3>
+                          <StatisticsRankedList
+                            entries={entry.topDislikedGenres}
+                            valueLabel="games"
+                            emptyMessage="Недостатньо даних."
+                          />
+                        </section>
+                      ) : null}
+                      {entry.topDroppedGenres.length > 0 ? (
+                        <section className={styles.section}>
+                          <h3 className={styles.sectionTitle}>Топ жанрів, які покинуто</h3>
+                          <StatisticsRankedList
+                            entries={entry.topDroppedGenres}
+                            valueLabel="games"
+                            emptyMessage="Недостатньо даних."
+                          />
+                        </section>
+                      ) : null}
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Перегляди по місяцях</h3>
+                        <StatisticsMonthlyList
+                          entries={entry.monthlyEntries}
+                          itemLabel="games"
+                          initialLimit={5}
+                        />
+                      </section>
+                    </div>
+                    {entry.topLikedGenres.length === 0 &&
+                    entry.topDislikedGenres.length === 0 &&
+                    entry.topDroppedGenres.length === 0 ? (
+                      <div className={styles.emptyBox}>Недостатньо даних по жанрах для цієї платформи.</div>
+                    ) : null}
+                    </div>
+                  </details>
+                ))
               ))}
             </div>
           )}
         </section>
 
         <section className={`${styles.section} ${styles.sectionFull}`}>
-          <h2 className={styles.sectionTitle}>Ігри по місяцях</h2>
-          <StatisticsMonthlyList
-            entries={statistics.monthlyEntries}
-            itemLabel="games"
-            initialLimit={5}
-          />
+          <details>
+            <summary className={styles.sectionTitle}>Пояснення</summary>
+            <div className={styles.list}>
+              <p className={styles.sectionText}>
+                Платформа вважається готовою для рекомендацій лише тоді, коли по ній уже є
+                достатньо історії: щонайменше 50 ігор, 20 оцінених ігор і 15 зіграних ігор.
+              </p>
+              <p className={styles.sectionText}>
+                Якщо платформа ще не дотягує до цих порогів, вона не вважається придатною для
+                рекомендацій.
+              </p>
+              <p className={styles.sectionText}>
+                «Попередній профіль» використовується, коли даних уже чимало, але їх ще замало для
+                стабільних рекомендацій.
+              </p>
+              <p className={styles.sectionText}>
+                «Недостатньо даних» означає, що для цієї платформи поки замало зіграних або
+                оцінених ігор, щоб робити надійні висновки.
+              </p>
+              <p className={styles.sectionText}>
+                Основна платформа обирається так: спершу за кількістю ігор, які ти пробував, потім за кількістю оцінених ігор, а потім за загальною кількістю ігор.
+              </p>
+              <p className={styles.sectionText}>
+                Платформи для рекомендацій:{" "}
+                {statistics.interpretation.recommendationValidScopes.length > 0
+                  ? statistics.interpretation.recommendationValidScopes.join(", ")
+                  : "немає"}
+              </p>
+              <p className={styles.sectionText}>
+                Попередній профіль:{" "}
+                {statistics.interpretation.exploratoryScopes.length > 0
+                  ? statistics.interpretation.exploratoryScopes.join(", ")
+                  : "немає"}
+              </p>
+              <p className={styles.sectionText}>
+                Недостатньо даних:{" "}
+                {statistics.interpretation.insufficientScopes.length > 0
+                  ? statistics.interpretation.insufficientScopes.join(", ")
+                  : "немає"}
+              </p>
+              <p className={styles.sectionText}>
+                Ручний вибір платформи:{" "}
+                {statistics.interpretation.manualScopeSelectionRequired ? "доступний" : "не потрібен"}
+              </p>
+            </div>
+          </details>
         </section>
       </div>
     </div>

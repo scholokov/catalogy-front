@@ -15,7 +15,7 @@
 
 .filmsToolbar {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr auto auto 1fr;
   align-items: end;
 }
 
@@ -23,6 +23,15 @@
   flex: 0 0 auto;
   min-width: 0;
   width: fit-content;
+  grid-column: 1;
+}
+
+.filmsToolbar .toolbarCenter {
+  grid-column: 2;
+}
+
+.filmsToolbar .toolbarQuickSwitch {
+  grid-column: 3;
 }
 
 .toolbarSearch {
@@ -39,6 +48,27 @@
 
 .sortMenu {
   position: relative;
+}
+
+.toolbarSearchInput {
+  display: inline-flex;
+  align-items: center;
+}
+
+@media (max-width: 1440px) {
+  .toolbarSearchInput.desktopOnlyAction {
+    display: none;
+  }
+}
+
+.toolbarSearchField {
+  height: 40px;
+  min-width: 240px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--control-text);
+  padding: 0 12px;
 }
 
 .sortTooltip {
@@ -165,9 +195,20 @@
 }
 
 .filmsToolbar .toolbarActions {
+  grid-column: 4;
   justify-content: flex-end;
   width: fit-content;
   justify-self: end;
+}
+
+.toolbarQuickSwitch {
+  justify-self: center;
+}
+
+@media (max-width: 1600px) {
+  .toolbarQuickSwitch {
+    display: none;
+  }
 }
 
 .viewSwitch {

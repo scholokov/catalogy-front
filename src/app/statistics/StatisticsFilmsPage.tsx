@@ -4,20 +4,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { downloadCsvFile } from "@/lib/csv/downloadCsv";
 import { getCsvTimestamp } from "@/lib/csv/getCsvTimestamp";
-import { downloadTextFile } from "@/lib/csv/downloadText";
-import { buildLlmRecoContextText } from "./filmLlmCsv";
 import StatisticsMonthlyList from "./StatisticsMonthlyList";
 import styles from "./StatisticsPage.module.css";
 import StatisticsRankedList from "./StatisticsRankedList";
+import { deriveScopeMaturityStatus } from "./lib/scopeReadiness";
+import type { ScopeMaturityStatus } from "./statisticsTypes";
 
 type StatisticsFilmsPageProps = {
   onTotalChange: (count: number) => void;
   onExportReady?: (handler: (() => void) | null) => void;
-  onLlmExportReady?: (handler: (() => void) | null) => void;
 };
 
 type RawStatsRow = {
-  item_id: string | null;
+  created_at: string | null;
   viewed_at: string | null;
   is_viewed: boolean | null;
   rating: number | null;
@@ -25,58 +24,71 @@ type RawStatsRow = {
   items:
     | {
         title?: string | null;
-        title_uk?: string | null;
-        title_en?: string | null;
-        title_original?: string | null;
-        year?: number | null;
-        external_id?: string | null;
         genres?: string | null;
         director?: string | null;
         actors?: string | null;
+        film_media_type?: "movie" | "tv" | null;
         type?: string | null;
       }
     | Array<{
         title?: string | null;
-        title_uk?: string | null;
-        title_en?: string | null;
-        title_original?: string | null;
-        year?: number | null;
-        external_id?: string | null;
         genres?: string | null;
         director?: string | null;
         actors?: string | null;
+        film_media_type?: "movie" | "tv" | null;
         type?: string | null;
       }>
     | null;
 };
 
+type FilmMediaType = "movie" | "tv";
+
 type FilmStatsRow = {
-  itemId: string;
-  externalId: string;
   title: string;
-  titleUk: string;
-  titleEn: string;
-  titleOriginal: string;
-  year: string;
-  type: string;
+  createdAt: string | null;
   viewedAt: string | null;
   isViewed: boolean;
   rating: number | null;
   viewPercent: number;
+  mediaType: FilmMediaType;
   genres: string[];
   director: string | null;
-  directors: string[];
   actors: string[];
 };
 
-const formatAverageRating = (value: number | null) => {
+type FilmScopeStats = {
+  mediaType: FilmMediaType;
+  label: string;
+  totalTitles: number;
+  ratedTitles: number;
+  engagedTitles: number;
+  completedTitles: number;
+  partialTitles: number;
+  plannedTitles: number;
+  addedLast30Days: number;
+  maturityStatus: ScopeMaturityStatus;
+  recommendationEligible: boolean;
+  averageRating: number | null;
+  topLikedGenres: ReturnType<typeof buildRankedEntries>;
+  topDislikedGenres: ReturnType<typeof buildRankedEntries>;
+  topDroppedGenres: ReturnType<typeof buildRankedEntries>;
+  topLikedDirectors: ReturnType<typeof buildRankedEntries>;
+  topDislikedDirectors: ReturnType<typeof buildRankedEntries>;
+  topDroppedDirectors: ReturnType<typeof buildRankedEntries>;
+  topLikedActors: ReturnType<typeof buildRankedEntries>;
+  topDislikedActors: ReturnType<typeof buildRankedEntries>;
+  topDroppedActors: ReturnType<typeof buildRankedEntries>;
+  monthlyEntries: ReturnType<typeof buildMonthlyEntries>;
+};
+
+const formatNullableMetric = (value: number | null) => {
   if (value === null) return "—";
   return value.toFixed(2);
 };
 
-const formatPercent = (value: number | null) => {
-  if (value === null) return "—";
-  return `${value.toFixed(0)}%`;
+const formatShare = (count: number, total: number) => {
+  if (total <= 0) return "0%";
+  return `${Math.round((count / total) * 100)}%`;
 };
 
 const normalizeGenres = (value?: string | null) => {
@@ -110,6 +122,27 @@ const normalizeActors = (value?: string | null) => {
       unique.add(actor);
       return true;
     });
+};
+
+const normalizeFilmMediaType = (value?: string | null): FilmMediaType => {
+  if (value === "tv") return "tv";
+  return "movie";
+};
+
+const getFilmScopeLabel = (mediaType: FilmMediaType) =>
+  mediaType === "tv" ? "Серіали" : "Кіно";
+
+const isCompletedFilm = (row: FilmStatsRow) => row.isViewed && row.viewPercent >= 100;
+
+const isPartialViewedFilm = (row: FilmStatsRow) => row.isViewed && row.viewPercent < 100;
+
+const isPlannedFilm = (row: FilmStatsRow) => !row.isViewed;
+
+const isAddedInLast30Days = (row: FilmStatsRow, now: Date) => {
+  if (!row.createdAt) return false;
+  const createdAt = new Date(row.createdAt);
+  if (Number.isNaN(createdAt.getTime())) return false;
+  return now.getTime() - createdAt.getTime() <= 30 * 24 * 60 * 60 * 1000;
 };
 
 const getPreferenceWeight = (rating: number | null) => {
@@ -203,12 +236,55 @@ const buildMonthlyEntries = (rows: FilmStatsRow[]) => {
         }).format(date),
       };
     });
-}
+};
+
+const buildScopeStats = (rows: FilmStatsRow[], mediaType: FilmMediaType): FilmScopeStats => {
+  const now = new Date();
+  const completedRows = rows.filter(isCompletedFilm);
+  const partialRows = rows.filter(isPartialViewedFilm);
+  const plannedRows = rows.filter(isPlannedFilm);
+  const ratedRows = rows.filter((row) => row.rating !== null);
+  const addedLast30DaysRows = rows.filter((row) => isAddedInLast30Days(row, now));
+  const engagedRows = rows.filter((row) => row.isViewed);
+  const maturityStatus = deriveScopeMaturityStatus({
+    totalTitles: rows.length,
+    ratedTitles: ratedRows.length,
+    engagedTitles: engagedRows.length,
+    plannedTitles: plannedRows.length,
+  });
+
+  return {
+    mediaType,
+    label: getFilmScopeLabel(mediaType),
+    totalTitles: rows.length,
+    ratedTitles: ratedRows.length,
+    engagedTitles: engagedRows.length,
+    completedTitles: completedRows.length,
+    partialTitles: partialRows.length,
+    plannedTitles: plannedRows.length,
+    addedLast30Days: addedLast30DaysRows.length,
+    maturityStatus,
+    recommendationEligible: maturityStatus === "working",
+    averageRating:
+      ratedRows.length > 0
+        ? ratedRows.reduce((sum, row) => sum + (row.rating ?? 0), 0) / ratedRows.length
+        : null,
+    topLikedGenres: buildRankedEntries(rows, "genres", "liked"),
+    topDislikedGenres: buildRankedEntries(rows, "genres", "disliked"),
+    topDroppedGenres: buildRankedEntries(partialRows, "genres", "viewed"),
+    topLikedDirectors: buildRankedEntries(rows, "directors", "liked"),
+    topDislikedDirectors: buildRankedEntries(rows, "directors", "disliked"),
+    topDroppedDirectors: buildRankedEntries(partialRows, "directors", "viewed"),
+    topLikedActors: buildRankedEntries(rows, "actors", "liked"),
+    topDislikedActors: buildRankedEntries(rows, "actors", "disliked"),
+    topDroppedActors: buildRankedEntries(partialRows, "actors", "viewed"),
+    monthlyEntries: buildMonthlyEntries(rows.filter((row) => row.isViewed)),
+  };
+};
 
 export default function StatisticsFilmsPage({
   onTotalChange,
   onExportReady,
-  onLlmExportReady,
 }: StatisticsFilmsPageProps) {
   const [rows, setRows] = useState<FilmStatsRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -243,7 +319,7 @@ export default function StatisticsFilmsPage({
           const { data, error } = await supabase
             .from("user_views")
             .select(
-              "item_id, viewed_at, is_viewed, rating, view_percent, items:items!inner(title, title_uk, title_en, title_original, year, external_id, genres, director, actors, type)",
+              "created_at, viewed_at, is_viewed, rating, view_percent, items:items!inner(title, genres, director, actors, film_media_type, type)",
             )
             .eq("user_id", user.id)
             .eq("items.type", "film")
@@ -267,28 +343,16 @@ export default function StatisticsFilmsPage({
           const chunk = chunkRaw.map((row) => {
             const item = Array.isArray(row.items) ? row.items[0] : row.items;
             const director = normalizeDirector(item?.director);
-            const directors = director
-              ? director
-                  .split(",")
-                  .map((entry) => entry.trim())
-                  .filter(Boolean)
-              : [];
             return {
-              itemId: row.item_id ?? "",
-              externalId: item?.external_id?.trim() || "",
               title: item?.title?.trim() || "Без назви",
-              titleUk: item?.title_uk?.trim() || "",
-              titleEn: item?.title_en?.trim() || "",
-              titleOriginal: item?.title_original?.trim() || "",
-              year: item?.year == null ? "" : String(item.year),
-              type: item?.type?.trim() || "film",
+              createdAt: row.created_at,
               viewedAt: row.viewed_at,
               isViewed: Boolean(row.is_viewed),
               rating: row.rating,
               viewPercent: Math.max(0, Math.min(100, row.view_percent ?? 0)),
+              mediaType: normalizeFilmMediaType(item?.film_media_type),
               genres: normalizeGenres(item?.genres),
               director,
-              directors,
               actors: normalizeActors(item?.actors),
             };
           });
@@ -327,55 +391,32 @@ export default function StatisticsFilmsPage({
   }, [onTotalChange]);
 
   const statistics = useMemo(() => {
-    const viewedRows = rows.filter((row) => row.isViewed);
-    const ratedViewedRows = viewedRows.filter((row) => row.rating !== null);
-    const startedRows = rows.filter((row) => row.viewPercent > 0);
-    const fullyViewedRows = rows.filter((row) => row.viewPercent >= 100);
-    const partiallyViewedRows = rows.filter(
-      (row) => row.viewPercent > 0 && row.viewPercent < 100,
-    );
-    const droppedRows = rows.filter((row) => row.viewPercent > 0 && row.viewPercent < 80);
+    const now = new Date();
+    const completedRows = rows.filter(isCompletedFilm);
+    const partialRows = rows.filter(isPartialViewedFilm);
+    const plannedRows = rows.filter(isPlannedFilm);
+    const ratedRows = rows.filter((row) => row.rating !== null);
+    const addedLast30DaysRows = rows.filter((row) => isAddedInLast30Days(row, now));
 
-    const totalFilms = rows.length;
-    const viewedCount = viewedRows.length;
-    const plannedCount = totalFilms - viewedCount;
-    const viewedShare = totalFilms > 0 ? (viewedCount / totalFilms) * 100 : null;
-    const plannedShare = totalFilms > 0 ? (plannedCount / totalFilms) * 100 : null;
-    const startedCount = startedRows.length;
-    const fullyViewedCount = fullyViewedRows.length;
-    const partiallyViewedCount = partiallyViewedRows.length;
-    const averageRating =
-      ratedViewedRows.length > 0
-        ? ratedViewedRows.reduce((sum, row) => sum + (row.rating ?? 0), 0) / ratedViewedRows.length
-        : null;
-    const completionRate =
-      startedCount > 0 ? (fullyViewedCount / startedCount) * 100 : null;
-    const partialRate =
-      startedCount > 0 ? (partiallyViewedCount / startedCount) * 100 : null;
+    const summary = {
+      totalTitles: rows.length,
+      completedTitles: completedRows.length,
+      partialTitles: partialRows.length,
+      plannedTitles: plannedRows.length,
+      addedLast30Days: addedLast30DaysRows.length,
+      averageRating:
+        ratedRows.length > 0
+          ? ratedRows.reduce((sum, row) => sum + (row.rating ?? 0), 0) / ratedRows.length
+          : null,
+    };
+
+    const scopeEntries = (["movie", "tv"] as FilmMediaType[])
+      .map((mediaType) => buildScopeStats(rows.filter((row) => row.mediaType === mediaType), mediaType))
+      .filter((entry) => entry.totalTitles > 0);
 
     return {
-      totalFilms,
-      viewedCount,
-      plannedCount,
-      viewedShare,
-      plannedShare,
-      startedCount,
-      fullyViewedCount,
-      partiallyViewedCount,
-      completionRate,
-      partialRate,
-      averageRating,
-      topViewedGenres: buildRankedEntries(viewedRows, "genres", "viewed"),
-      topLikedGenres: buildRankedEntries(viewedRows, "genres", "liked"),
-      topDislikedGenres: buildRankedEntries(viewedRows, "genres", "disliked"),
-      topDroppedGenres: buildRankedEntries(droppedRows, "genres", "viewed"),
-      topViewedDirectors: buildRankedEntries(viewedRows, "directors", "viewed"),
-      topLikedDirectors: buildRankedEntries(viewedRows, "directors", "liked"),
-      topDislikedDirectors: buildRankedEntries(viewedRows, "directors", "disliked"),
-      topDroppedDirectors: buildRankedEntries(droppedRows, "directors", "viewed"),
-      topViewedActors: buildRankedEntries(viewedRows, "actors", "viewed"),
-      topLikedActors: buildRankedEntries(viewedRows, "actors", "liked"),
-      monthlyEntries: buildMonthlyEntries(viewedRows),
+      summary,
+      scopeEntries,
     };
   }, [rows]);
 
@@ -383,97 +424,33 @@ export default function StatisticsFilmsPage({
     if (rows.length === 0) {
       return;
     }
-
-    const summaryRows = [
-      ["Всього фільмів", String(statistics.totalFilms)],
-      ["Переглянуто", `${statistics.viewedCount} (${formatPercent(statistics.viewedShare)})`],
-      ["Заплановано", `${statistics.plannedCount} (${formatPercent(statistics.plannedShare)})`],
-      ["Сер. мій рейтинг", formatAverageRating(statistics.averageRating)],
-      [
-        "Повністю переглянуто",
-        `${statistics.fullyViewedCount} (${formatPercent(statistics.completionRate)})`,
-      ],
-      [
-        "Частково переглянуто",
-        `${statistics.partiallyViewedCount} (${formatPercent(statistics.partialRate)})`,
-      ],
-    ];
-
-    const rankedColumns = [
-      { label: "Топ жанрів переглянуто", entries: statistics.topViewedGenres },
-      { label: "Топ режисерів переглянуто", entries: statistics.topViewedDirectors },
-      { label: "Топ акторів переглянуто", entries: statistics.topViewedActors },
-      { label: "Топ жанрів сподобались", entries: statistics.topLikedGenres },
-      { label: "Топ режисерів сподобались", entries: statistics.topLikedDirectors },
-      { label: "Топ акторів сподобались", entries: statistics.topLikedActors },
-      { label: "Топ жанрів не зайшли", entries: statistics.topDislikedGenres },
-      { label: "Топ режисерів не зайшли", entries: statistics.topDislikedDirectors },
-      { label: "Топ жанрів кинуто", entries: statistics.topDroppedGenres },
-      { label: "Топ режисерів кинуто", entries: statistics.topDroppedDirectors },
-    ];
-
     const csvHeaders = [
-      "Метрика",
-      "Значення",
-      ...rankedColumns.flatMap((column) => [column.label, "Значення"]),
-      "Перелік фільмів",
+      "Назва",
+      "Режисер",
+      "Переглянуто у відсотках",
+      "Особистий рейтинг",
+      "Дата перегляду",
     ];
 
-    const maxLength = Math.max(
-      summaryRows.length,
-      rows.length,
-      ...rankedColumns.map((column) => column.entries.length),
-    );
-
-    const rowsForCsv = Array.from({ length: maxLength }, (_, index) => [
-      summaryRows[index]?.[0] ?? "",
-      summaryRows[index]?.[1] ?? "",
-      ...rankedColumns.flatMap((column) => [
-        column.entries[index]?.label ?? "",
-        column.entries[index] ? String(column.entries[index].value) : "",
-      ]),
-      rows[index]?.title ?? "",
+    const rowsForCsv = rows.map((row) => [
+      row.title,
+      row.director ?? "",
+      String(row.viewPercent),
+      row.rating == null ? "" : String(row.rating),
+      row.viewedAt ? row.viewedAt.slice(0, 10) : "",
     ]);
 
     downloadCsvFile(
-      `films_statistics_export_${getCsvTimestamp()}.csv`,
+      `films_export_${getCsvTimestamp()}.csv`,
       csvHeaders,
       rowsForCsv,
     );
-  }, [rows, statistics]);
-
-  const handleLlmExportCsv = useCallback(() => {
-    if (rows.length === 0) {
-      return;
-    }
-
-    const llmRows = rows.map((row) => ({
-      itemId: row.itemId,
-      externalId: row.externalId,
-      title: row.title,
-      titleUk: row.titleUk,
-      titleEn: row.titleEn,
-      titleOriginal: row.titleOriginal,
-      year: row.year,
-      type: row.type,
-      progress: row.viewPercent,
-      rating: row.rating,
-      genres: row.genres,
-      directors: row.directors,
-    }));
-
-    downloadTextFile("llm_reco_context.txt", buildLlmRecoContextText(llmRows));
   }, [rows]);
 
   useEffect(() => {
     onExportReady?.(rows.length > 0 ? handleExportCsv : null);
     return () => onExportReady?.(null);
   }, [handleExportCsv, onExportReady, rows.length]);
-
-  useEffect(() => {
-    onLlmExportReady?.(rows.length > 0 ? handleLlmExportCsv : null);
-    return () => onLlmExportReady?.(null);
-  }, [handleLlmExportCsv, onLlmExportReady, rows.length]);
 
   if (isLoading) {
     return <p className={styles.message}>Завантаження статистики…</p>;
@@ -483,7 +460,7 @@ export default function StatisticsFilmsPage({
     return <p className={styles.message}>{errorMessage}</p>;
   }
 
-  if (statistics.totalFilms === 0) {
+  if (statistics.summary.totalTitles === 0) {
     return <p className={styles.message}>Додайте фільми до бібліотеки, щоб побачити статистику.</p>;
   }
 
@@ -491,142 +468,235 @@ export default function StatisticsFilmsPage({
     <div className={styles.content}>
       <div className={styles.kpiGrid}>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Всього фільмів</span>
-          <strong className={styles.kpiValue}>{statistics.totalFilms}</strong>
+          <span className={styles.kpiLabel}>Усього</span>
+          <strong className={styles.kpiValue}>{statistics.summary.totalTitles}</strong>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Переглянуто</span>
+          <span className={styles.kpiLabel}>Частково переглянуто</span>
           <strong className={styles.kpiValue}>
-            {statistics.viewedCount}{" "}
-            <span className={styles.kpiValueMuted}>({formatPercent(statistics.viewedShare)})</span>
-          </strong>
-        </div>
-        <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Заплановано</span>
-          <strong className={styles.kpiValue}>
-            {statistics.plannedCount}{" "}
+            {statistics.summary.partialTitles}{" "}
             <span className={styles.kpiValueMuted}>
-              ({formatPercent(statistics.plannedShare)})
+              ({formatShare(statistics.summary.partialTitles, statistics.summary.totalTitles)})
             </span>
           </strong>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Сер. мій рейтинг</span>
-          <strong className={styles.kpiValue}>{formatAverageRating(statistics.averageRating)}</strong>
+          <span className={styles.kpiLabel}>Повністю переглянуто</span>
+          <strong className={styles.kpiValue}>
+            {statistics.summary.completedTitles}{" "}
+            <span className={styles.kpiValueMuted}>
+              ({formatShare(statistics.summary.completedTitles, statistics.summary.totalTitles)})
+            </span>
+          </strong>
+        </div>
+        <div className={styles.kpiCard}>
+          <span className={styles.kpiLabel}>Не переглянуто</span>
+          <strong className={styles.kpiValue}>
+            {statistics.summary.plannedTitles}{" "}
+            <span className={styles.kpiValueMuted}>
+              ({formatShare(statistics.summary.plannedTitles, statistics.summary.totalTitles)})
+            </span>
+          </strong>
+        </div>
+        <div className={`${styles.kpiCard} ${styles.kpiCardWide}`}>
+          <span className={styles.kpiLabel}>Середня оцінка</span>
+          <strong className={styles.kpiValue}>
+            {formatNullableMetric(statistics.summary.averageRating)}
+          </strong>
+        </div>
+        <div className={`${styles.kpiCard} ${styles.kpiCardWide}`}>
+          <span className={styles.kpiLabel}>Додано за 30 днів</span>
+          <strong className={styles.kpiValue}>{statistics.summary.addedLast30Days}</strong>
         </div>
       </div>
-
       <div className={styles.sectionGrid}>
-        <div className={`${styles.kpiGridCompact} ${styles.sectionFull}`}>
-          <div className={styles.kpiCard}>
-            <span className={styles.kpiLabel}>Повністю переглянуто</span>
-            <strong className={styles.kpiValue}>
-              {statistics.fullyViewedCount}{" "}
-              <span className={styles.kpiValueMuted}>({formatPercent(statistics.completionRate)})</span>
-            </strong>
-          </div>
-          <div className={styles.kpiCard}>
-            <span className={styles.kpiLabel}>Частково переглянуто</span>
-            <strong className={styles.kpiValue}>
-              {statistics.partiallyViewedCount}{" "}
-              <span className={styles.kpiValueMuted}>({formatPercent(statistics.partialRate)})</span>
-            </strong>
-          </div>
-        </div>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 жанрів переглянуто</h2>
-          <StatisticsRankedList
-            entries={statistics.topViewedGenres}
-            valueLabel="films"
-            emptyMessage="Недостатньо даних по жанрах."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 режисерів переглянуто</h2>
-          <StatisticsRankedList
-            entries={statistics.topViewedDirectors}
-            valueLabel="films"
-            emptyMessage="Недостатньо даних по режисерах."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 акторів переглянуто</h2>
-          <StatisticsRankedList
-            entries={statistics.topViewedActors}
-            valueLabel="films"
-            emptyMessage="Недостатньо даних по акторах."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 жанрів, які сподобались</h2>
-          <StatisticsRankedList
-            entries={statistics.topLikedGenres}
-            valueLabel="points"
-            emptyMessage="Поставте більше оцінок, щоб побачити смакову статистику."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 режисерів, які сподобались</h2>
-          <StatisticsRankedList
-            entries={statistics.topLikedDirectors}
-            valueLabel="points"
-            emptyMessage="Поставте більше оцінок, щоб побачити смакову статистику."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 акторів, які сподобались</h2>
-          <StatisticsRankedList
-            entries={statistics.topLikedActors}
-            valueLabel="points"
-            emptyMessage="Поставте більше оцінок, щоб побачити смакову статистику."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 жанрів, які не зайшли</h2>
-          <StatisticsRankedList
-            entries={statistics.topDislikedGenres}
-            valueLabel="points"
-            emptyMessage="Поки немає достатньо низьких оцінок по жанрах."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 режисерів, які не зайшли</h2>
-          <StatisticsRankedList
-            entries={statistics.topDislikedDirectors}
-            valueLabel="points"
-            emptyMessage="Поки немає достатньо низьких оцінок по режисерах."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 жанрів, які кинуто</h2>
-          <StatisticsRankedList
-            entries={statistics.topDroppedGenres}
-            valueLabel="films"
-            emptyMessage="Поки немає достатньо кинутих фільмів по жанрах."
-          />
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Топ 5 режисерів, яких кинуто</h2>
-          <StatisticsRankedList
-            entries={statistics.topDroppedDirectors}
-            valueLabel="films"
-            emptyMessage="Поки немає достатньо кинутих фільмів по режисерах."
-          />
+        <section className={`${styles.section} ${styles.sectionFull}`}>
+          {statistics.scopeEntries.length === 0 ? (
+            <div className={styles.emptyBox}>
+              Додайте фільми й серіали до бібліотеки, щоб сформувати окрему статистику за форматами.
+            </div>
+          ) : (
+            <div className={styles.list}>
+              {statistics.scopeEntries.map((entry) => (
+                <details
+                  key={entry.mediaType}
+                  className={styles.nestedCard}
+                  open={entry.maturityStatus === "working"}
+                >
+                  <summary className={styles.accordionSummary}>
+                    <span className={styles.accordionSummaryInner}>
+                      <h3 className={styles.nestedTitle}>{entry.label}</h3>
+                      {entry.maturityStatus === "insufficient" ? (
+                        <span className={styles.accordionMeta}>Недостатньо даних</span>
+                      ) : null}
+                    </span>
+                  </summary>
+                  <div className={styles.accordionContent}>
+                    <div className={styles.kpiGridCompact}>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Усього</span>
+                        <strong className={styles.kpiValue}>{entry.totalTitles}</strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Частково переглянуто</span>
+                        <strong className={styles.kpiValue}>
+                          {entry.partialTitles}{" "}
+                          <span className={styles.kpiValueMuted}>
+                            ({formatShare(entry.partialTitles, entry.totalTitles)})
+                          </span>
+                        </strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Не переглянуто</span>
+                        <strong className={styles.kpiValue}>
+                          {entry.plannedTitles}{" "}
+                          <span className={styles.kpiValueMuted}>
+                            ({formatShare(entry.plannedTitles, entry.totalTitles)})
+                          </span>
+                        </strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Повністю переглянуто</span>
+                        <strong className={styles.kpiValue}>
+                          {entry.completedTitles}{" "}
+                          <span className={styles.kpiValueMuted}>
+                            ({formatShare(entry.completedTitles, entry.totalTitles)})
+                          </span>
+                        </strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Середня оцінка</span>
+                        <strong className={styles.kpiValue}>
+                          {formatNullableMetric(entry.averageRating)}
+                        </strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Додано за 30 днів</span>
+                        <strong className={styles.kpiValue}>{entry.addedLast30Days}</strong>
+                      </div>
+                    </div>
+                    <div className={styles.statsBlocksGrid}>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ жанрів, які сподобались</h3>
+                        <StatisticsRankedList
+                          entries={entry.topLikedGenres}
+                          valueLabel="points"
+                          emptyMessage="Поставте більше оцінок, щоб побачити смакову статистику."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ жанрів, які не зайшли</h3>
+                        <StatisticsRankedList
+                          entries={entry.topDislikedGenres}
+                          valueLabel="points"
+                          emptyMessage="Поки немає достатньо низьких оцінок по жанрах."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ жанрів, які кинуто</h3>
+                        <StatisticsRankedList
+                          entries={entry.topDroppedGenres}
+                          valueLabel="films"
+                          emptyMessage="Поки немає достатньо частково переглянутих позицій по жанрах."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ режисерів, які сподобались</h3>
+                        <StatisticsRankedList
+                          entries={entry.topLikedDirectors}
+                          valueLabel="points"
+                          emptyMessage="Поставте більше оцінок, щоб побачити смакову статистику."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ режисерів, які не зайшли</h3>
+                        <StatisticsRankedList
+                          entries={entry.topDislikedDirectors}
+                          valueLabel="points"
+                          emptyMessage="Поки немає достатньо низьких оцінок по режисерах."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ режисерів, яких кинуто</h3>
+                        <StatisticsRankedList
+                          entries={entry.topDroppedDirectors}
+                          valueLabel="films"
+                          emptyMessage="Поки немає достатньо частково переглянутих позицій по режисерах."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ акторів, які сподобались</h3>
+                        <StatisticsRankedList
+                          entries={entry.topLikedActors}
+                          valueLabel="points"
+                          emptyMessage="Поставте більше оцінок, щоб побачити смакову статистику."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ акторів, які не зайшли</h3>
+                        <StatisticsRankedList
+                          entries={entry.topDislikedActors}
+                          valueLabel="points"
+                          emptyMessage="Поки немає достатньо низьких оцінок по акторах."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ акторів, яких кинуто</h3>
+                        <StatisticsRankedList
+                          entries={entry.topDroppedActors}
+                          valueLabel="films"
+                          emptyMessage="Поки немає достатньо частково переглянутих позицій по акторах."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Перегляди по місяцях</h3>
+                        <StatisticsMonthlyList entries={entry.monthlyEntries} initialLimit={5} />
+                      </section>
+                    </div>
+                  </div>
+                </details>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className={`${styles.section} ${styles.sectionFull}`}>
-          <h2 className={styles.sectionTitle}>Перегляди по місяцях</h2>
-          <StatisticsMonthlyList entries={statistics.monthlyEntries} />
+          <details>
+            <summary className={styles.sectionTitle}>Пояснення</summary>
+            <div className={styles.list}>
+              <p className={styles.sectionText}>
+                Статистика розділяється на два формати: «Кіно» для записів з типом movie і
+                «Серіали» для записів з типом tv.
+              </p>
+              <p className={styles.sectionText}>
+                Формат вважається готовим для рекомендацій лише тоді, коли має достатньо даних:
+                щонайменше 50 позицій, 20 оцінених позицій і 15 переглянутих позицій.
+              </p>
+              <p className={styles.sectionText}>
+                Якщо формат ще не дотягує до цих порогів, він не вважається придатним для
+                рекомендацій, а акордеон лишається закритим.
+              </p>
+              <p className={styles.sectionText}>
+                Лейба «Недостатньо даних» означає, що для цього формату поки замало історії
+                переглядів або оцінок, щоб робити стабільні висновки.
+              </p>
+              <p className={styles.sectionText}>
+                «Частково переглянуто» означає, що є позначка перегляду, але прогрес ще менший за
+                100%.
+              </p>
+              <p className={styles.sectionText}>
+                «Повністю переглянуто» означає, що є позначка перегляду і прогрес досяг 100% або
+                більше.
+              </p>
+              <p className={styles.sectionText}>
+                «Не переглянуто» означає, що позначка перегляду відсутня.
+              </p>
+              <p className={styles.sectionText}>
+                «Додано за 30 днів» рахує кількість карток, створених за останні 30 днів від
+                поточного моменту.
+              </p>
+            </div>
+          </details>
         </section>
       </div>
     </div>

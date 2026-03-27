@@ -14,6 +14,9 @@ import { Range, getTrackBackground } from "react-range";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
+import RecommendationRequestModal, {
+  type RecommendationRequestOption,
+} from "@/components/recommendations/RecommendationRequestModal";
 import CloseIconButton from "@/components/ui/CloseIconButton";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import { supabase } from "@/lib/supabase/client";
@@ -21,9 +24,9 @@ import {
   readDisplayPreferences,
   DISPLAY_PREFERENCES_STORAGE_KEY,
 } from "@/lib/settings/displayPreferences";
-import { downloadCsvFile } from "@/lib/csv/downloadCsv";
 import { getDisplayName } from "@/lib/users/displayName";
 import type { FilmLlmExportRow } from "@/app/statistics/filmLlmCsv";
+import { deriveScopeMaturityStatus } from "@/app/statistics/lib/scopeReadiness";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
 type Trailer = {
@@ -81,6 +84,7 @@ type FilmCollectionItem = {
     actors: string | null;
     poster_url: string | null;
     external_id: string | null;
+    film_media_type?: "movie" | "tv" | null;
     imdb_rating: string | null;
     trailers: Trailer[] | null;
     year?: number | null;
@@ -110,6 +114,7 @@ type FilmItemDraft = {
   director: string | null;
   actors: string | null;
   external_id: string | null;
+  film_media_type?: "movie" | "tv" | null;
   trailers: Trailer[] | null;
 };
 
@@ -118,6 +123,12 @@ type ContactOption = {
   name: string;
   avatarUrl?: string | null;
   disabledReason?: string;
+};
+
+type RecommendationScopeState = {
+  rows: FilmLlmExportRow[];
+  options: RecommendationRequestOption[];
+  emptyMessage: string;
 };
 
 type FilmsManagerProps = {
@@ -150,6 +161,7 @@ type Filters = {
 
 type SortBy = "created_at" | "title" | "rating" | "year";
 type SortDirection = "asc" | "desc";
+type QuickViewFilter = "all" | "viewed" | "planned";
 
 type FilmsViewMode = "default" | "directors" | "cards";
 const FILMS_VIEW_MODES: FilmsViewMode[] = ["cards", "default", "directors"];
@@ -176,6 +188,16 @@ const AVAILABILITY_OPTIONS = [
 const PAGE_SIZE = 20;
 const LOAD_AHEAD_PX = 700;
 const NICKNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
+const normalizeFilmMediaType = (value?: string | null): "movie" | "tv" | null => {
+  if (value === "movie" || value === "tv") return value;
+  return null;
+};
+const formatFilmMediaType = (value?: string | null) =>
+  normalizeFilmMediaType(value) === "tv" ? "Серіал" : "Фільм";
+const getFilmExternalKey = (externalId?: string | null, mediaType?: string | null) => {
+  if (!externalId) return null;
+  return `${normalizeFilmMediaType(mediaType) ?? "movie"}:${externalId}`;
+};
 const DEFAULT_FILTERS: Filters = {
   availabilityAll: true,
   query: "",
@@ -371,6 +393,7 @@ export default function FilmsManager({
   const collectionRef = useRef<FilmCollectionItem[]>([]);
   const [appliedFilters, setAppliedFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [pendingFilters, setPendingFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [toolbarQueryDraft, setToolbarQueryDraft] = useState(DEFAULT_FILTERS.query);
   const [hasApplied, setHasApplied] = useState(false);
   const [yearBounds, setYearBounds] = useState<[number, number]>([
     MIN_YEAR,
@@ -384,6 +407,7 @@ export default function FilmsManager({
   const totalCountRef = useRef(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isGeneratingRecommendations, setIsGeneratingRecommendations] = useState(false);
+  const [isPreparingRecommendationRequest, setIsPreparingRecommendationRequest] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(0);
@@ -449,6 +473,8 @@ export default function FilmsManager({
     itemId: string;
     title: string;
   } | null>(null);
+  const [recommendationScopeState, setRecommendationScopeState] =
+    useState<RecommendationScopeState | null>(null);
   const [contacts, setContacts] = useState<ContactOption[]>([]);
   const [isNicknameModalOpen, setIsNicknameModalOpen] = useState(false);
   const [nicknameValue, setNicknameValue] = useState("");
@@ -743,7 +769,7 @@ export default function FilmsManager({
     let query = supabase
       .from("user_views")
       .select(
-        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, imdb_rating, trailers, year, type)",
+        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, film_media_type, imdb_rating, trailers, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "film");
@@ -1054,6 +1080,7 @@ export default function FilmsManager({
     initialLoadRunRef.current = true;
     skipNextApplyRef.current = true;
     setAppliedFilters(DEFAULT_FILTERS);
+    setToolbarQueryDraft(DEFAULT_FILTERS.query);
     setHasApplied(true);
     lastAppliedRequestKeyRef.current = getFiltersRequestKey(DEFAULT_FILTERS);
     void fetchPage(0, DEFAULT_FILTERS);
@@ -1213,74 +1240,6 @@ export default function FilmsManager({
           return genresMatches && directorMatches;
         });
   }, [appliedFilters.director, appliedFilters.genres, collection]);
-  const getCsvTimestamp = () => {
-    const now = new Date();
-    const pad = (value: number) => String(value).padStart(2, "0");
-    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(
-      now.getHours(),
-    )}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  };
-  const fetchAllFilmsLibraryForCsv = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      throw new Error("Потрібна авторизація.");
-    }
-    if (readOnly && ownerUserId && friendAccessState !== "allowed") {
-      throw new Error("Немає доступу до бібліотеки.");
-    }
-    const effectiveOwnerId = ownerUserId ?? user.id;
-    const pageSize = 1000;
-    let from = 0;
-    const allRows: Array<{
-      viewed_at: string;
-      rating: number | null;
-      view_percent: number;
-      title: string;
-      director: string | null;
-    }> = [];
-    while (true) {
-      const { data, error } = await supabase
-        .from("user_views")
-        .select("viewed_at, rating, view_percent, items:items!inner(title, director, type)")
-        .eq("user_id", effectiveOwnerId)
-        .eq("items.type", "film")
-        .order("created_at", { ascending: false })
-        .range(from, from + pageSize - 1);
-      if (error) {
-        throw new Error("Не вдалося експортувати бібліотеку.");
-      }
-      const chunkRaw = (data ?? []) as Array<{
-        viewed_at: string;
-        rating: number | null;
-        view_percent: number;
-        items:
-          | { title?: string | null; director?: string | null }
-          | Array<{ title?: string | null; director?: string | null }>
-          | null;
-      }>;
-      if (chunkRaw.length === 0) {
-        break;
-      }
-      const chunk = chunkRaw.map((row) => {
-        const relatedItem = Array.isArray(row.items) ? row.items[0] : row.items;
-        return {
-          viewed_at: row.viewed_at,
-          rating: row.rating,
-          view_percent: row.view_percent,
-          title: relatedItem?.title ?? "",
-          director: relatedItem?.director ?? null,
-        };
-      });
-      allRows.push(...chunk);
-      if (chunkRaw.length < pageSize) {
-        break;
-      }
-      from += pageSize;
-    }
-    return allRows;
-  };
   const fetchAllFilmsLibraryForRecommendations = async () => {
     const {
       data: { user },
@@ -1299,7 +1258,7 @@ export default function FilmsManager({
       const { data, error } = await supabase
         .from("user_views")
         .select(
-          "item_id, rating, view_percent, items:items!inner(title, title_uk, title_en, title_original, year, external_id, genres, director, type)",
+          "item_id, rating, is_viewed, view_percent, items:items!inner(title, title_uk, title_en, title_original, year, external_id, genres, director, film_media_type, type)",
         )
         .eq("user_id", effectiveOwnerId)
         .eq("items.type", "film")
@@ -1311,6 +1270,7 @@ export default function FilmsManager({
       const chunkRaw = (data ?? []) as Array<{
         item_id: string | null;
         rating: number | null;
+        is_viewed: boolean | null;
         view_percent: number | null;
         items:
           | {
@@ -1322,6 +1282,7 @@ export default function FilmsManager({
               external_id?: string | null;
               genres?: string | null;
               director?: string | null;
+              film_media_type?: "movie" | "tv" | null;
               type?: string | null;
             }
           | Array<{
@@ -1333,6 +1294,7 @@ export default function FilmsManager({
               external_id?: string | null;
               genres?: string | null;
               director?: string | null;
+              film_media_type?: "movie" | "tv" | null;
               type?: string | null;
             }>
           | null;
@@ -1351,6 +1313,8 @@ export default function FilmsManager({
           titleOriginal: relatedItem?.title_original?.trim() ?? "",
           year: relatedItem?.year == null ? "" : String(relatedItem.year),
           type: relatedItem?.type?.trim() || "film",
+          mediaType: normalizeFilmMediaType(relatedItem?.film_media_type) ?? "movie",
+          isViewed: Boolean(row.is_viewed),
           progress: Math.max(0, Math.min(100, row.view_percent ?? 0)),
           rating: row.rating,
           genres: normalizePipeList(relatedItem?.genres),
@@ -1365,33 +1329,66 @@ export default function FilmsManager({
     }
     return allRows;
   };
-  const handleExportCsv = async () => {
+
+  const getFilmRecommendationOptions = (rows: FilmLlmExportRow[]): RecommendationRequestOption[] => {
+    const mediaTypes: Array<{ value: "movie" | "tv"; label: string }> = [
+      { value: "movie", label: "Кіно" },
+      { value: "tv", label: "Серіали" },
+    ];
+
+    return mediaTypes
+      .map((entry) => {
+        const filteredRows = rows.filter((row) => (row.mediaType ?? "movie") === entry.value);
+        const ratedTitles = filteredRows.filter((row) => row.rating !== null).length;
+        const engagedTitles = filteredRows.filter((row) => row.isViewed).length;
+        const plannedTitles = filteredRows.filter((row) => !row.isViewed).length;
+        const maturityStatus = deriveScopeMaturityStatus({
+          totalTitles: filteredRows.length,
+          ratedTitles,
+          engagedTitles,
+          plannedTitles,
+        });
+
+        return {
+          value: entry.value,
+          label: entry.label,
+          maturityStatus,
+          totalTitles: filteredRows.length,
+        };
+      })
+      .filter((entry) => entry.maturityStatus === "working")
+      .sort((left, right) => right.totalTitles - left.totalTitles)
+      .map(({ value, label }) => ({ value, label }));
+  };
+
+  const handleOpenRecommendRequest = async () => {
+    setMessage("");
+    setRecommendationMessage("");
+    setIsPreparingRecommendationRequest(true);
     try {
-      const allRows = await fetchAllFilmsLibraryForCsv();
+      const allRows = await fetchAllFilmsLibraryForRecommendations();
       if (allRows.length === 0) {
         setMessage("Бібліотека порожня.");
         return;
       }
-      const headers = [
-        "Назва",
-        "Режисер",
-        "Переглянуто у відсотках",
-        "Особистий рейтинг",
-        "Дата перегляду",
-      ];
-      const rows = allRows.map((item) => [
-        item.title,
-        item.director ?? "",
-        String(item.view_percent ?? 0),
-        item.rating != null ? formatPersonalRating(item.rating) : "",
-        item.viewed_at ? item.viewed_at.slice(0, 10) : "",
-      ]);
-      downloadCsvFile(`films_export_${getCsvTimestamp()}.csv`, headers, rows);
+
+      setRecommendationScopeState({
+        rows: allRows,
+        options: getFilmRecommendationOptions(allRows),
+        emptyMessage:
+          "Наразі немає достатньо інформації для рекомендацій. Додайте більше фільмів, серіалів, оцінок і переглядів.",
+      });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Не вдалося експортувати бібліотеку.");
+      setMessage(error instanceof Error ? error.message : "Не вдалося підготувати рекомендації.");
+    } finally {
+      setIsPreparingRecommendationRequest(false);
     }
   };
-  const resolveRecommendedFilm = async (recommendation: AiRecommendation) => {
+
+  const resolveRecommendedFilm = async (
+    recommendation: AiRecommendation,
+    requestedMediaType: "movie" | "tv",
+  ) => {
     const searchResults = await handleTmdbSearch(recommendation.title);
     if (searchResults.length === 0) {
       return null;
@@ -1399,7 +1396,9 @@ export default function FilmsManager({
 
     const normalizedTitle = normalizeComparableTitle(recommendation.title);
     const preferredMediaType =
-      recommendation.type === "series" || recommendation.type === "miniseries" ? "tv" : "movie";
+      recommendation.type === "series" || recommendation.type === "miniseries"
+        ? "tv"
+        : requestedMediaType;
 
     const sortedResults = [...searchResults].sort((left, right) => {
       const leftTitle = normalizeComparableTitle(left.originalTitle || left.title);
@@ -1420,7 +1419,12 @@ export default function FilmsManager({
     });
 
     const bestMatch = sortedResults.find(
-      (item) => !item.inCollection && !(item.existingViewId || existingViewsByExternalId.get(item.id)),
+      (item) =>
+        !item.inCollection &&
+        !(
+          item.existingViewId ||
+          existingViewsByExternalId.get(getFilmExternalKey(item.id, item.mediaType) ?? "")
+        ),
     );
     if (!bestMatch) {
       return null;
@@ -1439,14 +1443,16 @@ export default function FilmsManager({
 
     return bestMatch;
   };
-  const handleRecommend = async () => {
+  const handleRecommend = async (mediaType: "movie" | "tv", wishes: string) => {
     setMessage("");
     setRecommendationMessage("");
     setIsGeneratingRecommendations(true);
     try {
-      const allRows = await fetchAllFilmsLibraryForRecommendations();
-      if (allRows.length === 0) {
-        setMessage("Бібліотека порожня.");
+      const scopedRows =
+        recommendationScopeState?.rows.filter((row) => (row.mediaType ?? "movie") === mediaType) ??
+        [];
+      if (scopedRows.length === 0) {
+        setMessage("Немає достатньо даних для цього формату.");
         return;
       }
       const response = await fetch("/api/openai/film-recommendations", {
@@ -1454,7 +1460,11 @@ export default function FilmsManager({
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ rows: allRows }),
+        body: JSON.stringify({
+          rows: scopedRows,
+          scopeLabel: mediaType === "tv" ? "Серіали" : "Кіно",
+          userWishes: wishes,
+        }),
       });
       const data = (await response.json()) as {
         message?: string;
@@ -1473,13 +1483,14 @@ export default function FilmsManager({
       }
 
       for (const recommendation of recommendations) {
-        const recommendedFilm = await resolveRecommendedFilm(recommendation);
+        const recommendedFilm = await resolveRecommendedFilm(recommendation, mediaType);
         if (!recommendedFilm) {
           continue;
         }
 
         setAiRecommendationComment(recommendation.why);
         setSelectedFilm(recommendedFilm);
+        setRecommendationScopeState(null);
         setRecommendationMessage(
           `${recommendation.title} (${recommendation.year})\nWhy it fits: ${recommendation.why}\nFit tag: ${recommendation.fitTag}`,
         );
@@ -1523,6 +1534,12 @@ export default function FilmsManager({
     appliedFilters.sortDirection !== DEFAULT_FILTERS.sortDirection ||
     appliedFilters.sortBySecondary !== DEFAULT_FILTERS.sortBySecondary ||
     appliedFilters.sortDirectionSecondary !== DEFAULT_FILTERS.sortDirectionSecondary;
+  const activeQuickViewFilter: QuickViewFilter =
+    appliedFilters.viewAll || (appliedFilters.viewed && appliedFilters.planned)
+      ? "all"
+      : appliedFilters.viewed
+        ? "viewed"
+        : "planned";
 
   const applySortState = (next: {
     sortBy: SortBy;
@@ -1532,6 +1549,25 @@ export default function FilmsManager({
   }) => {
     setAppliedFilters((prev) => ({ ...prev, ...next }));
     setPendingFilters((prev) => ({ ...prev, ...next }));
+    setHasApplied(true);
+  };
+
+  const applyQuickViewFilter = (next: QuickViewFilter) => {
+    const quickViewState =
+      next === "all"
+        ? { viewAll: true, viewed: true, planned: true }
+        : next === "viewed"
+          ? { viewAll: false, viewed: true, planned: false }
+          : { viewAll: false, viewed: false, planned: true };
+    setAppliedFilters((prev) => ({ ...prev, ...quickViewState }));
+    setPendingFilters((prev) => ({ ...prev, ...quickViewState }));
+    setHasApplied(true);
+  };
+
+  const applyToolbarQuery = () => {
+    const normalizedQuery = toolbarQueryDraft.trim();
+    setAppliedFilters((prev) => ({ ...prev, query: normalizedQuery }));
+    setPendingFilters((prev) => ({ ...prev, query: normalizedQuery }));
     setHasApplied(true);
   };
 
@@ -1605,8 +1641,9 @@ export default function FilmsManager({
   const existingViewsByExternalId = useMemo(() => {
     const map = new Map<string, FilmCollectionItem>();
     collection.forEach((item) => {
-      if (item.items.external_id) {
-        map.set(item.items.external_id, item);
+      const key = getFilmExternalKey(item.items.external_id, item.items.film_media_type);
+      if (key) {
+        map.set(key, item);
       }
     });
     return map;
@@ -2028,11 +2065,13 @@ export default function FilmsManager({
     const parsedYear = Number.parseInt(detail.year, 10);
     const yearValue = Number.isNaN(parsedYear) ? null : parsedYear;
     const trailers = normalizeTrailers(detail.trailers ?? film.trailers ?? null);
+    const filmMediaType = normalizeFilmMediaType(detail.mediaType ?? film.mediaType) ?? "movie";
 
     const { data: existingItem, error: findError } = await supabase
       .from("items")
       .select("id")
       .eq("type", "film")
+      .eq("film_media_type", filmMediaType)
       .eq("external_id", film.id)
       .maybeSingle();
 
@@ -2047,6 +2086,7 @@ export default function FilmsManager({
         .from("items")
         .insert({
           type: "film",
+          film_media_type: filmMediaType,
           title: resolvedTitle,
           title_uk: titleUk,
           title_en: titleEn,
@@ -2070,6 +2110,7 @@ export default function FilmsManager({
             .from("items")
             .select("id")
             .eq("type", "film")
+            .eq("film_media_type", filmMediaType)
             .eq("external_id", film.id)
             .maybeSingle();
           if (conflictedItemError || !conflictedItem?.id) {
@@ -2095,6 +2136,7 @@ export default function FilmsManager({
       genres?: string | null;
       director?: string | null;
       actors?: string | null;
+      film_media_type?: "movie" | "tv";
       trailers?: Trailer[] | null;
     } = {};
     if (imdbRatingValue) {
@@ -2111,6 +2153,7 @@ export default function FilmsManager({
     if (detail.genres) itemUpdates.genres = detail.genres;
     if (detail.director) itemUpdates.director = detail.director;
     if (detail.actors) itemUpdates.actors = detail.actors;
+    itemUpdates.film_media_type = filmMediaType;
     if (trailers) itemUpdates.trailers = trailers;
     if (itemId && Object.keys(itemUpdates).length > 0) {
       const { error: updateError } = await supabase
@@ -2212,6 +2255,7 @@ export default function FilmsManager({
         director: itemDraft.director,
         actors: itemDraft.actors,
         external_id: itemDraft.external_id,
+        film_media_type: itemDraft.film_media_type,
         trailers: itemDraft.trailers,
       };
       const { error: updateItemError } = await supabase
@@ -2234,6 +2278,7 @@ export default function FilmsManager({
               genres: itemDraft.genres,
               director: itemDraft.director,
               actors: itemDraft.actors,
+              film_media_type: itemDraft.film_media_type,
               trailers: itemDraft.trailers,
             })
             .eq("id", itemId);
@@ -2272,6 +2317,7 @@ export default function FilmsManager({
                 director: itemDraft.director,
                 actors: itemDraft.actors,
                 external_id: itemDraft.external_id,
+                film_media_type: itemDraft.film_media_type,
                 trailers: itemDraft.trailers,
               }
             : item.items,
@@ -2304,6 +2350,7 @@ export default function FilmsManager({
               director: itemDraft.director,
               actors: itemDraft.actors,
               external_id: itemDraft.external_id,
+              film_media_type: itemDraft.film_media_type,
               trailers: itemDraft.trailers,
             }
           : prev.items,
@@ -2324,6 +2371,9 @@ export default function FilmsManager({
 
     const parsedYear = Number.parseInt(detail.year ?? "", 10);
     const trailers = normalizeTrailers(detail.trailers ?? null) ?? selectedView.items.trailers;
+    const filmMediaType =
+      normalizeFilmMediaType(detail.mediaType ?? film.mediaType ?? selectedView.items.film_media_type) ??
+      "movie";
     const titleUk = normalizeTitle(detail.title) ?? selectedView.items.title_uk ?? null;
     const titleOriginal =
       normalizeTitle(detail.originalTitle) ?? selectedView.items.title_original ?? null;
@@ -2355,6 +2405,7 @@ export default function FilmsManager({
         : selectedView.items.director ?? null,
       actors: detail.actors?.trim() ? detail.actors.trim() : selectedView.items.actors ?? null,
       external_id: detail.id,
+      film_media_type: filmMediaType,
       trailers: trailers ?? null,
     });
   };
@@ -2519,7 +2570,9 @@ export default function FilmsManager({
     const tmdbResults = await handleTmdbSearch(query);
     return tmdbResults
       .map((item) => {
-        const existingView = existingViewsByExternalId.get(item.id);
+        const existingView = existingViewsByExternalId.get(
+          getFilmExternalKey(item.id, item.mediaType) ?? "",
+        );
         return {
           ...item,
           inCollection: Boolean(existingView),
@@ -2690,6 +2743,20 @@ export default function FilmsManager({
                 </button>
                 <span className={styles.sortTooltip}>Фільтри</span>
               </div>
+              <div className={`${styles.toolbarSearchInput} ${styles.desktopOnlyAction}`}>
+                <input
+                  className={styles.toolbarSearchField}
+                  value={toolbarQueryDraft}
+                  placeholder="Пошук..."
+                  onChange={(event) => setToolbarQueryDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      applyToolbarQuery();
+                    }
+                  }}
+                />
+              </div>
               <div
                 ref={sortMenuRef}
                 className={`${styles.sortMenu} ${isSortPopoverOpen ? styles.sortMenuOpen : ""}`}
@@ -2828,6 +2895,37 @@ export default function FilmsManager({
               </button>
             </div>
           </div>
+          <div className={`${styles.toolbarQuickSwitch} ${styles.desktopOnlyAction}`}>
+            <div className={styles.viewSwitch}>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  activeQuickViewFilter === "all" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => applyQuickViewFilter("all")}
+              >
+                Всі
+              </button>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  activeQuickViewFilter === "viewed" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => applyQuickViewFilter("viewed")}
+              >
+                Переглянуті
+              </button>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  activeQuickViewFilter === "planned" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => applyQuickViewFilter("planned")}
+              >
+                Не переглянуті
+              </button>
+            </div>
+          </div>
           <div className={styles.toolbarActions}>
             {!readOnly ? (
               <>
@@ -2835,21 +2933,15 @@ export default function FilmsManager({
                   type="button"
                   className={`btnBase btnSecondary ${styles.desktopOnlyAction}`}
                   onClick={() => {
-                    void handleExportCsv();
+                    void handleOpenRecommendRequest();
                   }}
-                  disabled={isGeneratingRecommendations}
+                  disabled={isGeneratingRecommendations || isPreparingRecommendationRequest}
                 >
-                  Експорт CSV
-                </button>
-                <button
-                  type="button"
-                  className={`btnBase btnSecondary ${styles.desktopOnlyAction}`}
-                  onClick={() => {
-                    void handleRecommend();
-                  }}
-                  disabled={isGeneratingRecommendations}
-                >
-                  {isGeneratingRecommendations ? "Рекомендуємо..." : "Рекомендувати"}
+                  {isPreparingRecommendationRequest
+                    ? "Готуємо..."
+                    : isGeneratingRecommendations
+                      ? "Рекомендуємо..."
+                      : "Рекомендувати"}
                 </button>
                 <button
                   type="button"
@@ -2961,6 +3053,7 @@ export default function FilmsManager({
             onSubmit={(event) => {
               event.preventDefault();
               setAppliedFilters(pendingFilters);
+              setToolbarQueryDraft(pendingFilters.query);
               setHasApplied(true);
               setIsFiltersOpen(false);
             }}
@@ -3378,6 +3471,7 @@ export default function FilmsManager({
                   };
                   setPendingFilters(clearedFilters);
                   setAppliedFilters(clearedFilters);
+                  setToolbarQueryDraft(clearedFilters.query);
                   setHasApplied(true);
                   setIsFiltersOpen(false);
                 }}
@@ -3688,6 +3782,9 @@ export default function FilmsManager({
             {selectedFilm.year ? (
               <p className={styles.resultMeta}>Рік: {selectedFilm.year}</p>
             ) : null}
+            <p className={styles.resultMeta}>
+              Тип: {formatFilmMediaType(selectedFilm.mediaType)}
+            </p>
             {selectedFilm.originalTitle ? (
               <p className={styles.resultMeta}>
                 Оригінальна назва:{" "}
@@ -3845,6 +3942,12 @@ export default function FilmsManager({
                 Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
               </p>
             ) : null}
+            <p className={styles.resultMeta}>
+              Тип:{" "}
+              {formatFilmMediaType(
+                selectedViewItemDraft?.film_media_type ?? selectedView.items.film_media_type,
+              )}
+            </p>
             {(selectedViewItemDraft?.director ?? selectedView.items.director) ? (
               <p className={styles.resultMeta}>
                 Режисер: {selectedViewItemDraft?.director ?? selectedView.items.director}
@@ -3970,6 +4073,22 @@ export default function FilmsManager({
           contacts={contacts}
           onClose={() => setRecommendItem(null)}
           onSend={handleSendRecommendation}
+        />
+      ) : null}
+
+      {recommendationScopeState ? (
+        <RecommendationRequestModal
+          title="Рекомендація для кіно"
+          scopeLabel="Формат"
+          options={recommendationScopeState.options}
+          emptyMessage={recommendationScopeState.emptyMessage}
+          isLoading={isPreparingRecommendationRequest}
+          isSubmitting={isGeneratingRecommendations}
+          placeholder="щось легше, без жахів, не дуже довге"
+          onClose={() => setRecommendationScopeState(null)}
+          onSubmit={async (scopeValue, wishes) => {
+            await handleRecommend(scopeValue as "movie" | "tv", wishes);
+          }}
         />
       ) : null}
 

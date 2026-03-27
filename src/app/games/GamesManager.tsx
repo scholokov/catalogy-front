@@ -14,15 +14,20 @@ import { Range, getTrackBackground } from "react-range";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
+import RecommendationRequestModal, {
+  type RecommendationRequestOption,
+} from "@/components/recommendations/RecommendationRequestModal";
 import CloseIconButton from "@/components/ui/CloseIconButton";
+import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import { supabase } from "@/lib/supabase/client";
 import {
   DEFAULT_GAME_PLATFORM_OPTIONS,
   readDisplayPreferences,
   DISPLAY_PREFERENCES_STORAGE_KEY,
 } from "@/lib/settings/displayPreferences";
-import { downloadCsvFile } from "@/lib/csv/downloadCsv";
 import { getDisplayName } from "@/lib/users/displayName";
+import type { GameLlmExportRow } from "@/app/statistics/gameLlmContext";
+import { deriveScopeMaturityStatus } from "@/app/statistics/lib/scopeReadiness";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
 type Trailer = {
@@ -88,11 +93,26 @@ type GameItemDraft = {
   trailers: Trailer[] | null;
 };
 
+type AiRecommendation = {
+  title: string;
+  year: string;
+  type: string;
+  why: string;
+  fitTag: string;
+  raw: string;
+};
+
 type ContactOption = {
   id: string;
   name: string;
   avatarUrl?: string | null;
   disabledReason?: string;
+};
+
+type RecommendationScopeState = {
+  rows: GameLlmExportRow[];
+  options: RecommendationRequestOption[];
+  emptyMessage: string;
 };
 
 type GamesManagerProps = {
@@ -124,6 +144,7 @@ type Filters = {
 
 type SortBy = "created_at" | "title" | "rating" | "year";
 type SortDirection = "asc" | "desc";
+type QuickViewFilter = "all" | "viewed" | "planned";
 type GamesViewMode = "default" | "cards";
 const GAMES_VIEW_MODES: GamesViewMode[] = ["cards", "default"];
 
@@ -211,6 +232,14 @@ const getExternalRatingLabel = (
   }
   return "RAWG";
 };
+
+const normalizeComparableTitle = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-zа-яіїєґ0-9]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 const getDefaultSortDirection = (sortBy: SortBy): SortDirection => {
   if (sortBy === "title") return "asc";
@@ -313,6 +342,7 @@ export default function GamesManager({
   ownerUserId,
   readOnly = false,
 }: GamesManagerProps) {
+  const { showSnackbar } = useSnackbar();
   const [lazyDebug, setLazyDebug] = useState<string[]>([]);
   const [lazyDebugEnabled, setLazyDebugEnabled] = useState(false);
   const logLazy = useCallback(
@@ -334,16 +364,21 @@ export default function GamesManager({
   const collectionRef = useRef<GameCollectionItem[]>([]);
   const [appliedFilters, setAppliedFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [pendingFilters, setPendingFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [toolbarQueryDraft, setToolbarQueryDraft] = useState(DEFAULT_FILTERS.query);
   const [hasApplied, setHasApplied] = useState(false);
   const [yearBounds, setYearBounds] = useState<[number, number]>([
     MIN_YEAR,
     MAX_YEAR,
   ]);
   const [message, setMessage] = useState("");
+  const [, setRecommendationMessage] = useState("");
+  const [aiRecommendationComment, setAiRecommendationComment] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
   const totalCountRef = useRef(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGeneratingRecommendations, setIsGeneratingRecommendations] = useState(false);
+  const [isPreparingRecommendationRequest, setIsPreparingRecommendationRequest] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(0);
@@ -409,6 +444,8 @@ export default function GamesManager({
     itemId: string;
     title: string;
   } | null>(null);
+  const [recommendationScopeState, setRecommendationScopeState] =
+    useState<RecommendationScopeState | null>(null);
   const [contacts, setContacts] = useState<ContactOption[]>([]);
   const [isNicknameModalOpen, setIsNicknameModalOpen] = useState(false);
   const [nicknameValue, setNicknameValue] = useState("");
@@ -1012,6 +1049,7 @@ export default function GamesManager({
     initialLoadRunRef.current = true;
     skipNextApplyRef.current = true;
     setAppliedFilters(DEFAULT_FILTERS);
+    setToolbarQueryDraft(DEFAULT_FILTERS.query);
     setHasApplied(true);
     lastAppliedRequestKeyRef.current = getFiltersRequestKey(DEFAULT_FILTERS);
     void fetchPage(0, DEFAULT_FILTERS);
@@ -1122,99 +1160,6 @@ export default function GamesManager({
           return description.includes(genresFilter);
         });
   }, [appliedFilters.genres, collection]);
-  const getCsvTimestamp = () => {
-    const now = new Date();
-    const pad = (value: number) => String(value).padStart(2, "0");
-    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(
-      now.getHours(),
-    )}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  };
-  const fetchAllGamesLibraryForCsv = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      throw new Error("Потрібна авторизація.");
-    }
-    if (readOnly && ownerUserId && friendAccessState !== "allowed") {
-      throw new Error("Немає доступу до бібліотеки.");
-    }
-    const effectiveOwnerId = ownerUserId ?? user.id;
-    const pageSize = 1000;
-    let from = 0;
-    const allRows: Array<{
-      viewed_at: string;
-      rating: number | null;
-      view_percent: number;
-      platforms: string[] | null;
-      title: string;
-    }> = [];
-    while (true) {
-      const { data, error } = await supabase
-        .from("user_views")
-        .select("viewed_at, rating, view_percent, platforms, items:items!inner(title, type)")
-        .eq("user_id", effectiveOwnerId)
-        .eq("items.type", "game")
-        .order("created_at", { ascending: false })
-        .range(from, from + pageSize - 1);
-      if (error) {
-        throw new Error("Не вдалося експортувати бібліотеку.");
-      }
-      const chunkRaw = (data ?? []) as Array<{
-        viewed_at: string;
-        rating: number | null;
-        view_percent: number;
-        platforms: string[] | null;
-        items: { title?: string | null } | Array<{ title?: string | null }> | null;
-      }>;
-      if (chunkRaw.length === 0) {
-        break;
-      }
-      const chunk = chunkRaw.map((row) => {
-        const relatedItem = Array.isArray(row.items) ? row.items[0] : row.items;
-        return {
-          viewed_at: row.viewed_at,
-          rating: row.rating,
-          view_percent: row.view_percent,
-          platforms: row.platforms,
-          title: relatedItem?.title ?? "",
-        };
-      });
-      allRows.push(...chunk);
-      if (chunkRaw.length < pageSize) {
-        break;
-      }
-      from += pageSize;
-    }
-    return allRows;
-  };
-  const handleExportCsv = async () => {
-    try {
-      const allRows = await fetchAllGamesLibraryForCsv();
-      if (allRows.length === 0) {
-        setMessage("Бібліотека порожня.");
-        return;
-      }
-      const headers = [
-        "Назва",
-        "Платформа",
-        "Переглянуто у відсотках",
-        "Особистий рейтинг",
-        "Дата перегляду",
-      ];
-      const rows = allRows.map((item) => [
-        item.title,
-        item.platforms?.join("; ") ?? "",
-        String(item.view_percent ?? 0),
-        item.rating != null ? formatPersonalRating(item.rating) : "",
-        item.viewed_at ? item.viewed_at.slice(0, 10) : "",
-      ]);
-      downloadCsvFile(`games_export_${getCsvTimestamp()}.csv`, headers, rows);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Не вдалося експортувати бібліотеку.");
-    }
-  };
-
   const visiblePlatformsSet = useMemo(
     () => new Set(visiblePlatforms),
     [visiblePlatforms],
@@ -1242,6 +1187,12 @@ export default function GamesManager({
     appliedFilters.sortDirection !== DEFAULT_FILTERS.sortDirection ||
     appliedFilters.sortBySecondary !== DEFAULT_FILTERS.sortBySecondary ||
     appliedFilters.sortDirectionSecondary !== DEFAULT_FILTERS.sortDirectionSecondary;
+  const activeQuickViewFilter: QuickViewFilter =
+    appliedFilters.viewAll || (appliedFilters.viewed && appliedFilters.planned)
+      ? "all"
+      : appliedFilters.viewed
+        ? "viewed"
+        : "planned";
 
   const applySortState = (next: {
     sortBy: SortBy;
@@ -1251,6 +1202,25 @@ export default function GamesManager({
   }) => {
     setAppliedFilters((prev) => ({ ...prev, ...next }));
     setPendingFilters((prev) => ({ ...prev, ...next }));
+    setHasApplied(true);
+  };
+
+  const applyQuickViewFilter = (next: QuickViewFilter) => {
+    const quickViewState =
+      next === "all"
+        ? { viewAll: true, viewed: true, planned: true }
+        : next === "viewed"
+          ? { viewAll: false, viewed: true, planned: false }
+          : { viewAll: false, viewed: false, planned: true };
+    setAppliedFilters((prev) => ({ ...prev, ...quickViewState }));
+    setPendingFilters((prev) => ({ ...prev, ...quickViewState }));
+    setHasApplied(true);
+  };
+
+  const applyToolbarQuery = () => {
+    const normalizedQuery = toolbarQueryDraft.trim();
+    setAppliedFilters((prev) => ({ ...prev, query: normalizedQuery }));
+    setPendingFilters((prev) => ({ ...prev, query: normalizedQuery }));
     setHasApplied(true);
   };
 
@@ -1321,6 +1291,255 @@ export default function GamesManager({
     });
     return map;
   }, [collection]);
+
+  const existingGameKeys = useMemo(() => {
+    const keys = new Set<string>();
+    collection.forEach((item) => {
+      const normalizedTitle = normalizeComparableTitle(item.items.title);
+      if (!normalizedTitle) {
+        return;
+      }
+      keys.add(normalizedTitle);
+      const year =
+        item.items.year == null || Number.isNaN(item.items.year)
+          ? ""
+          : String(item.items.year);
+      if (year) {
+        keys.add(`${normalizedTitle}__${year}`);
+      }
+    });
+    return keys;
+  }, [collection]);
+
+  const fetchAllGamesLibraryForRecommendations = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      throw new Error("Потрібна авторизація.");
+    }
+    if (readOnly && ownerUserId && friendAccessState !== "allowed") {
+      throw new Error("Немає доступу до бібліотеки.");
+    }
+    const effectiveOwnerId = ownerUserId ?? user.id;
+    const pageSize = 1000;
+    let from = 0;
+    const allRows: GameLlmExportRow[] = [];
+
+    while (true) {
+      const { data, error } = await supabase
+        .from("user_views")
+        .select("item_id, rating, is_viewed, view_percent, platforms, items:items!inner(title, year, external_id, genres, type)")
+        .eq("user_id", effectiveOwnerId)
+        .eq("items.type", "game")
+        .order("created_at", { ascending: false })
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        throw new Error("Не вдалося підготувати дані для рекомендацій.");
+      }
+
+      const chunkRaw = (data ?? []) as Array<{
+        item_id: string | null;
+        rating: number | null;
+        is_viewed: boolean | null;
+        view_percent: number | null;
+        platforms: string[] | null;
+        items:
+          | {
+              title?: string | null;
+              year?: number | null;
+              external_id?: string | null;
+              genres?: string | null;
+              type?: string | null;
+            }
+          | Array<{
+              title?: string | null;
+              year?: number | null;
+              external_id?: string | null;
+              genres?: string | null;
+              type?: string | null;
+            }>
+          | null;
+      }>;
+
+      if (chunkRaw.length === 0) {
+        break;
+      }
+
+      const chunk = chunkRaw.map((row) => {
+        const relatedItem = Array.isArray(row.items) ? row.items[0] : row.items;
+        return {
+          itemId: row.item_id ?? "",
+          externalId: relatedItem?.external_id?.trim() ?? "",
+          title: relatedItem?.title?.trim() ?? "",
+          year: relatedItem?.year == null ? "" : String(relatedItem.year),
+          isViewed: Boolean(row.is_viewed),
+          progress: Math.max(0, Math.min(100, row.view_percent ?? 0)),
+          rating: row.rating,
+          genres: (relatedItem?.genres ?? "")
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+          platforms: (row.platforms ?? []).map((entry) => entry.trim()).filter(Boolean),
+        };
+      });
+
+      allRows.push(...chunk);
+      if (chunkRaw.length < pageSize) {
+        break;
+      }
+      from += pageSize;
+    }
+
+    return allRows;
+  };
+
+  const getGameRecommendationOptions = (rows: GameLlmExportRow[]): RecommendationRequestOption[] => {
+    const platformBuckets = new Map<string, GameLlmExportRow[]>();
+
+    rows.forEach((row) => {
+      row.platforms.forEach((platform) => {
+        const bucket = platformBuckets.get(platform) ?? [];
+        bucket.push(row);
+        platformBuckets.set(platform, bucket);
+      });
+    });
+
+    return Array.from(platformBuckets.entries())
+      .map(([platform, platformRows]) => {
+        const ratedTitles = platformRows.filter((row) => row.rating !== null).length;
+        const engagedTitles = platformRows.filter((row) => row.isViewed || row.progress > 0).length;
+        const plannedTitles = platformRows.filter((row) => !row.isViewed).length;
+        const maturityStatus = deriveScopeMaturityStatus({
+          totalTitles: platformRows.length,
+          ratedTitles,
+          engagedTitles,
+          plannedTitles,
+        });
+
+        return {
+          value: platform,
+          label: platform,
+          maturityStatus,
+          totalTitles: platformRows.length,
+        };
+      })
+      .filter((entry) => entry.maturityStatus === "working")
+      .sort((left, right) => {
+        if (right.totalTitles !== left.totalTitles) return right.totalTitles - left.totalTitles;
+        return left.label.localeCompare(right.label, "uk");
+      })
+      .map(({ value, label }) => ({ value, label }));
+  };
+
+  const handleOpenRecommendRequest = async () => {
+    setMessage("");
+    setRecommendationMessage("");
+    setIsPreparingRecommendationRequest(true);
+    try {
+      const allRows = await fetchAllGamesLibraryForRecommendations();
+      if (allRows.length === 0) {
+        setMessage("Бібліотека порожня.");
+        return;
+      }
+
+      setRecommendationScopeState({
+        rows: allRows,
+        options: getGameRecommendationOptions(allRows),
+        emptyMessage:
+          "Наразі немає достатньо інформації для рекомендацій. Додайте більше ігор, оцінок і прогресу по платформах.",
+      });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не вдалося підготувати рекомендації.");
+    } finally {
+      setIsPreparingRecommendationRequest(false);
+    }
+  };
+
+  const resolveRecommendedGame = async (recommendation: AiRecommendation) => {
+    const normalizedRecommendationTitle = normalizeComparableTitle(recommendation.title);
+    const normalizedRecommendationKey = recommendation.year
+      ? `${normalizedRecommendationTitle}__${recommendation.year}`
+      : normalizedRecommendationTitle;
+    if (
+      existingGameKeys.has(normalizedRecommendationTitle) ||
+      existingGameKeys.has(normalizedRecommendationKey)
+    ) {
+      return null;
+    }
+
+    const searchResults = await handleGameSearch(recommendation.title);
+    if (searchResults.length === 0) {
+      return null;
+    }
+
+    const normalizedTitle = normalizedRecommendationTitle;
+    const sortedResults = [...searchResults].sort((left, right) => {
+      const leftTitle = normalizeComparableTitle(left.title);
+      const rightTitle = normalizeComparableTitle(right.title);
+      const leftExact = leftTitle === normalizedTitle ? 1 : 0;
+      const rightExact = rightTitle === normalizedTitle ? 1 : 0;
+      if (rightExact !== leftExact) return rightExact - leftExact;
+
+      const leftYearExact = left.released.slice(0, 4) === recommendation.year ? 1 : 0;
+      const rightYearExact = right.released.slice(0, 4) === recommendation.year ? 1 : 0;
+      if (rightYearExact !== leftYearExact) return rightYearExact - leftYearExact;
+
+      return 0;
+    });
+
+    const bestMatch = sortedResults.find(
+      (item) => {
+        if (item.inCollection || item.existingViewId || existingViewsByExternalId.get(item.id)) {
+          return false;
+        }
+        const normalizedItemTitle = normalizeComparableTitle(item.title);
+        const itemYear = item.released.slice(0, 4);
+        return !(
+          existingGameKeys.has(normalizedItemTitle) ||
+          (itemYear && existingGameKeys.has(`${normalizedItemTitle}__${itemYear}`))
+        );
+      },
+    );
+    if (!bestMatch) {
+      return null;
+    }
+
+    try {
+      const detailResponse = await fetch(`/api/rawg/${bestMatch.id}`);
+      if (detailResponse.ok) {
+        const detail = (await detailResponse.json()) as {
+          rating?: number | null;
+          source?: "igdb" | "rawg";
+          released?: string;
+          poster?: string;
+          description?: string;
+          trailers?: Trailer[] | null;
+        };
+
+        if (detail.description) {
+          setSearchDescriptions((prev) => ({
+            ...prev,
+            [bestMatch.id]: detail.description ?? "",
+          }));
+        }
+
+        return {
+          ...bestMatch,
+          rating: typeof detail.rating === "number" ? detail.rating : bestMatch.rating,
+          ratingSource: detail.source ?? bestMatch.ratingSource,
+          released: detail.released?.trim() ? detail.released : bestMatch.released,
+          poster: detail.poster?.trim() ? detail.poster : bestMatch.poster,
+          trailers: detail.trailers ?? bestMatch.trailers,
+        } satisfies GameResult;
+      }
+    } catch {
+      // fallback to search result
+    }
+
+    return bestMatch;
+  };
 
   const loadContacts = async (itemIdForCheck?: string) => {
     const {
@@ -2045,6 +2264,68 @@ export default function GamesManager({
     [existingViewsByExternalId],
   );
 
+  const handleRecommend = async (platform: string, wishes: string) => {
+    setMessage("");
+    setRecommendationMessage("");
+    setIsGeneratingRecommendations(true);
+    try {
+      const scopedRows =
+        recommendationScopeState?.rows.filter((row) => row.platforms.includes(platform)) ?? [];
+      if (scopedRows.length === 0) {
+        setMessage("Немає достатньо даних для цієї платформи.");
+        return;
+      }
+
+      const response = await fetch("/api/openai/game-recommendations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          rows: scopedRows,
+          scopeLabel: platform,
+          userWishes: wishes,
+        }),
+      });
+      const data = (await response.json()) as {
+        message?: string;
+        error?: string;
+        recommendations?: AiRecommendation[];
+      };
+      if (!response.ok) {
+        setMessage(data.error || "Не вдалося згенерувати рекомендації.");
+        return;
+      }
+
+      const recommendations = data.recommendations ?? [];
+      if (recommendations.length === 0) {
+        setMessage(data.message || "Не вдалося згенерувати рекомендації.");
+        return;
+      }
+
+      for (const recommendation of recommendations) {
+        const recommendedGame = await resolveRecommendedGame(recommendation);
+        if (!recommendedGame) {
+          continue;
+        }
+
+        setAiRecommendationComment(recommendation.why);
+        setSelectedGame(recommendedGame);
+        setRecommendationScopeState(null);
+        showSnackbar("Рекомендацію відкрито");
+        return;
+      }
+
+      setMessage(
+        data.message || "Не вдалося відкрити картку рекомендації після перевірки на дублікати.",
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не вдалося згенерувати рекомендації.");
+    } finally {
+      setIsGeneratingRecommendations(false);
+    }
+  };
+
   const handleRefreshGameSearch = useCallback(
     async (query: string) => {
       const results = await handleGameSearch(query);
@@ -2322,6 +2603,20 @@ export default function GamesManager({
                 </button>
                 <span className={styles.sortTooltip}>Фільтри</span>
               </div>
+              <div className={`${styles.toolbarSearchInput} ${styles.desktopOnlyAction}`}>
+                <input
+                  className={styles.toolbarSearchField}
+                  value={toolbarQueryDraft}
+                  placeholder="Пошук..."
+                  onChange={(event) => setToolbarQueryDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      applyToolbarQuery();
+                    }
+                  }}
+                />
+              </div>
               <div
                 ref={sortMenuRef}
                 className={`${styles.sortMenu} ${isSortPopoverOpen ? styles.sortMenuOpen : ""}`}
@@ -2451,6 +2746,37 @@ export default function GamesManager({
               </button>
             </div>
           </div>
+          <div className={`${styles.toolbarQuickSwitch} ${styles.desktopOnlyAction}`}>
+            <div className={styles.viewSwitch}>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  activeQuickViewFilter === "all" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => applyQuickViewFilter("all")}
+              >
+                Всі
+              </button>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  activeQuickViewFilter === "viewed" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => applyQuickViewFilter("viewed")}
+              >
+                Зіграні
+              </button>
+              <button
+                type="button"
+                className={`${styles.viewSwitchButton} ${
+                  activeQuickViewFilter === "planned" ? styles.viewSwitchButtonActive : ""
+                }`}
+                onClick={() => applyQuickViewFilter("planned")}
+              >
+                Не зіграні
+              </button>
+            </div>
+          </div>
           <div className={styles.toolbarActions}>
             {!readOnly ? (
               <>
@@ -2458,15 +2784,21 @@ export default function GamesManager({
                   type="button"
                   className={`btnBase btnSecondary ${styles.desktopOnlyAction}`}
                   onClick={() => {
-                    void handleExportCsv();
+                    void handleOpenRecommendRequest();
                   }}
+                  disabled={isGeneratingRecommendations || isPreparingRecommendationRequest}
                 >
-                  Експорт CSV
+                  {isPreparingRecommendationRequest
+                    ? "Готуємо..."
+                    : isGeneratingRecommendations
+                      ? "Рекомендуємо..."
+                      : "Рекомендувати"}
                 </button>
                 <button
                   type="button"
                   className="btnBase btnPrimary"
                   onClick={() => setIsAddOpen(true)}
+                  disabled={isGeneratingRecommendations}
                 >
                   Додати
                 </button>
@@ -2669,6 +3001,7 @@ export default function GamesManager({
             onSubmit={(event) => {
               event.preventDefault();
               setAppliedFilters(pendingFilters);
+              setToolbarQueryDraft(pendingFilters.query);
               setHasApplied(true);
               setIsFiltersOpen(false);
             }}
@@ -3072,6 +3405,7 @@ export default function GamesManager({
                   };
                   setPendingFilters(clearedFilters);
                   setAppliedFilters(clearedFilters);
+                  setToolbarQueryDraft(clearedFilters.query);
                   setHasApplied(true);
                   setIsFiltersOpen(false);
                 }}
@@ -3221,6 +3555,7 @@ export default function GamesManager({
                 return;
               }
             }
+            setAiRecommendationComment("");
             setSelectedGame(game);
             setIsAddOpen(false);
           }}
@@ -3257,6 +3592,7 @@ export default function GamesManager({
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
           initialValues={
             {
+              comment: aiRecommendationComment || null,
               platforms: defaultGamePlatform ? [defaultGamePlatform] : [],
               availability: showAvailability ? defaultGameAvailability : null,
               isViewed: defaultGameIsViewed ?? undefined,
@@ -3264,6 +3600,7 @@ export default function GamesManager({
           }
           onClose={() => {
             setSelectedGame(null);
+            setAiRecommendationComment("");
             setTrailerMessage("");
           }}
           onAdd={(payload) => handleAddGame(selectedGame, payload)}
@@ -3504,6 +3841,22 @@ export default function GamesManager({
           contacts={contacts}
           onClose={() => setRecommendItem(null)}
           onSend={handleSendRecommendation}
+        />
+      ) : null}
+
+      {recommendationScopeState ? (
+        <RecommendationRequestModal
+          title="Рекомендація для ігор"
+          scopeLabel="Платформа"
+          options={recommendationScopeState.options}
+          emptyMessage={recommendationScopeState.emptyMessage}
+          isLoading={isPreparingRecommendationRequest}
+          isSubmitting={isGeneratingRecommendations}
+          placeholder="щось легше, без жахів, не дуже довге"
+          onClose={() => setRecommendationScopeState(null)}
+          onSubmit={async (scopeValue, wishes) => {
+            await handleRecommend(scopeValue, wishes);
+          }}
         />
       ) : null}
 

@@ -7,6 +7,8 @@ export type FilmLlmExportRow = {
   titleOriginal: string;
   year: string;
   type: string;
+  mediaType?: "movie" | "tv";
+  isViewed?: boolean;
   progress: number;
   rating: number | null;
   genres: string[];

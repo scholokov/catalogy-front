@@ -15,28 +15,12 @@ export default function StatisticsPage() {
   const [, setGamesCount] = useState(0);
   const [activeTab, setActiveTab] = useState<StatisticsTab>("films");
   const [filmsExportHandler, setFilmsExportHandler] = useState<StatisticsExportHandler>(null);
-  const [filmsLlmExportHandler, setFilmsLlmExportHandler] = useState<StatisticsExportHandler>(null);
   const [gamesExportHandler, setGamesExportHandler] = useState<StatisticsExportHandler>(null);
   const { showSnackbar } = useSnackbar();
 
   const activeExportHandler = activeTab === "films" ? filmsExportHandler : gamesExportHandler;
   const headerRight = (
     <div className={styles.headerMeta}>
-      {activeTab === "films" ? (
-        <button
-          type="button"
-          className="btnBase btnSecondary"
-          onClick={() => {
-            filmsLlmExportHandler?.();
-            if (filmsLlmExportHandler) {
-              showSnackbar("Експортовано llm_reco_context.txt");
-            }
-          }}
-          disabled={!filmsLlmExportHandler}
-        >
-          Експорт LLM TXT
-        </button>
-      ) : null}
       <button
         type="button"
         className="btnBase btnSecondary"
@@ -83,7 +67,6 @@ export default function StatisticsPage() {
         <StatisticsFilmsPage
           onTotalChange={setFilmsCount}
           onExportReady={(handler) => setFilmsExportHandler(() => handler)}
-          onLlmExportReady={(handler) => setFilmsLlmExportHandler(() => handler)}
         />
       ) : (
         <StatisticsGamesPage
