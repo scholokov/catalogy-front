@@ -1,9 +1,10 @@
 .page {
-  min-height: 100vh;
+  min-height: var(--viewport-height);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 48px 24px;
+  padding: calc(48px + var(--safe-area-top)) calc(24px + var(--safe-area-right))
+    calc(48px + var(--safe-area-bottom)) calc(24px + var(--safe-area-left));
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans);
@@ -19,7 +20,7 @@
 .brandLogoBar {
   position: fixed;
   left: 50%;
-  top: 24px;
+  top: calc(24px + var(--safe-area-top));
   transform: translateX(-50%);
   width: min(1600px, calc(100% - 32px));
   display: flex;

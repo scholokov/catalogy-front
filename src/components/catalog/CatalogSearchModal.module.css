@@ -5,7 +5,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: calc(24px + var(--safe-area-top)) calc(24px + var(--safe-area-right))
+    calc(24px + var(--safe-area-bottom)) calc(24px + var(--safe-area-left));
   z-index: 90;
   overscroll-behavior: contain;
 }
@@ -78,11 +79,15 @@
   }
 
   .modal {
-    max-height: 100vh;
-    height: 100vh;
+    max-height: var(--viewport-height);
+    height: var(--viewport-height);
     width: 100vw;
     max-width: 100vw;
     border-radius: 0;
+    padding-top: calc(24px + var(--safe-area-top));
+    padding-right: calc(24px + var(--safe-area-right));
+    padding-bottom: calc(24px + var(--safe-area-bottom));
+    padding-left: calc(24px + var(--safe-area-left));
   }
 
   .results {

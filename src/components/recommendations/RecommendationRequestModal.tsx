@@ -16,8 +16,12 @@ type RecommendationRequestModalProps = {
   emptyMessage: string;
   isLoading: boolean;
   isSubmitting: boolean;
+  canPreviewPrompt?: boolean;
+  isPreviewingPrompt?: boolean;
+  promptPreview?: string;
   placeholder: string;
   onClose: () => void;
+  onPreviewPrompt?: (scopeValue: string, wishes: string) => Promise<void>;
   onSubmit: (scopeValue: string, wishes: string) => Promise<void>;
 };
 
@@ -30,8 +34,12 @@ export default function RecommendationRequestModal({
   emptyMessage,
   isLoading,
   isSubmitting,
+  canPreviewPrompt = false,
+  isPreviewingPrompt = false,
+  promptPreview,
   placeholder,
   onClose,
+  onPreviewPrompt,
   onSubmit,
 }: RecommendationRequestModalProps) {
   const [selectedScope, setSelectedScope] = useState("");
@@ -63,6 +71,18 @@ export default function RecommendationRequestModal({
     }
     setError("");
     await onSubmit(activeSelectedScope, wishes.trim());
+  };
+
+  const handlePreviewPrompt = async () => {
+    if (!activeSelectedScope) {
+      setError(`Оберіть ${scopeLabel.toLowerCase()}.`);
+      return;
+    }
+    if (!onPreviewPrompt) {
+      return;
+    }
+    setError("");
+    await onPreviewPrompt(activeSelectedScope, wishes.trim());
   };
 
   return (
@@ -119,6 +139,12 @@ export default function RecommendationRequestModal({
         </div>
 
         {error ? <p className={styles.error}>{error}</p> : null}
+        {promptPreview ? (
+          <div className={styles.previewPanel}>
+            <span className={styles.previewLabel}>Prompt preview</span>
+            <pre className={styles.previewContent}>{promptPreview}</pre>
+          </div>
+        ) : null}
 
         <div className={styles.actions}>
           <button
@@ -129,6 +155,18 @@ export default function RecommendationRequestModal({
           >
             Закрити
           </button>
+          {canPreviewPrompt ? (
+            <button
+              type="button"
+              className="btnBase btnSecondary"
+              onClick={() => {
+                void handlePreviewPrompt();
+              }}
+              disabled={isSubmitting || isLoading || isPreviewingPrompt || options.length === 0}
+            >
+              {isPreviewingPrompt ? "Готуємо prompt..." : "Показати prompt"}
+            </button>
+          ) : null}
           <button
             type="button"
             className="btnBase btnPrimary"

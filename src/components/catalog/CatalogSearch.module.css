@@ -404,7 +404,9 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-height: calc(100vh - 48px);
+  max-height: calc(
+    var(--viewport-height) - 48px - var(--safe-area-top) - var(--safe-area-bottom)
+  );
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1122,10 +1124,14 @@
 
   .filtersModal {
     max-width: 100vw;
-    height: 100vh;
+    height: var(--viewport-height);
     border-radius: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
+    padding-top: calc(20px + var(--safe-area-top));
+    padding-right: calc(20px + var(--safe-area-right));
+    padding-bottom: calc(20px + var(--safe-area-bottom));
+    padding-left: calc(20px + var(--safe-area-left));
   }
 
   .filmCardsGrid {

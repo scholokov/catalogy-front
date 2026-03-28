@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
+import { getOpenAiRecommendationModel } from "@/lib/openai/models";
+import { buildGameRecommendationProfileContext } from "@/lib/recommendations/profileAnalysisContext";
 import {
   buildGameLlmRecoContextText,
   buildKnownTitlesForGamesLlm,
   type GameLlmExportRow,
 } from "@/app/statistics/gameLlmContext";
+import type { GameProfileSystemLayer, GameProfileUserLayer } from "@/lib/profile-analysis/types";
 
 type OpenAiMessage = {
   content?: string;
@@ -25,11 +28,17 @@ type ParsedRecommendation = {
   year: string;
   type: string;
   why: string;
-  fitTag: string;
   raw: string;
 };
 
-const OPENAI_MODEL = process.env.OPENAI_RECOMMENDATION_MODEL || "gpt-4.1-mini";
+type GameRecommendationProfileAnalysis = {
+  userProfile: GameProfileUserLayer;
+  systemProfile: GameProfileSystemLayer;
+  sourceTitlesCount?: number;
+  analyzedAt?: string;
+};
+
+const OPENAI_MODEL = getOpenAiRecommendationModel();
 
 const buildPrompt = (
   context: string,
@@ -37,88 +46,99 @@ const buildPrompt = (
   scopeLabel?: string,
   userWishes?: string,
 ) => `You are given a compact recommendation context for one user.
-Your task: Suggest ${requestedCount} candidate video game titles that fit the user's taste profile extremely well.
 
-Critical rules:
-1. Recommend only strong-fit candidates, not broad genre matches.
-2. Optimize for deep taste resonance across gameplay feel, decision texture, feedback speed, progression shape, and emotional tone.
-3. Avoid generic, formulaic, safe, or obvious filler picks.
-4. Keep the ${requestedCount} suggestions distinct by subtype or play feel, while all remaining inside the user's proven taste core.
-5. You are generating a candidate pool. Some titles may later be filtered out by code if they already exist in the user's collection, so prioritize quality and fit.
-6. Do not explain the full user profile back to me.
-7. Do not recommend anything from the representative positive titles, representative negative titles, or current interest vector if those titles are explicitly listed there.
-8. Use the representative positive titles as evidence of specific valued aspects, not as raw name anchors.
-9. Prioritize deep taste resonance over surface similarity to any single representative title.
-10. Do not anchor too heavily on one positive example if the broader profile suggests a better match elsewhere.
-11. Prefer internationally known titles with stable naming to reduce ambiguity.
-12. Active recommendation platform slice: ${scopeLabel || "вся бібліотека"}.
-13. User wishes: ${userWishes || "немає додаткових побажань"}.
-14. Treat user wishes as a modifier of the proven taste profile, not as an override.
-15. Keep the platform slice primary and do not let unrelated platform history dominate the recommendation.
+Your task:
+Suggest exactly ${requestedCount} video game candidates for ${scopeLabel || "the active platform slice"} that fit this user's proven taste profile extremely well.
+
+Primary objective:
+Select titles with deep taste resonance, not broad genre overlap.
+
+Core recommendation principles:
+1. Prioritize strong fit to the user's proven gameplay and experience core.
+2. Optimize for gameplay feel, decision texture, feedback speed, progression depth, campaign structure, and overall experience type.
+3. Prefer recommendation quality over safety, filler, popularity, or generic genre similarity.
+4. Keep all ${requestedCount} picks inside the proven taste core, but make them distinct by subtype, structure, or play feel.
+5. Do not explain the full user profile back to me.
+6. Do not write plot summaries, lore summaries, or generic game descriptions.
+7. Use profile signals as pattern evidence, not as franchise-copying instructions.
+8. Prioritize deep resonance over surface similarity to any one title, franchise, or keyword.
+9. Prefer internationally known titles with stable naming to reduce ambiguity.
+10. Keep the ${scopeLabel || "active platform"} slice primary. Do not let unrelated platform history dominate the recommendation.
+11. User wishes modify the proven taste profile, but do not override it.
+
+Important constraints:
+- You are generating a candidate pool, not performing full collection deduplication.
+- Do NOT try to infer the user's full existing collection beyond the titles explicitly listed in this prompt.
+- Do NOT recommend any title explicitly listed in:
+  - Representative likes
+  - Representative dislikes
+  - Current-interest anchors
+- Do not recommend a title only because it is franchise-adjacent to a known positive series.
+- Prefer games that match the user's proven playstyle and experience structure, not just familiar branding or surface genre overlap.
+- Current-interest anchors are weak exploratory hints only, not proven taste evidence.
+- Never let current-interest anchors outweigh repeated factual signals from the analyzed profile.
+- The ${requestedCount} suggestions must stay inside the proven taste core, but should diversify across adjacent sub-patterns rather than repeating one obvious formula ${requestedCount} times.
 
 Output format:
 Return exactly ${requestedCount} items as a numbered list.
-For each item use this format:
+
+For each item use exactly this format:
 1. Original Title (Year) — type: game
 Why it fits: 1-2 short sentences in Ukrainian.
-Fit tag: one short label only.
 
-Important:
+Output rules:
 - "Why it fits" must explain why this game matches this specific user's taste.
-- Do not write plot summary, lore summary, or generic description of the game.
-- Pay attention to the separate layers in the context: gameplay axes, experience / emotional axes, explicit avoid / anti-match axes.
-- The representative positive titles include short aspect explanations; extract and generalize those aspects instead of matching by franchise adjacency.
+- Keep the explanation compact and concrete.
+- Do not repeat the same reasoning formula ${requestedCount} times.
+- The ${requestedCount} picks should feel distinct while staying inside the same proven taste core.
+- Do not add any intro or conclusion.
 
-Allowed fit tag examples:
-- systems mastery
-- dark pressure
-- tactical depth
-- build experimentation
-- harsh atmosphere
-- skill expression
-- sovereign tone
+=== ACTIVE RECOMMENDATION CONTEXT START ===
+Platform slice: ${scopeLabel || "вся бібліотека"}
+User wishes: ${userWishes || "немає додаткових побажань."}
 
-Keep the writing compact.
-Do not add intros or conclusions.
-
-=== USER CONTEXT START ===
 ${context}
-=== USER CONTEXT END ===`;
+=== ACTIVE RECOMMENDATION CONTEXT END ===`;
 
 const buildRetryPrompt = (
   context: string,
   requestedCount: number,
   scopeLabel?: string,
   userWishes?: string,
-) => `You previously generated candidates that were either malformed, too overlapping, or not usable after filtering.
-Generate ${requestedCount} new candidates with stricter diversity and better formatting.
+) => `You previously generated candidates that were malformed, too overlapping, too weak, or not usable after filtering.
+
+Generate exactly ${requestedCount} new video game candidates for ${scopeLabel || "the active platform slice"} with stricter fit quality, clearer differentiation, and exact formatting.
+
+Primary objective:
+Stay inside the same proven taste core while avoiding repetition and weak surface-level matches.
 
 Hard requirements:
 1. Return exactly ${requestedCount} items.
-2. Do not repeat obvious canon already implied by representative titles.
+2. Keep all ${requestedCount} picks inside the proven taste core, but make them distinct by subtype, structure, or play feel.
 3. Prefer less obvious but still high-fit candidates.
-4. Keep formatting exact.
-5. Write "Why it fits" content in Ukrainian.
-6. Optimize for deep taste resonance, not superficial genre overlap.
-7. Keep candidates distinct by play feel while staying inside the same proven taste core.
-8. Active recommendation platform slice: ${scopeLabel || "вся бібліотека"}.
-9. User wishes: ${userWishes || "немає додаткових побажань"}.
-10. Treat user wishes as a modifier of the proven taste profile, not as an override.
+4. Do not repeat obvious canon already implied by representative likes.
+5. Write "Why it fits" in Ukrainian.
+6. Do not write plot summaries, lore summaries, or generic game descriptions.
+7. Respect negative patterns, contradictions, and anti-match signals even when a title looks superficially similar to a positive anchor.
+8. Current-interest anchors are weak exploratory hints only, not proven taste evidence.
+9. User wishes modify the proven taste profile, but do not override it.
+10. Keep the ${scopeLabel || "active platform"} slice primary.
 
 Output format:
 1. Original Title (Year) — type: game
 Why it fits: 1-2 short sentences in Ukrainian.
-Fit tag: one short label only.
 
-Important:
-- "Why it fits" must explain the user-fit, not the plot.
-- Do not write synopsis or lore summary.
-- Respect anti-match rules even if a title looks superficially similar to one anchor.
-- Do not over-anchor on one example such as a single tactics game if the broader profile points elsewhere.
+Output rules:
+- Keep explanations compact and concrete.
+- Do not repeat the same reasoning formula ${requestedCount} times.
+- Do not add any intro or conclusion.
 
-=== USER CONTEXT START ===
+=== ACTIVE RECOMMENDATION CONTEXT START ===
+Platform slice: ${scopeLabel || "вся бібліотека"}
+User wishes: ${userWishes || "немає додаткових побажань."}
+
 ${context}
-=== USER CONTEXT END ===`;
+=== ACTIVE RECOMMENDATION CONTEXT END ===`;
 
 const normalizeTitle = (value: string) =>
   value
@@ -166,17 +186,12 @@ const parseRecommendations = (text: string): ParsedRecommendation[] => {
       if (!titleMatch) return null;
 
       const whyLineIndex = lines.findIndex((line) => /^Why it fits:/i.test(line));
-      const fitLine = lines.find((line) => /^Fit tag:/i.test(line));
       const whyText =
         whyLineIndex >= 0
           ? (() => {
               const collected: string[] = [];
               for (let index = whyLineIndex; index < lines.length; index += 1) {
-                const line = lines[index];
-                if (index > whyLineIndex && /^Fit tag:/i.test(line)) {
-                  break;
-                }
-                collected.push(line);
+                collected.push(lines[index]);
               }
               return collected.join(" ").replace(/^Why it fits:\s*/i, "").trim();
             })()
@@ -187,7 +202,6 @@ const parseRecommendations = (text: string): ParsedRecommendation[] => {
         year: titleMatch[2],
         type: "game",
         why: whyText,
-        fitTag: fitLine?.replace(/^Fit tag:\s*/i, "").trim() ?? "",
         raw: block,
       };
     })
@@ -257,6 +271,8 @@ export async function POST(request: Request) {
       knownTitleRows?: GameLlmExportRow[];
       scopeLabel?: string;
       userWishes?: string;
+      profileAnalysis?: GameRecommendationProfileAnalysis;
+      debugPreview?: boolean;
     };
     const rows = Array.isArray(body.rows) ? body.rows : [];
     const knownTitleRows =
@@ -268,12 +284,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing game rows." }, { status: 400 });
     }
 
-    const context = buildGameLlmRecoContextText(rows, { includeKnownTitles: false });
-    const knownTitles = buildKnownTitleSet(knownTitleRows);
-
-    const firstResponse = await callOpenAi(context, 4, (nextContext, requestedCount) =>
-      buildPrompt(nextContext, requestedCount, body.scopeLabel, body.userWishes),
+    const profileContext = buildGameRecommendationProfileContext(
+      body.profileAnalysis,
+      body.scopeLabel,
     );
+    const context = [buildGameLlmRecoContextText(rows, { includeKnownTitles: false }), profileContext]
+      .filter(Boolean)
+      .join("\n\n");
+    const knownTitles = buildKnownTitleSet(knownTitleRows);
+    const prompt = buildPrompt(context, 4, body.scopeLabel, body.userWishes);
+
+    if (body.debugPreview && process.env.NODE_ENV !== "production") {
+      return NextResponse.json({
+        prompt,
+      });
+    }
+
+    const firstResponse = await callOpenAi(context, 4, () => prompt);
     const firstFiltered = filterRecommendations(parseRecommendations(firstResponse), knownTitles);
 
     let finalRecommendations = firstFiltered;
@@ -312,7 +339,7 @@ export async function POST(request: Request) {
         ? outputRecommendations
             .map(
               (entry, index) =>
-                `${index + 1}. ${entry.title} (${entry.year}) — type: ${entry.type}\nWhy it fits: ${entry.why}\nFit tag: ${entry.fitTag}`,
+                `${index + 1}. ${entry.title} (${entry.year}) — type: ${entry.type}\nWhy it fits: ${entry.why}`,
             )
             .join("\n\n")
         : "Не вдалося підібрати рекомендації. Спробуйте ще раз — модель повернула або вже відомі тайтли, або нестабільний формат відповіді.";

@@ -13,6 +13,7 @@ export type FilmLlmExportRow = {
   rating: number | null;
   genres: string[];
   directors: string[];
+  actors: string[];
 };
 
 type TasteProfileRow = [string, string, string, string];
@@ -688,20 +689,7 @@ export const buildLlmRecoContextText = (
   options?: { includeKnownTitles?: boolean },
 ) => {
   const includeKnownTitles = options?.includeKnownTitles ?? true;
-  const statusOf = (row: FilmLlmExportRow) => normalizeStatus(row.progress);
-  const completedRows = rows.filter((row) => statusOf(row) === "completed");
-  const plannedRows = rows.filter((row) => statusOf(row) === "planned");
-  const droppedRows = rows.filter((row) => statusOf(row) === "dropped");
-
   const tasteProfileRows = buildTasteProfileForLlmCsv(rows).rows;
-  const positiveAxes = tasteProfileRows
-    .filter((row) => row[0] === "inferred_axes" && row[1].startsWith("positive_"))
-    .map((row) => row[2])
-    .slice(0, 8);
-  const negativeAxes = tasteProfileRows
-    .filter((row) => row[0] === "inferred_axes" && row[1].startsWith("negative_"))
-    .map((row) => row[2])
-    .slice(0, 6);
   const representativePositive = tasteProfileRows
     .filter((row) => row[0] === "representative_positive")
     .map((row) => row[2])
@@ -710,97 +698,17 @@ export const buildLlmRecoContextText = (
     .filter((row) => row[0] === "representative_negative")
     .map((row) => row[2])
     .slice(0, 12);
-  const representativePlanned = tasteProfileRows
-    .filter((row) => row[0] === "representative_planned")
-    .map((row) => row[2])
-    .slice(0, 6);
-
-  const plannedGenreKeys = mapToSortedEntries(buildCountMap(plannedRows, (row) => row.genres))
-    .slice(0, 5)
-    .map((entry) => entry.key);
-  const plannedDirectorKeys = mapToSortedEntries(buildCountMap(plannedRows, (row) => row.directors))
-    .slice(0, 3)
-    .map((entry) => entry.key);
-
-  const interestVector: string[] = [];
-
-  if (plannedRows.some((row) => hasAnyGenreGroup(row, [GENRE_GROUPS.crime, GENRE_GROUPS.thriller]))) {
-    interestVector.push("planned queue leans toward crime/thriller pressure stories");
-  }
-  if (
-    plannedRows.some((row) =>
-      hasAnyGenreGroup(row, [GENRE_GROUPS.history, GENRE_GROUPS.war, GENRE_GROUPS.biography]),
-    )
-  ) {
-    interestVector.push("planned queue keeps historical/contextual weight in play");
-  }
-  if (plannedRows.some((row) => hasAnyGenreGroup(row, [GENRE_GROUPS.mystery, GENRE_GROUPS.horror]))) {
-    interestVector.push("planned queue keeps dark mystery and unease in play");
-  }
-  if (
-    plannedRows.some((row) =>
-      hasAnyGenreGroup(row, [GENRE_GROUPS.action, GENRE_GROUPS.scienceFiction, GENRE_GROUPS.adventure]),
-    )
-  ) {
-    interestVector.push("planned queue leaves room for stylized action and sci-fi");
-  }
-  if (
-    plannedRows.some(
-      (row) =>
-        hasAnyGenreGroup(row, [GENRE_GROUPS.comedy]) &&
-        hasAnyGenreGroup(row, [GENRE_GROUPS.crime, GENRE_GROUPS.drama]),
-    )
-  ) {
-    interestVector.push("planned queue still allows black absurdity");
-  }
-  if (plannedGenreKeys.length > 0) {
-    interestVector.push(`planned genres: ${joinList(plannedGenreKeys)}`);
-  }
-  if (plannedDirectorKeys.length > 0) {
-    interestVector.push(`planned directors: ${joinList(plannedDirectorKeys)}`);
-  }
-  if (representativePlanned.length > 0) {
-    interestVector.push(`planned anchors: ${joinList(representativePlanned.slice(0, 5))}`);
-  }
-  if (positiveAxes.length > 0) {
-    interestVector.push(`align with proven positives: ${joinList(positiveAxes.slice(0, 3))}`);
-  }
-  if (negativeAxes.length > 0) {
-    interestVector.push(`avoid repeats of known negatives: ${joinList(negativeAxes.slice(0, 2))}`);
-  }
 
   const knownTitles = buildKnownTitlesForLlm(rows);
 
   const lines = [
     "USER COLLECTION RECOMMENDATION CONTEXT",
     "",
-    "RULES",
-    "- Recommend only titles not present in the user's collection.",
-    "- progress=100 means completed.",
-    "- progress=1..99 means dropped / not finished.",
-    "- progress=0 means planned.",
-    "- Any title already present in collection must not be recommended again.",
-    "",
-    "SUMMARY",
-    `- Total titles: ${rows.length}`,
-    `- Completed: ${completedRows.length}`,
-    `- Dropped: ${droppedRows.length}`,
-    `- Planned: ${plannedRows.length}`,
-    "",
-    "TASTE PROFILE",
-    "Positive axes:",
-    ...positiveAxes.map((axis) => `- ${axis}`),
-    "Negative axes:",
-    ...negativeAxes.map((axis) => `- ${axis}`),
-    "",
     "REPRESENTATIVE POSITIVE TITLES",
     ...representativePositive.slice(0, 12).map((title) => `- ${title}`),
     "",
     "REPRESENTATIVE NEGATIVE TITLES",
     ...representativeNegative.slice(0, 12).map((title) => `- ${title}`),
-    "",
-    "CURRENT INTEREST VECTOR",
-    ...interestVector.slice(0, 10).map((item) => `- ${item}`),
   ];
 
   if (includeKnownTitles) {

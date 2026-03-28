@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { downloadCsvFile } from "@/lib/csv/downloadCsv";
 import { getCsvTimestamp } from "@/lib/csv/getCsvTimestamp";
+import { normalizeGamePlatforms } from "@/lib/games/platforms";
 import StatisticsMonthlyList from "./StatisticsMonthlyList";
 import StatisticsRankedList from "./StatisticsRankedList";
 import type {
@@ -72,19 +73,6 @@ const normalizeGenres = (value?: string | null) => {
     .filter((genre) => {
       if (unique.has(genre)) return false;
       unique.add(genre);
-      return true;
-    });
-};
-
-const normalizePlatforms = (value?: string[] | null) => {
-  if (!value) return [];
-  const unique = new Set<string>();
-  return value
-    .map((platform) => platform.trim())
-    .filter(Boolean)
-    .filter((platform) => {
-      if (unique.has(platform)) return false;
-      unique.add(platform);
       return true;
     });
 };
@@ -228,7 +216,7 @@ export default function StatisticsGamesPage({
               isViewed: Boolean(row.is_viewed),
               rating: row.rating,
               viewPercent: Math.max(0, Math.min(100, row.view_percent ?? 0)),
-              platforms: normalizePlatforms(row.platforms),
+              platforms: normalizeGamePlatforms(row.platforms),
               genres: normalizeGenres(item?.genres),
             };
           });

@@ -21,8 +21,6 @@ const normalizeStatus = (progress: number) => {
   return "dropped";
 };
 
-const joinList = (values: string[]) => values.join("|");
-
 const getShare = (count: number, total: number) =>
   total > 0 ? `${Math.round((count / total) * 100)}%` : "";
 
@@ -282,100 +280,20 @@ export const buildGameLlmRecoContextText = (
   options?: { includeKnownTitles?: boolean },
 ) => {
   const includeKnownTitles = options?.includeKnownTitles ?? true;
-  const completedRows = rows.filter((row) => normalizeStatus(row.progress) === "completed");
   const plannedRows = rows.filter((row) => normalizeStatus(row.progress) === "planned");
-  const droppedRows = rows.filter((row) => normalizeStatus(row.progress) === "dropped");
   const profileRows = buildGameTasteProfileRows(rows);
-
-  const gameplayAxes = profileRows
-    .filter((row) => row[0] === "gameplay_axes")
-    .map((row) => row[2])
-    .slice(0, 8);
-  const experienceAxes = profileRows
-    .filter((row) => row[0] === "experience_axes")
-    .map((row) => row[2])
-    .slice(0, 6);
-  const antiMatchAxes = profileRows
-    .filter((row) => row[0] === "anti_match_axes")
-    .map((row) => row[2])
-    .slice(0, 6);
-  const representativePositive = profileRows
-    .filter((row) => row[0] === "representative_positive")
-    .map((row) => `${row[2]} — ${row[3]}`)
-    .slice(0, 12);
-  const representativeNegative = profileRows
-    .filter((row) => row[0] === "representative_negative")
-    .map((row) => `${row[2]} — ${row[3]}`)
-    .slice(0, 12);
   const representativePlanned = profileRows
     .filter((row) => row[0] === "representative_planned")
-    .map((row) => `${row[2]} — ${row[3]}`)
+    .map((row) => row[2])
     .slice(0, 5);
 
-  const plannedGenres = mapToSortedEntries(buildCountMap(plannedRows, (row) => row.genres))
-    .slice(0, 5)
-    .map((entry) => entry.key);
-  const plannedPlatforms = mapToSortedEntries(buildCountMap(plannedRows, (row) => row.platforms))
-    .slice(0, 4)
-    .map((entry) => entry.key);
-
-  const interestVector: string[] = [];
-  if (plannedRows.some((row) => hasKeyword(row.genres, ["rpg", "role-playing", "action rpg"]))) {
-    interestVector.push("prioritize rpg progression and build depth");
-  }
-  if (plannedRows.some((row) => hasKeyword(row.genres, ["strategy", "tactical", "simulation"]))) {
-    interestVector.push("prioritize tactical or strategic control");
-  }
-  interestVector.push("prioritize strong single-player focus");
-  interestVector.push("prioritize mechanical identity over cinematic presentation");
-  if (plannedGenres.length > 0) {
-    interestVector.push(`planned genres: ${joinList(plannedGenres)}`);
-  }
-  if (plannedPlatforms.length > 0) {
-    interestVector.push(`planned platforms: ${joinList(plannedPlatforms)}`);
-  }
-  if (representativePlanned.length > 0) {
-    interestVector.push(`planned anchors: ${joinList(representativePlanned)}`);
-  }
-  if (gameplayAxes.length > 0) {
-    interestVector.push(`align with gameplay core: ${joinList(gameplayAxes.slice(0, 3))}`);
-  }
-  if (antiMatchAxes.length > 0) {
-    interestVector.push(`avoid repeats of known negatives: ${joinList(antiMatchAxes.slice(0, 2))}`);
-  }
-
   const lines = [
-    "USER COLLECTION RECOMMENDATION CONTEXT",
-    "",
-    "RULES",
-    "- Recommend only titles not present in the user's collection.",
-    "- progress=100 means completed.",
-    "- progress=1..99 means dropped / not finished.",
-    "- progress=0 means planned.",
-    "- Any title already present in collection must not be recommended again.",
-    "",
-    "SUMMARY",
-    `- Total titles: ${rows.length}`,
-    `- Completed: ${completedRows.length}`,
-    `- Dropped: ${droppedRows.length}`,
-    `- Planned: ${plannedRows.length}`,
-    "",
-    "TASTE PROFILE",
-    "Gameplay axes:",
-    ...gameplayAxes.map((axis) => `- ${axis}`),
-    "Experience / emotional axes:",
-    ...experienceAxes.map((axis) => `- ${axis}`),
-    "Explicit avoid / anti-match axes:",
-    ...antiMatchAxes.map((axis) => `- ${axis}`),
-    "",
-    "REPRESENTATIVE POSITIVE TITLES",
-    ...representativePositive.map((title) => `- ${title}`),
-    "",
-    "REPRESENTATIVE NEGATIVE TITLES",
-    ...representativeNegative.map((title) => `- ${title}`),
-    "",
-    "CURRENT INTEREST VECTOR",
-    ...interestVector.slice(0, 10).map((item) => `- ${item}`),
+    "Current-interest anchors (weak hints only; do not treat as proven taste evidence):",
+    ...(representativePlanned.length > 0
+      ? representativePlanned.map((title) => `- ${title}`)
+      : plannedRows.length > 0
+        ? plannedRows.slice(0, 5).map((row) => `- ${row.title}${row.year ? ` (${row.year})` : ""}`)
+        : ["- none"]),
   ];
 
   if (includeKnownTitles) {

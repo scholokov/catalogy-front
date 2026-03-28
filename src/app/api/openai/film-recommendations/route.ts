@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
+import { getOpenAiRecommendationModel } from "@/lib/openai/models";
+import { buildFilmRecommendationProfileContext } from "@/lib/recommendations/profileAnalysisContext";
 import {
-  buildKnownTitlesForLlm,
   buildLlmRecoContextText,
   type FilmLlmExportRow,
 } from "@/app/statistics/filmLlmCsv";
+import type { FilmProfileSystemLayer, FilmProfileUserLayer } from "@/lib/profile-analysis/types";
 
 type OpenAiMessage = {
   content?: string;
@@ -25,19 +27,52 @@ type ParsedRecommendation = {
   year: string;
   type: string;
   why: string;
-  fitTag: string;
   raw: string;
 };
 
-const OPENAI_MODEL = process.env.OPENAI_RECOMMENDATION_MODEL || "gpt-4.1-mini";
+type FilmRecommendationProfileAnalysis = {
+  userProfile: FilmProfileUserLayer;
+  systemProfile: FilmProfileSystemLayer;
+  sourceTitlesCount?: number;
+  analyzedAt?: string;
+};
+
+const OPENAI_MODEL = getOpenAiRecommendationModel();
+
+const getScopedFilmRequirement = (scopeLabel?: string) => {
+  if (scopeLabel === "Серіали") {
+    return {
+      taskLabel: "series or miniseries",
+      typeLabel: "series/miniseries",
+      instruction: "Recommend only series or miniseries. Do not return movies.",
+    };
+  }
+
+  if (scopeLabel === "Кіно") {
+    return {
+      taskLabel: "movies",
+      typeLabel: "movie",
+      instruction: "Recommend only movies. Do not return series or miniseries.",
+    };
+  }
+
+  return {
+    taskLabel: "movie or series titles",
+    typeLabel: "movie/series/miniseries",
+    instruction: "Stay inside the active format and do not drift into the other format.",
+  };
+};
 
 const buildPrompt = (
   context: string,
   requestedCount: number,
   scopeLabel?: string,
   userWishes?: string,
-) => `You are given a compact recommendation context for one user.
-Your task: Suggest ${requestedCount} candidate movie or series titles that fit the user's taste profile extremely well.
+) => {
+  const scopedRequirement = getScopedFilmRequirement(scopeLabel);
+
+  return `You are given a compact recommendation context for one user.
+Your task: Suggest ${requestedCount} candidate ${scopedRequirement.taskLabel} that fit the user's taste profile extremely well.
 
 Critical rules:
 1. Recommend only strong-fit candidates, not broad genre matches.
@@ -51,27 +86,17 @@ Critical rules:
 9. Active recommendation format: ${scopeLabel || "вся бібліотека"}.
 10. User wishes: ${userWishes || "немає додаткових побажань"}.
 11. Treat user wishes as a modifier of the proven taste profile, not as an override.
-12. Stay inside the active format and do not drift into the other format.
+12. ${scopedRequirement.instruction}
 
 Output format:
 Return exactly ${requestedCount} items as a numbered list.
 For each item use this format:
-1. Original Title (Year) — type: movie/series/miniseries
+1. Original Title (Year) — type: ${scopedRequirement.typeLabel}
 Why it fits: 1-2 short sentences in Ukrainian.
-Fit tag: one short label only.
 
 Important:
 - "Why it fits" must explain why this title matches this specific user's taste.
 - Do not write plot summary, synopsis, or generic description of the title.
-
-Allowed fit tag examples:
-- dark moral pressure
-- black absurdity
-- authorial crime
-- harsh historical weight
-- stylized genre energy
-- competent people under pressure
-- sovereign tone
 
 Keep the writing compact.
 Do not add intros or conclusions.
@@ -79,13 +104,17 @@ Do not add intros or conclusions.
 === USER CONTEXT START ===
 ${context}
 === USER CONTEXT END ===`;
+};
 
 const buildRetryPrompt = (
   context: string,
   requestedCount: number,
   scopeLabel?: string,
   userWishes?: string,
-) => `You previously generated candidates that were either malformed, too overlapping, or not usable after filtering.
+) => {
+  const scopedRequirement = getScopedFilmRequirement(scopeLabel);
+
+  return `You previously generated candidates that were either malformed, too overlapping, or not usable after filtering.
 Generate ${requestedCount} new candidates with stricter diversity and better formatting.
 
 Hard requirements:
@@ -97,11 +126,11 @@ Hard requirements:
 6. Active recommendation format: ${scopeLabel || "вся бібліотека"}.
 7. User wishes: ${userWishes || "немає додаткових побажань"}.
 8. Treat user wishes as a modifier of the proven taste profile, not as an override.
+9. ${scopedRequirement.instruction}
 
 Output format:
-1. Original Title (Year) — type: movie/series/miniseries
+1. Original Title (Year) — type: ${scopedRequirement.typeLabel}
 Why it fits: 1-2 short sentences in Ukrainian.
-Fit tag: one short label only.
 
 Important:
 - "Why it fits" must explain the user-fit, not the plot.
@@ -110,6 +139,7 @@ Important:
 === USER CONTEXT START ===
 ${context}
 === USER CONTEXT END ===`;
+};
 
 const normalizeTitle = (value: string) =>
   value
@@ -168,17 +198,12 @@ const parseRecommendations = (text: string): ParsedRecommendation[] => {
       if (!titleMatch) return null;
 
       const whyLineIndex = lines.findIndex((line) => /^Why it fits:/i.test(line));
-      const fitLine = lines.find((line) => /^Fit tag:/i.test(line));
       const whyText =
         whyLineIndex >= 0
           ? (() => {
               const collected: string[] = [];
               for (let index = whyLineIndex; index < lines.length; index += 1) {
-                const line = lines[index];
-                if (index > whyLineIndex && /^Fit tag:/i.test(line)) {
-                  break;
-                }
-                collected.push(line);
+                collected.push(lines[index]);
               }
               return collected.join(" ").replace(/^Why it fits:\s*/i, "").trim();
             })()
@@ -194,7 +219,6 @@ const parseRecommendations = (text: string): ParsedRecommendation[] => {
         year: titleMatch[2],
         type: normalizedType,
         why: whyText,
-        fitTag: fitLine?.replace(/^Fit tag:\s*/i, "").trim() ?? "",
         raw: block,
       };
     })
@@ -264,6 +288,8 @@ export async function POST(request: Request) {
       knownTitleRows?: FilmLlmExportRow[];
       scopeLabel?: string;
       userWishes?: string;
+      debugPreview?: boolean;
+      profileAnalysis?: FilmRecommendationProfileAnalysis;
     };
     const rows = Array.isArray(body.rows) ? body.rows : [];
     const knownTitleRows =
@@ -275,12 +301,24 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing film rows." }, { status: 400 });
     }
 
-    const context = buildLlmRecoContextText(rows, { includeKnownTitles: false });
-    const knownTitles = buildKnownTitleSet(knownTitleRows);
-
-    const firstResponse = await callOpenAi(context, 4, (nextContext, requestedCount) =>
-      buildPrompt(nextContext, requestedCount, body.scopeLabel, body.userWishes),
+    const profileContext = buildFilmRecommendationProfileContext(
+      body.profileAnalysis,
+      body.scopeLabel,
     );
+    const context = [buildLlmRecoContextText(rows, { includeKnownTitles: false }), profileContext]
+      .filter(Boolean)
+      .join("\n\n");
+    const knownTitles = buildKnownTitleSet(knownTitleRows);
+    const requestedCount = 4;
+    const prompt = buildPrompt(context, requestedCount, body.scopeLabel, body.userWishes);
+
+    if (body.debugPreview && process.env.NODE_ENV !== "production") {
+      return NextResponse.json({
+        prompt,
+      });
+    }
+
+    const firstResponse = await callOpenAi(context, requestedCount, () => prompt);
     const firstFiltered = filterRecommendations(parseRecommendations(firstResponse), knownTitles);
 
     let finalRecommendations = firstFiltered;
@@ -327,7 +365,7 @@ export async function POST(request: Request) {
         ? outputRecommendations
             .map(
               (entry, index) =>
-                `${index + 1}. ${entry.title} (${entry.year}) — type: ${entry.type}\nWhy it fits: ${entry.why}\nFit tag: ${entry.fitTag}`,
+                `${index + 1}. ${entry.title} (${entry.year}) — type: ${entry.type}\nWhy it fits: ${entry.why}`,
             )
             .join("\n\n")
         : "Не вдалося підібрати рекомендації. Спробуйте ще раз — модель повернула або вже відомі тайтли, або нестабільний формат відповіді.";
@@ -335,7 +373,6 @@ export async function POST(request: Request) {
     return NextResponse.json({
       message,
       recommendations: outputRecommendations,
-      knownTitlesCount: buildKnownTitlesForLlm(knownTitleRows).length,
     });
   } catch (error) {
     return NextResponse.json(

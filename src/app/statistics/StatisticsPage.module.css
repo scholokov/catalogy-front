@@ -225,6 +225,74 @@
   gap: 10px;
 }
 
+.scopeActionRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.scopeActionButtons {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tooltipAnchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.tooltipBubble {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+  min-width: 220px;
+  max-width: 280px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    opacity 0.18s ease,
+    visibility 0.18s ease;
+  z-index: 5;
+}
+
+.tooltipBubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 10px;
+  height: 10px;
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.tooltipAnchor:hover .tooltipBubble,
+.tooltipAnchor:focus-within .tooltipBubble {
+  opacity: 1;
+  visibility: visible;
+}
+
+.scopeActionMeta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
 .statusBadge {
   padding: 4px 10px;
   border-radius: 999px;
@@ -271,6 +339,33 @@
 .metricValue {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
+}
+
+.analysisSummary {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.analysisMeta {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.analysisList {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.analysisListItem {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
 }
 
 .showMoreButton {

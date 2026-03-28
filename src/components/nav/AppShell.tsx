@@ -267,6 +267,21 @@ export default function AppShell({ children }: AppShellProps) {
             <span className="navLabel">Статистика</span>
           </Link>
           <Link
+            className={`navLink ${isCurrentPath("/profile") ? "navLinkActive" : ""}`}
+            href="/profile"
+            aria-label="Профайл"
+          >
+            <svg
+              className="navIcon"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 -960 960 960"
+              aria-hidden="true"
+            >
+              <path d="M234-276q51-39 113-61.5T480-360q71 0 133 22.5T726-276q44-54 69-121t25-143q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 76 25 143t69 121Zm246-204q-58 0-99-41t-41-99q0-59 41-99.5t99-40.5q59 0 99.5 40.5T620-620q0 58-40.5 99T480-480Zm0 400q-83 0-156-31.5t-127-86Q143-252 111.5-325T80-480q0-83 31.5-156t86-127Q252-817 325-848.5T480-880q83 0 156 31.5t127 85.5q54 54 85.5 127T880-480q0 83-31.5 155T763-198q-54 54-127 86T480-80Zm0-80q52 0 99-14t87-40q-38-29-85.5-47.5T480-280q-53 0-100.5 18.5T294-214q40 26 87 40t99 14Zm0-460q26 0 43-17t17-43q0-26-17-43t-43-17q-26 0-43 17t-17 43q0 26 17 43t43 17Zm0-60Zm0 466Z" />
+            </svg>
+            <span className="navLabel">Профайл</span>
+          </Link>
+          <Link
             className={`navLink ${isCurrentPath("/settings") ? "navLinkActive" : ""}`}
             href="/settings"
             aria-label="Settings"

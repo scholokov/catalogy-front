@@ -113,3 +113,30 @@
   font-size: var(--font-size-sm);
   color: var(--color-danger);
 }
+
+.previewPanel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--control-border);
+  background: rgba(10, 16, 33, 0.72);
+}
+
+.previewLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.previewContent {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-primary);
+}

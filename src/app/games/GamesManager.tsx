@@ -20,6 +20,7 @@ import RecommendationRequestModal, {
 import CloseIconButton from "@/components/ui/CloseIconButton";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import { supabase } from "@/lib/supabase/client";
+import { normalizeGamePlatforms } from "@/lib/games/platforms";
 import {
   DEFAULT_GAME_PLATFORM_OPTIONS,
   readDisplayPreferences,
@@ -28,6 +29,7 @@ import {
 import { getDisplayName } from "@/lib/users/displayName";
 import type { GameLlmExportRow } from "@/app/statistics/gameLlmContext";
 import { deriveScopeMaturityStatus } from "@/app/statistics/lib/scopeReadiness";
+import type { GameProfileSystemLayer, GameProfileUserLayer } from "@/lib/profile-analysis/types";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
 type Trailer = {
@@ -98,7 +100,6 @@ type AiRecommendation = {
   year: string;
   type: string;
   why: string;
-  fitTag: string;
   raw: string;
 };
 
@@ -113,6 +114,14 @@ type RecommendationScopeState = {
   rows: GameLlmExportRow[];
   options: RecommendationRequestOption[];
   emptyMessage: string;
+  profileAnalysisByScope: Record<string, GameRecommendationProfileAnalysis>;
+};
+
+type GameRecommendationProfileAnalysis = {
+  userProfile: GameProfileUserLayer;
+  systemProfile: GameProfileSystemLayer;
+  sourceTitlesCount: number;
+  analyzedAt: string;
 };
 
 type GamesManagerProps = {
@@ -373,12 +382,14 @@ export default function GamesManager({
   const [message, setMessage] = useState("");
   const [, setRecommendationMessage] = useState("");
   const [aiRecommendationComment, setAiRecommendationComment] = useState("");
+  const [recommendationPromptPreview, setRecommendationPromptPreview] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
   const totalCountRef = useRef(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isGeneratingRecommendations, setIsGeneratingRecommendations] = useState(false);
   const [isPreparingRecommendationRequest, setIsPreparingRecommendationRequest] = useState(false);
+  const [isPreviewingRecommendationPrompt, setIsPreviewingRecommendationPrompt] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(0);
@@ -460,6 +471,8 @@ export default function GamesManager({
   >(readOnly && ownerUserId ? "checking" : "allowed");
   const [friendOwnerName, setFriendOwnerName] = useState("");
   const [showAvailability, setShowAvailability] = useState(true);
+  const [isRecommendationPromptDebugEnabled, setIsRecommendationPromptDebugEnabled] =
+    useState(false);
   const [defaultGamePlatform, setDefaultGamePlatform] = useState<string | null>(
     null,
   );
@@ -490,10 +503,17 @@ export default function GamesManager({
     if (typeof window === "undefined") return;
     const updateDebug = () => {
       setLazyDebugEnabled(window.localStorage.getItem("debug:lazy") === "1");
+      setIsRecommendationPromptDebugEnabled(
+        process.env.NODE_ENV !== "production" &&
+          window.localStorage.getItem("debug:recommendation-prompt") === "1",
+      );
     };
     updateDebug();
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === "debug:lazy") {
+      if (
+        event.key === "debug:lazy" ||
+        event.key === "debug:recommendation-prompt"
+      ) {
         updateDebug();
       }
       if (event.key === DISPLAY_PREFERENCES_STORAGE_KEY) {
@@ -1310,6 +1330,29 @@ export default function GamesManager({
     });
     return keys;
   }, [collection]);
+  const recommendationExistingExternalKeys = useMemo(() => {
+    const keys = new Set<string>();
+    (recommendationScopeState?.rows ?? []).forEach((row) => {
+      if (row.externalId) {
+        keys.add(row.externalId);
+      }
+    });
+    return keys;
+  }, [recommendationScopeState]);
+  const recommendationExistingGameKeys = useMemo(() => {
+    const keys = new Set<string>();
+    (recommendationScopeState?.rows ?? []).forEach((row) => {
+      const normalizedTitle = normalizeComparableTitle(row.title);
+      if (!normalizedTitle) {
+        return;
+      }
+      keys.add(normalizedTitle);
+      if (row.year) {
+        keys.add(`${normalizedTitle}__${row.year}`);
+      }
+    });
+    return keys;
+  }, [recommendationScopeState]);
 
   const fetchAllGamesLibraryForRecommendations = async () => {
     const {
@@ -1395,6 +1438,35 @@ export default function GamesManager({
     return allRows;
   };
 
+  const fetchGameProfileAnalysesForRecommendations = async (effectiveOwnerId: string) => {
+    const { data, error } = await supabase
+      .from("profile_analyses")
+      .select("scope_value, user_profile, system_profile, source_titles_count, analyzed_at")
+      .eq("user_id", effectiveOwnerId)
+      .eq("media_kind", "game")
+      .eq("scope_type", "platform");
+
+    if (error) {
+      return {};
+    }
+
+    return ((data ?? []) as Array<{
+      scope_value: string;
+      user_profile: GameProfileUserLayer;
+      system_profile: GameProfileSystemLayer;
+      source_titles_count: number | null;
+      analyzed_at: string;
+    }>).reduce<Record<string, GameRecommendationProfileAnalysis>>((accumulator, row) => {
+      accumulator[row.scope_value] = {
+        userProfile: row.user_profile,
+        systemProfile: row.system_profile,
+        sourceTitlesCount: row.source_titles_count ?? 0,
+        analyzedAt: row.analyzed_at,
+      };
+      return accumulator;
+    }, {});
+  };
+
   const getGameRecommendationOptions = (rows: GameLlmExportRow[]): RecommendationRequestOption[] => {
     const platformBuckets = new Map<string, GameLlmExportRow[]>();
 
@@ -1436,9 +1508,21 @@ export default function GamesManager({
   const handleOpenRecommendRequest = async () => {
     setMessage("");
     setRecommendationMessage("");
+    setRecommendationPromptPreview("");
     setIsPreparingRecommendationRequest(true);
     try {
-      const allRows = await fetchAllGamesLibraryForRecommendations();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        setMessage("Потрібна авторизація.");
+        return;
+      }
+      const effectiveOwnerId = ownerUserId ?? user.id;
+      const [allRows, profileAnalysisByScope] = await Promise.all([
+        fetchAllGamesLibraryForRecommendations(),
+        fetchGameProfileAnalysesForRecommendations(effectiveOwnerId),
+      ]);
       if (allRows.length === 0) {
         setMessage("Бібліотека порожня.");
         return;
@@ -1449,6 +1533,7 @@ export default function GamesManager({
         options: getGameRecommendationOptions(allRows),
         emptyMessage:
           "Наразі немає достатньо інформації для рекомендацій. Додайте більше ігор, оцінок і прогресу по платформах.",
+        profileAnalysisByScope,
       });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не вдалося підготувати рекомендації.");
@@ -1464,7 +1549,9 @@ export default function GamesManager({
       : normalizedRecommendationTitle;
     if (
       existingGameKeys.has(normalizedRecommendationTitle) ||
-      existingGameKeys.has(normalizedRecommendationKey)
+      recommendationExistingGameKeys.has(normalizedRecommendationTitle) ||
+      existingGameKeys.has(normalizedRecommendationKey) ||
+      recommendationExistingGameKeys.has(normalizedRecommendationKey)
     ) {
       return null;
     }
@@ -1491,14 +1578,22 @@ export default function GamesManager({
 
     const bestMatch = sortedResults.find(
       (item) => {
-        if (item.inCollection || item.existingViewId || existingViewsByExternalId.get(item.id)) {
+        if (
+          item.inCollection ||
+          item.existingViewId ||
+          existingViewsByExternalId.get(item.id) ||
+          recommendationExistingExternalKeys.has(item.id)
+        ) {
           return false;
         }
         const normalizedItemTitle = normalizeComparableTitle(item.title);
         const itemYear = item.released.slice(0, 4);
         return !(
           existingGameKeys.has(normalizedItemTitle) ||
-          (itemYear && existingGameKeys.has(`${normalizedItemTitle}__${itemYear}`))
+          recommendationExistingGameKeys.has(normalizedItemTitle) ||
+          (itemYear &&
+            (existingGameKeys.has(`${normalizedItemTitle}__${itemYear}`) ||
+              recommendationExistingGameKeys.has(`${normalizedItemTitle}__${itemYear}`)))
         );
       },
     );
@@ -1539,6 +1634,52 @@ export default function GamesManager({
     }
 
     return bestMatch;
+  };
+
+  const handlePreviewRecommendationPrompt = async (
+    platform: string,
+    wishes: string,
+  ) => {
+    setMessage("");
+    setRecommendationPromptPreview("");
+    setIsPreviewingRecommendationPrompt(true);
+    try {
+      const scopedRows =
+        recommendationScopeState?.rows.filter((row) => row.platforms.includes(platform)) ?? [];
+      if (scopedRows.length === 0) {
+        setRecommendationPromptPreview("Немає достатньо даних для preview цієї платформи.");
+        return;
+      }
+      const response = await fetch("/api/openai/game-recommendations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          rows: scopedRows,
+          knownTitleRows: recommendationScopeState?.rows ?? scopedRows,
+          scopeLabel: platform,
+          userWishes: wishes,
+          profileAnalysis: recommendationScopeState?.profileAnalysisByScope[platform],
+          debugPreview: true,
+        }),
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        prompt?: string;
+      };
+      if (!response.ok) {
+        setRecommendationPromptPreview(data.error || "Не вдалося підготувати preview prompt.");
+        return;
+      }
+      setRecommendationPromptPreview(data.prompt ?? "");
+    } catch (error) {
+      setRecommendationPromptPreview(
+        error instanceof Error ? error.message : "Не вдалося підготувати preview prompt.",
+      );
+    } finally {
+      setIsPreviewingRecommendationPrompt(false);
+    }
   };
 
   const loadContacts = async (itemIdForCheck?: string) => {
@@ -1966,6 +2107,7 @@ export default function GamesManager({
       }
     }
 
+    const normalizedPlatforms = normalizeGamePlatforms(payload.platforms);
     const { error: viewError } = await supabase.from("user_views").insert({
       user_id: user.id,
       item_id: itemId,
@@ -1975,7 +2117,7 @@ export default function GamesManager({
       is_viewed: payload.isViewed,
       view_percent: payload.viewPercent,
       recommend_similar: payload.recommendSimilar,
-      platforms: payload.platforms,
+      platforms: normalizedPlatforms,
       availability: payload.availability,
     });
 
@@ -2005,6 +2147,7 @@ export default function GamesManager({
       availability: string | null;
     },
   ) => {
+    const normalizedPlatforms = normalizeGamePlatforms(payload.platforms);
     const { error } = await supabase
       .from("user_views")
       .update({
@@ -2014,7 +2157,7 @@ export default function GamesManager({
         is_viewed: payload.isViewed,
         view_percent: payload.viewPercent,
         recommend_similar: payload.recommendSimilar,
-        platforms: payload.platforms,
+        platforms: normalizedPlatforms,
         availability: payload.availability,
       })
       .eq("id", viewId);
@@ -2069,7 +2212,7 @@ export default function GamesManager({
           recommend_similar: payload.recommendSimilar,
           is_viewed: payload.isViewed,
           view_percent: payload.viewPercent,
-          platforms: payload.platforms,
+          platforms: normalizedPlatforms,
           availability: payload.availability,
           items: itemDraft
             ? {
@@ -2096,7 +2239,7 @@ export default function GamesManager({
         recommend_similar: payload.recommendSimilar,
         is_viewed: payload.isViewed,
         view_percent: payload.viewPercent,
-        platforms: payload.platforms,
+        platforms: normalizedPlatforms,
         availability: payload.availability,
         items: itemDraft
           ? {
@@ -2267,6 +2410,7 @@ export default function GamesManager({
   const handleRecommend = async (platform: string, wishes: string) => {
     setMessage("");
     setRecommendationMessage("");
+    setRecommendationPromptPreview("");
     setIsGeneratingRecommendations(true);
     try {
       const scopedRows =
@@ -2286,6 +2430,7 @@ export default function GamesManager({
           knownTitleRows: recommendationScopeState?.rows ?? scopedRows,
           scopeLabel: platform,
           userWishes: wishes,
+          profileAnalysis: recommendationScopeState?.profileAnalysisByScope[platform],
         }),
       });
       const data = (await response.json()) as {
@@ -3853,8 +3998,14 @@ export default function GamesManager({
           emptyMessage={recommendationScopeState.emptyMessage}
           isLoading={isPreparingRecommendationRequest}
           isSubmitting={isGeneratingRecommendations}
+          canPreviewPrompt={isRecommendationPromptDebugEnabled}
+          isPreviewingPrompt={isPreviewingRecommendationPrompt}
+          promptPreview={recommendationPromptPreview}
           placeholder="щось легше, без жахів, не дуже довге"
           onClose={() => setRecommendationScopeState(null)}
+          onPreviewPrompt={async (scopeValue, wishes) => {
+            await handlePreviewRecommendationPrompt(scopeValue, wishes);
+          }}
           onSubmit={async (scopeValue, wishes) => {
             await handleRecommend(scopeValue, wishes);
           }}

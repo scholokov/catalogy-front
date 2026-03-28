@@ -1,7 +1,12 @@
+import {
+  normalizeGamePlatformLabel,
+  normalizeGamePlatforms,
+} from "@/lib/games/platforms";
+
 export const DEFAULT_GAME_PLATFORM_OPTIONS = [
-  "PS",
-  "PS VR",
-  "PS PlayLink",
+  "PlayStation",
+  "PlayStation VR",
+  "PlayStation PlayLink",
   "Steam",
   "Nintendo",
   "PC",
@@ -43,15 +48,14 @@ export const readDisplayPreferences = (): DisplayPreferences => {
     const raw = window.localStorage.getItem(DISPLAY_PREFERENCES_STORAGE_KEY);
     if (!raw) return getDefaultDisplayPreferences();
     const parsed = JSON.parse(raw) as Partial<DisplayPreferences>;
-    const visible = (parsed.visibleGamePlatforms ?? []).filter((platform) =>
-      (DEFAULT_GAME_PLATFORM_OPTIONS as readonly string[]).includes(platform),
+    const platformOptions = DEFAULT_GAME_PLATFORM_OPTIONS as readonly string[];
+    const visible = normalizeGamePlatforms(parsed.visibleGamePlatforms).filter((platform) =>
+      platformOptions.includes(platform),
     );
+    const normalizedDefaultPlatform = normalizeGamePlatformLabel(parsed.defaultGamePlatform);
     const defaultPlatform =
-      parsed.defaultGamePlatform &&
-      (DEFAULT_GAME_PLATFORM_OPTIONS as readonly string[]).includes(
-        parsed.defaultGamePlatform,
-      )
-        ? parsed.defaultGamePlatform
+      normalizedDefaultPlatform && platformOptions.includes(normalizedDefaultPlatform)
+        ? normalizedDefaultPlatform
         : null;
     return {
       showFilmAvailability: parsed.showFilmAvailability ?? true,
@@ -80,12 +84,19 @@ export const readDisplayPreferences = (): DisplayPreferences => {
 
 export const writeDisplayPreferences = (prefs: DisplayPreferences) => {
   if (typeof window === "undefined") return;
+  const normalizedPrefs: DisplayPreferences = {
+    ...prefs,
+    visibleGamePlatforms: normalizeGamePlatforms(prefs.visibleGamePlatforms).filter((platform) =>
+      (DEFAULT_GAME_PLATFORM_OPTIONS as readonly string[]).includes(platform),
+    ),
+    defaultGamePlatform: normalizeGamePlatformLabel(prefs.defaultGamePlatform),
+  };
   // console.log("[prefs] write", prefs);
-  window.localStorage.setItem(DISPLAY_PREFERENCES_STORAGE_KEY, JSON.stringify(prefs));
+  window.localStorage.setItem(DISPLAY_PREFERENCES_STORAGE_KEY, JSON.stringify(normalizedPrefs));
   window.dispatchEvent(
     new StorageEvent("storage", {
       key: DISPLAY_PREFERENCES_STORAGE_KEY,
-      newValue: JSON.stringify(prefs),
+      newValue: JSON.stringify(normalizedPrefs),
     }),
   );
 };

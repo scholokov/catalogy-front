@@ -27,6 +27,7 @@ import {
 import { getDisplayName } from "@/lib/users/displayName";
 import type { FilmLlmExportRow } from "@/app/statistics/filmLlmCsv";
 import { deriveScopeMaturityStatus } from "@/app/statistics/lib/scopeReadiness";
+import type { FilmProfileSystemLayer, FilmProfileUserLayer } from "@/lib/profile-analysis/types";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
 type Trailer = {
@@ -97,7 +98,6 @@ type AiRecommendation = {
   year: string;
   type: string;
   why: string;
-  fitTag: string;
   raw: string;
 };
 
@@ -129,6 +129,14 @@ type RecommendationScopeState = {
   rows: FilmLlmExportRow[];
   options: RecommendationRequestOption[];
   emptyMessage: string;
+  profileAnalysisByScope: Record<string, FilmRecommendationProfileAnalysis>;
+};
+
+type FilmRecommendationProfileAnalysis = {
+  userProfile: FilmProfileUserLayer;
+  systemProfile: FilmProfileSystemLayer;
+  sourceTitlesCount: number;
+  analyzedAt: string;
 };
 
 type FilmsManagerProps = {
@@ -402,12 +410,14 @@ export default function FilmsManager({
   const [message, setMessage] = useState("");
   const [, setRecommendationMessage] = useState("");
   const [aiRecommendationComment, setAiRecommendationComment] = useState("");
+  const [recommendationPromptPreview, setRecommendationPromptPreview] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
   const totalCountRef = useRef(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isGeneratingRecommendations, setIsGeneratingRecommendations] = useState(false);
   const [isPreparingRecommendationRequest, setIsPreparingRecommendationRequest] = useState(false);
+  const [isPreviewingRecommendationPrompt, setIsPreviewingRecommendationPrompt] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [page, setPage] = useState(0);
@@ -489,6 +499,8 @@ export default function FilmsManager({
   >(readOnly && ownerUserId ? "checking" : "allowed");
   const [friendOwnerName, setFriendOwnerName] = useState("");
   const [showAvailability, setShowAvailability] = useState(true);
+  const [isRecommendationPromptDebugEnabled, setIsRecommendationPromptDebugEnabled] =
+    useState(false);
   const [defaultFilmAvailability, setDefaultFilmAvailability] = useState<string | null>(
     null,
   );
@@ -509,10 +521,17 @@ export default function FilmsManager({
     if (typeof window === "undefined") return;
     const updateDebug = () => {
       setLazyDebugEnabled(window.localStorage.getItem("debug:lazy") === "1");
+      setIsRecommendationPromptDebugEnabled(
+        process.env.NODE_ENV !== "production" &&
+          window.localStorage.getItem("debug:recommendation-prompt") === "1",
+      );
     };
     updateDebug();
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === "debug:lazy") {
+      if (
+        event.key === "debug:lazy" ||
+        event.key === "debug:recommendation-prompt"
+      ) {
         updateDebug();
       }
       if (event.key === DISPLAY_PREFERENCES_STORAGE_KEY) {
@@ -1258,7 +1277,7 @@ export default function FilmsManager({
       const { data, error } = await supabase
         .from("user_views")
         .select(
-          "item_id, rating, is_viewed, view_percent, items:items!inner(title, title_uk, title_en, title_original, year, external_id, genres, director, film_media_type, type)",
+          "item_id, rating, is_viewed, view_percent, items:items!inner(title, title_uk, title_en, title_original, year, external_id, genres, director, actors, film_media_type, type)",
         )
         .eq("user_id", effectiveOwnerId)
         .eq("items.type", "film")
@@ -1282,6 +1301,7 @@ export default function FilmsManager({
               external_id?: string | null;
               genres?: string | null;
               director?: string | null;
+              actors?: string | null;
               film_media_type?: "movie" | "tv" | null;
               type?: string | null;
             }
@@ -1294,6 +1314,7 @@ export default function FilmsManager({
               external_id?: string | null;
               genres?: string | null;
               director?: string | null;
+              actors?: string | null;
               film_media_type?: "movie" | "tv" | null;
               type?: string | null;
             }>
@@ -1319,6 +1340,7 @@ export default function FilmsManager({
           rating: row.rating,
           genres: normalizePipeList(relatedItem?.genres),
           directors: normalizePipeList(relatedItem?.director),
+          actors: normalizePipeList(relatedItem?.actors),
         };
       });
       allRows.push(...chunk);
@@ -1328,6 +1350,35 @@ export default function FilmsManager({
       from += pageSize;
     }
     return allRows;
+  };
+
+  const fetchFilmProfileAnalysesForRecommendations = async (effectiveOwnerId: string) => {
+    const { data, error } = await supabase
+      .from("profile_analyses")
+      .select("scope_value, user_profile, system_profile, source_titles_count, analyzed_at")
+      .eq("user_id", effectiveOwnerId)
+      .eq("media_kind", "film")
+      .eq("scope_type", "format");
+
+    if (error) {
+      return {};
+    }
+
+    return ((data ?? []) as Array<{
+      scope_value: string;
+      user_profile: FilmProfileUserLayer;
+      system_profile: FilmProfileSystemLayer;
+      source_titles_count: number | null;
+      analyzed_at: string;
+    }>).reduce<Record<string, FilmRecommendationProfileAnalysis>>((accumulator, row) => {
+      accumulator[row.scope_value] = {
+        userProfile: row.user_profile,
+        systemProfile: row.system_profile,
+        sourceTitlesCount: row.source_titles_count ?? 0,
+        analyzedAt: row.analyzed_at,
+      };
+      return accumulator;
+    }, {});
   };
 
   const getFilmRecommendationOptions = (rows: FilmLlmExportRow[]): RecommendationRequestOption[] => {
@@ -1364,9 +1415,21 @@ export default function FilmsManager({
   const handleOpenRecommendRequest = async () => {
     setMessage("");
     setRecommendationMessage("");
+    setRecommendationPromptPreview("");
     setIsPreparingRecommendationRequest(true);
     try {
-      const allRows = await fetchAllFilmsLibraryForRecommendations();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) {
+        setMessage("Потрібна авторизація.");
+        return;
+      }
+      const effectiveOwnerId = ownerUserId ?? user.id;
+      const [allRows, profileAnalysisByScope] = await Promise.all([
+        fetchAllFilmsLibraryForRecommendations(),
+        fetchFilmProfileAnalysesForRecommendations(effectiveOwnerId),
+      ]);
       if (allRows.length === 0) {
         setMessage("Бібліотека порожня.");
         return;
@@ -1377,6 +1440,7 @@ export default function FilmsManager({
         options: getFilmRecommendationOptions(allRows),
         emptyMessage:
           "Наразі немає достатньо інформації для рекомендацій. Додайте більше фільмів, серіалів, оцінок і переглядів.",
+        profileAnalysisByScope,
       });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Не вдалося підготувати рекомендації.");
@@ -1420,10 +1484,12 @@ export default function FilmsManager({
 
     const bestMatch = sortedResults.find(
       (item) => {
+        const itemExternalKey = getFilmExternalKey(item.id, item.mediaType);
         if (
           item.inCollection ||
           item.existingViewId ||
-          existingViewsByExternalId.get(getFilmExternalKey(item.id, item.mediaType) ?? "")
+          existingViewsByExternalId.get(itemExternalKey ?? "") ||
+          (itemExternalKey && recommendationExistingExternalKeys.has(itemExternalKey))
         ) {
           return false;
         }
@@ -1438,7 +1504,12 @@ export default function FilmsManager({
         const itemYear = item.year.trim();
 
         return !normalizedItemTitles.some(
-          (title) => existingFilmKeys.has(title) || (itemYear && existingFilmKeys.has(`${title}__${itemYear}`)),
+          (title) =>
+            existingFilmKeys.has(title) ||
+            recommendationExistingFilmKeys.has(title) ||
+            (itemYear &&
+              (existingFilmKeys.has(`${title}__${itemYear}`) ||
+                recommendationExistingFilmKeys.has(`${title}__${itemYear}`))),
         );
       },
     );
@@ -1459,9 +1530,59 @@ export default function FilmsManager({
 
     return bestMatch;
   };
+  const handlePreviewRecommendationPrompt = async (
+    mediaType: "movie" | "tv",
+    wishes: string,
+  ) => {
+    setMessage("");
+    setRecommendationPromptPreview("");
+    setIsPreviewingRecommendationPrompt(true);
+    try {
+      const scopedRows =
+        recommendationScopeState?.rows.filter((row) => (row.mediaType ?? "movie") === mediaType) ??
+        [];
+      if (scopedRows.length === 0) {
+        setRecommendationPromptPreview("Немає достатньо даних для preview цього формату.");
+        return;
+      }
+      const response = await fetch("/api/openai/film-recommendations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          rows: scopedRows,
+          knownTitleRows: recommendationScopeState?.rows ?? scopedRows,
+          scopeLabel: mediaType === "tv" ? "Серіали" : "Кіно",
+          userWishes: wishes,
+          debugPreview: true,
+          profileAnalysis:
+            recommendationScopeState?.profileAnalysisByScope[
+              mediaType === "tv" ? "Серіали" : "Кіно"
+            ],
+        }),
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        prompt?: string;
+      };
+      if (!response.ok) {
+        setRecommendationPromptPreview(data.error || "Не вдалося підготувати preview prompt.");
+        return;
+      }
+      setRecommendationPromptPreview(data.prompt ?? "");
+    } catch (error) {
+      setRecommendationPromptPreview(
+        error instanceof Error ? error.message : "Не вдалося підготувати preview prompt.",
+      );
+    } finally {
+      setIsPreviewingRecommendationPrompt(false);
+    }
+  };
   const handleRecommend = async (mediaType: "movie" | "tv", wishes: string) => {
     setMessage("");
     setRecommendationMessage("");
+    setRecommendationPromptPreview("");
     setIsGeneratingRecommendations(true);
     try {
       const scopedRows =
@@ -1481,6 +1602,10 @@ export default function FilmsManager({
           knownTitleRows: recommendationScopeState?.rows ?? scopedRows,
           scopeLabel: mediaType === "tv" ? "Серіали" : "Кіно",
           userWishes: wishes,
+          profileAnalysis:
+            recommendationScopeState?.profileAnalysisByScope[
+              mediaType === "tv" ? "Серіали" : "Кіно"
+            ],
         }),
       });
       const data = (await response.json()) as {
@@ -1509,7 +1634,7 @@ export default function FilmsManager({
         setSelectedFilm(recommendedFilm);
         setRecommendationScopeState(null);
         setRecommendationMessage(
-          `${recommendation.title} (${recommendation.year})\nWhy it fits: ${recommendation.why}\nFit tag: ${recommendation.fitTag}`,
+          `${recommendation.title} (${recommendation.year})\nWhy it fits: ${recommendation.why}`,
         );
         showSnackbar("Рекомендацію відкрито");
         return;
@@ -1690,6 +1815,33 @@ export default function FilmsManager({
     });
     return keys;
   }, [collection]);
+  const recommendationExistingExternalKeys = useMemo(() => {
+    const keys = new Set<string>();
+    (recommendationScopeState?.rows ?? []).forEach((row) => {
+      const key = getFilmExternalKey(row.externalId, row.mediaType);
+      if (key) {
+        keys.add(key);
+      }
+    });
+    return keys;
+  }, [recommendationScopeState]);
+  const recommendationExistingFilmKeys = useMemo(() => {
+    const keys = new Set<string>();
+    (recommendationScopeState?.rows ?? []).forEach((row) => {
+      const titles = [row.title, row.titleUk, row.titleEn, row.titleOriginal];
+      titles.forEach((title) => {
+        const normalizedTitle = normalizeComparableTitle(title ?? "");
+        if (!normalizedTitle) {
+          return;
+        }
+        keys.add(normalizedTitle);
+        if (row.year) {
+          keys.add(`${normalizedTitle}__${row.year}`);
+        }
+      });
+    });
+    return keys;
+  }, [recommendationScopeState]);
 
   const loadContacts = async (itemIdForCheck?: string) => {
     const {
@@ -4126,8 +4278,17 @@ export default function FilmsManager({
           emptyMessage={recommendationScopeState.emptyMessage}
           isLoading={isPreparingRecommendationRequest}
           isSubmitting={isGeneratingRecommendations}
+          canPreviewPrompt={isRecommendationPromptDebugEnabled && !readOnly}
+          isPreviewingPrompt={isPreviewingRecommendationPrompt}
+          promptPreview={recommendationPromptPreview}
           placeholder="щось легше, без жахів, не дуже довге"
-          onClose={() => setRecommendationScopeState(null)}
+          onClose={() => {
+            setRecommendationScopeState(null);
+            setRecommendationPromptPreview("");
+          }}
+          onPreviewPrompt={async (scopeValue, wishes) => {
+            await handlePreviewRecommendationPrompt(scopeValue as "movie" | "tv", wishes);
+          }}
           onSubmit={async (scopeValue, wishes) => {
             await handleRecommend(scopeValue as "movie" | "tv", wishes);
           }}

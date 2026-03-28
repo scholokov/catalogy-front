@@ -135,6 +135,23 @@ create unique index if not exists user_views_user_item_idx
 create index if not exists user_views_user_created_idx
   on user_views (user_id, created_at desc, id desc);
 
+create table if not exists profile_analyses (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users on delete cascade,
+  media_kind text not null check (media_kind in ('film', 'game')),
+  scope_type text not null check (scope_type in ('format', 'platform')),
+  scope_value text not null,
+  user_profile jsonb not null,
+  system_profile jsonb not null,
+  source_titles_count int not null default 0,
+  analyzed_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, media_kind, scope_type, scope_value)
+);
+
+create index if not exists profile_analyses_user_idx
+  on profile_analyses (user_id, media_kind, scope_type, scope_value);
+
 create table if not exists recommendations (
   id uuid primary key default gen_random_uuid(),
   from_user_id uuid not null references auth.users on delete cascade,
@@ -188,6 +205,11 @@ create trigger set_user_views_updated_at
 before update on user_views
 for each row execute function set_updated_at();
 
+drop trigger if exists set_profile_analyses_updated_at on profile_analyses;
+create trigger set_profile_analyses_updated_at
+before update on profile_analyses
+for each row execute function set_updated_at();
+
 create or replace function handle_new_user()
 returns trigger
 language plpgsql
@@ -213,6 +235,7 @@ alter table user_views enable row level security;
 alter table recommendations enable row level security;
 alter table invites enable row level security;
 alter table contacts enable row level security;
+alter table profile_analyses enable row level security;
 
 drop policy if exists "Profiles are viewable by everyone" on profiles;
 create policy "Profiles are viewable by everyone"
@@ -306,6 +329,27 @@ drop policy if exists "Recommendations are deletable by sender" on recommendatio
 create policy "Recommendations are deletable by sender"
   on recommendations for delete
   using (auth.uid() = from_user_id);
+
+drop policy if exists "Profile analyses are readable by owner" on profile_analyses;
+create policy "Profile analyses are readable by owner"
+  on profile_analyses for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "Profile analyses are insertable by owner" on profile_analyses;
+create policy "Profile analyses are insertable by owner"
+  on profile_analyses for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Profile analyses are updatable by owner" on profile_analyses;
+create policy "Profile analyses are updatable by owner"
+  on profile_analyses for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Profile analyses are deletable by owner" on profile_analyses;
+create policy "Profile analyses are deletable by owner"
+  on profile_analyses for delete
+  using (auth.uid() = user_id);
 
 drop policy if exists "Invites are readable by owner" on invites;
 create policy "Invites are readable by owner"
