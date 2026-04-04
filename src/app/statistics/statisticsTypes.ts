@@ -1,5 +1,7 @@
 export type RankedEntry = {
+  key?: string;
   label: string;
+  href?: string;
   value: number;
   itemCount: number;
 };

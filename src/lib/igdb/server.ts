@@ -15,7 +15,7 @@ type IgdbGame = {
   first_release_date?: number;
   summary?: string;
   cover?: { url?: string };
-  genres?: Array<{ name?: string }>;
+  genres?: Array<{ id?: number; name?: string }>;
 };
 
 type IgdbGameVideo = {
@@ -36,6 +36,11 @@ type IgdbMappedGame = {
   released: string;
   poster: string;
   genres: string;
+  genreItems: Array<{
+    source: "igdb";
+    sourceGenreId: string;
+    name: string;
+  }>;
 };
 
 type IgdbTrailer = {
@@ -56,6 +61,12 @@ type IgdbMappedGameDetail = {
   source: "igdb";
   released: string;
   poster: string;
+  genres: string;
+  genreItems: Array<{
+    source: "igdb";
+    sourceGenreId: string;
+    name: string;
+  }>;
   description: string;
   trailers?: IgdbTrailer[];
 };
@@ -90,7 +101,8 @@ const toIgdbScaleRating = (value?: number) => {
 
 const normalizeCoverUrl = (url?: string) => {
   if (!url) return "";
-  const withProtocol = url.startsWith("//") ? `https:${url}` : url;
+  const normalizedUrl = url.trim().replace(/\)+$/, "");
+  const withProtocol = normalizedUrl.startsWith("//") ? `https:${normalizedUrl}` : normalizedUrl;
   return withProtocol
     .replace("/t_thumb/", "/t_1080p/")
     .replace("/t_cover_small/", "/t_1080p/")
@@ -176,6 +188,15 @@ const mapIgdbGames = (rows: IgdbGame[]): IgdbMappedGame[] =>
       released: toReleasedDate(row.first_release_date),
       poster: normalizeCoverUrl(row.cover?.url),
       genres: (row.genres ?? []).map((genre) => genre.name).filter(Boolean).join(", "),
+      genreItems: (row.genres ?? [])
+        .filter(
+          (genre): genre is { id: number; name: string } => Boolean(genre.id && genre.name),
+        )
+        .map((genre) => ({
+          source: "igdb" as const,
+          sourceGenreId: String(genre.id),
+          name: genre.name,
+        })),
     }));
 
 export const searchGamesInIgdb = async (query: string): Promise<IgdbMappedGame[]> => {
@@ -264,6 +285,14 @@ limit 10;
     source: "igdb" as const,
     released: toReleasedDate(row.first_release_date),
     poster: normalizeCoverUrl(row.cover?.url),
+    genres: (row.genres ?? []).map((genre) => genre.name).filter(Boolean).join(", "),
+    genreItems: (row.genres ?? [])
+      .filter((genre): genre is { id: number; name: string } => Boolean(genre.id && genre.name))
+      .map((genre) => ({
+        source: "igdb" as const,
+        sourceGenreId: String(genre.id),
+        name: genre.name,
+      })),
     description: row.summary ?? "",
     trailers,
   };

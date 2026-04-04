@@ -23,6 +23,7 @@ type RawStatsRow = {
   view_percent: number | null;
   items:
     | {
+        id?: string | null;
         title?: string | null;
         genres?: string | null;
         director?: string | null;
@@ -31,6 +32,7 @@ type RawStatsRow = {
         type?: string | null;
       }
     | Array<{
+        id?: string | null;
         title?: string | null;
         genres?: string | null;
         director?: string | null;
@@ -44,6 +46,7 @@ type RawStatsRow = {
 type FilmMediaType = "movie" | "tv";
 
 type FilmStatsRow = {
+  itemId: string | null;
   title: string;
   createdAt: string | null;
   viewedAt: string | null;
@@ -52,8 +55,18 @@ type FilmStatsRow = {
   viewPercent: number;
   mediaType: FilmMediaType;
   genres: string[];
+  genreItems: Array<{
+    genreId: string;
+    name: string;
+  }>;
   director: string | null;
   actors: string[];
+  people: Array<{
+    tmdbPersonId: string;
+    name: string;
+    roleKind: "actor" | "director" | "writer";
+    creditOrder: number | null;
+  }>;
 };
 
 type FilmScopeStats = {
@@ -62,6 +75,7 @@ type FilmScopeStats = {
   totalTitles: number;
   ratedTitles: number;
   engagedTitles: number;
+  watchedTitles: number;
   completedTitles: number;
   partialTitles: number;
   plannedTitles: number;
@@ -75,6 +89,9 @@ type FilmScopeStats = {
   topLikedDirectors: ReturnType<typeof buildRankedEntries>;
   topDislikedDirectors: ReturnType<typeof buildRankedEntries>;
   topDroppedDirectors: ReturnType<typeof buildRankedEntries>;
+  topLikedWriters: ReturnType<typeof buildRankedEntries>;
+  topDislikedWriters: ReturnType<typeof buildRankedEntries>;
+  topDroppedWriters: ReturnType<typeof buildRankedEntries>;
   topLikedActors: ReturnType<typeof buildRankedEntries>;
   topDislikedActors: ReturnType<typeof buildRankedEntries>;
   topDroppedActors: ReturnType<typeof buildRankedEntries>;
@@ -167,21 +184,22 @@ const getDislikeWeight = (rating: number | null) => {
 
 const buildRankedEntries = (
   rows: FilmStatsRow[],
-  mode: "genres" | "directors" | "actors",
+  mode: "genres" | "directors" | "writers" | "actors",
   scoreMode: "viewed" | "liked" | "disliked",
 ) => {
-  const aggregate = new Map<string, { value: number; itemCount: number }>();
+  type RankedAggregateEntry = {
+    key: string;
+    label: string;
+    href?: string;
+  };
+
+  const aggregate = new Map<
+    string,
+    { key: string; label: string; href?: string; value: number; itemCount: number }
+  >();
+  const personLabelKeys = new Map<string, string>();
 
   rows.forEach((row) => {
-    const labels =
-      mode === "genres"
-        ? row.genres
-        : mode === "actors"
-          ? row.actors
-          : row.director
-            ? [row.director]
-            : [];
-    if (labels.length === 0) return;
     const increment =
       scoreMode === "liked"
         ? getPreferenceWeight(row.rating)
@@ -189,9 +207,72 @@ const buildRankedEntries = (
           ? getDislikeWeight(row.rating)
           : 1;
     if (scoreMode !== "viewed" && increment <= 0) return;
-    labels.forEach((label) => {
-      const current = aggregate.get(label) ?? { value: 0, itemCount: 0 };
-      aggregate.set(label, {
+
+    const entries: RankedAggregateEntry[] =
+      mode === "genres"
+        ? row.genreItems.length > 0
+          ? row.genreItems.map((genre) => ({
+              key: genre.genreId,
+              label: genre.name,
+              href: `/genres/${genre.genreId}`,
+            }))
+          : row.genres.map((label) => ({
+              key: label,
+              label,
+            }))
+        : (mode === "actors"
+            ? row.people.filter((person) => person.roleKind === "actor")
+            : mode === "writers"
+              ? row.people.filter((person) => person.roleKind === "writer")
+              : row.people.filter((person) => person.roleKind === "director")
+          ).map((person) => ({
+            key: person.tmdbPersonId,
+            label: person.name,
+            href: `/people/${person.tmdbPersonId}`,
+          }));
+
+    if (entries.length === 0) {
+      const fallbackEntries: RankedAggregateEntry[] =
+        mode === "actors"
+          ? row.actors.map((label) => ({ key: label, label }))
+          : mode === "directors"
+            ? row.director
+              ? [{ key: row.director, label: row.director }]
+              : []
+            : [];
+
+      fallbackEntries.forEach((entry) => {
+        const normalizedLabel = entry.label.trim().toLocaleLowerCase("uk-UA");
+        const aggregateKey =
+          mode === "genres"
+            ? entry.key
+            : personLabelKeys.get(normalizedLabel) ?? `person-label:${normalizedLabel}`;
+        if (mode !== "genres" && !personLabelKeys.has(normalizedLabel)) {
+          personLabelKeys.set(normalizedLabel, aggregateKey);
+        }
+        const current = aggregate.get(aggregateKey) ?? { ...entry, key: aggregateKey, value: 0, itemCount: 0 };
+        aggregate.set(aggregateKey, {
+          ...current,
+          value: current.value + increment,
+          itemCount: current.itemCount + 1,
+        });
+      });
+      return;
+    }
+
+    entries.forEach((entry) => {
+      const normalizedLabel = entry.label.trim().toLocaleLowerCase("uk-UA");
+      const aggregateKey =
+        mode === "genres"
+          ? entry.key
+          : personLabelKeys.get(normalizedLabel) ?? entry.key;
+      if (mode !== "genres" && !personLabelKeys.has(normalizedLabel)) {
+        personLabelKeys.set(normalizedLabel, aggregateKey);
+      }
+      const current = aggregate.get(aggregateKey) ?? { ...entry, key: aggregateKey, value: 0, itemCount: 0 };
+      aggregate.set(aggregateKey, {
+        ...current,
+        href: current.href ?? entry.href,
         value: current.value + increment,
         itemCount: current.itemCount + 1,
       });
@@ -199,8 +280,10 @@ const buildRankedEntries = (
   });
 
   return Array.from(aggregate.entries())
-    .map(([label, entry]) => ({
-      label,
+    .map(([key, entry]) => ({
+      key,
+      label: entry.label,
+      href: entry.href,
       value: entry.value,
       itemCount: entry.itemCount,
     }))
@@ -259,6 +342,7 @@ const buildScopeStats = (rows: FilmStatsRow[], mediaType: FilmMediaType): FilmSc
     totalTitles: rows.length,
     ratedTitles: ratedRows.length,
     engagedTitles: engagedRows.length,
+    watchedTitles: engagedRows.length,
     completedTitles: completedRows.length,
     partialTitles: partialRows.length,
     plannedTitles: plannedRows.length,
@@ -275,6 +359,9 @@ const buildScopeStats = (rows: FilmStatsRow[], mediaType: FilmMediaType): FilmSc
     topLikedDirectors: buildRankedEntries(rows, "directors", "liked"),
     topDislikedDirectors: buildRankedEntries(rows, "directors", "disliked"),
     topDroppedDirectors: buildRankedEntries(partialRows, "directors", "viewed"),
+    topLikedWriters: buildRankedEntries(rows, "writers", "liked"),
+    topDislikedWriters: buildRankedEntries(rows, "writers", "disliked"),
+    topDroppedWriters: buildRankedEntries(partialRows, "writers", "viewed"),
     topLikedActors: buildRankedEntries(rows, "actors", "liked"),
     topDislikedActors: buildRankedEntries(rows, "actors", "disliked"),
     topDroppedActors: buildRankedEntries(partialRows, "actors", "viewed"),
@@ -319,7 +406,7 @@ export default function StatisticsFilmsPage({
           const { data, error } = await supabase
             .from("user_views")
             .select(
-              "created_at, viewed_at, is_viewed, rating, view_percent, items:items!inner(title, genres, director, actors, film_media_type, type)",
+              "created_at, viewed_at, is_viewed, rating, view_percent, items:items!inner(id, title, genres, director, actors, film_media_type, type)",
             )
             .eq("user_id", user.id)
             .eq("items.type", "film")
@@ -340,10 +427,129 @@ export default function StatisticsFilmsPage({
             break;
           }
 
+          const itemIds = chunkRaw
+            .map((row) => (Array.isArray(row.items) ? row.items[0]?.id : row.items?.id))
+            .filter((itemId): itemId is string => Boolean(itemId));
+          const peopleByItemId = new Map<
+            string,
+            Array<{
+              tmdbPersonId: string;
+              name: string;
+              roleKind: "actor" | "director" | "writer";
+              creditOrder: number | null;
+            }>
+          >();
+          const genresByItemId = new Map<
+            string,
+            Array<{
+              genreId: string;
+              name: string;
+            }>
+          >();
+
+          if (itemIds.length > 0) {
+            const { data: itemPeopleRows } = await supabase
+              .from("item_people")
+              .select(
+                "item_id, role_kind, credit_order, people!inner(source_person_id, name)",
+              )
+              .in("item_id", itemIds)
+              .in("role_kind", ["actor", "director", "writer"])
+              .order("credit_order", { ascending: true });
+
+            ((itemPeopleRows ?? []) as Array<{
+              item_id?: string | null;
+              role_kind?: "actor" | "director" | "writer" | null;
+              credit_order?: number | null;
+              people:
+                | {
+                    source_person_id?: string | null;
+                    name?: string | null;
+                  }
+                | Array<{
+                    source_person_id?: string | null;
+                    name?: string | null;
+                  }>;
+            }>).forEach((row) => {
+              const itemId = row.item_id ?? null;
+              const person = Array.isArray(row.people) ? row.people[0] : row.people;
+
+              if (
+                !itemId ||
+                !person?.source_person_id ||
+                !person.name ||
+                (row.role_kind !== "actor" &&
+                  row.role_kind !== "director" &&
+                  row.role_kind !== "writer")
+              ) {
+                return;
+              }
+
+              const current = peopleByItemId.get(itemId) ?? [];
+              current.push({
+                tmdbPersonId: person.source_person_id,
+                name: person.name,
+                roleKind: row.role_kind,
+                creditOrder: row.credit_order ?? null,
+              });
+              peopleByItemId.set(itemId, current);
+            });
+
+            const { data: itemGenreRows } = await supabase
+              .from("item_genres")
+              .select("item_id, genres!inner(source_genre_id, name)")
+              .in("item_id", itemIds);
+
+            ((itemGenreRows ?? []) as Array<{
+              item_id?: string | null;
+              genres:
+                | {
+                    source_genre_id?: string | null;
+                    name?: string | null;
+                  }
+                | Array<{
+                    source_genre_id?: string | null;
+                    name?: string | null;
+                  }>;
+            }>).forEach((row) => {
+              const itemId = row.item_id ?? null;
+              const genre = Array.isArray(row.genres) ? row.genres[0] : row.genres;
+
+              if (!itemId || !genre?.source_genre_id || !genre.name) {
+                return;
+              }
+
+              const current = genresByItemId.get(itemId) ?? [];
+              if (current.some((entry) => entry.genreId === genre.source_genre_id)) {
+                return;
+              }
+              current.push({
+                genreId: genre.source_genre_id,
+                name: genre.name,
+              });
+              genresByItemId.set(itemId, current);
+            });
+          }
+
           const chunk = chunkRaw.map((row) => {
             const item = Array.isArray(row.items) ? row.items[0] : row.items;
             const director = normalizeDirector(item?.director);
+            const itemId = item?.id?.trim() || null;
+            const people = itemId ? peopleByItemId.get(itemId) ?? [] : [];
+            const genreItems = itemId ? genresByItemId.get(itemId) ?? [] : [];
+            const sortedPeople = [...people].sort((left, right) => {
+              const leftOrder = left.creditOrder ?? Number.MAX_SAFE_INTEGER;
+              const rightOrder = right.creditOrder ?? Number.MAX_SAFE_INTEGER;
+              return leftOrder - rightOrder;
+            });
+            const directorNames = sortedPeople
+              .filter((person) => person.roleKind === "director")
+              .map((person) => person.name);
+            const actorNames = sortedPeople
+              .filter((person) => person.roleKind === "actor")
+              .map((person) => person.name);
             return {
+              itemId,
               title: item?.title?.trim() || "Без назви",
               createdAt: row.created_at,
               viewedAt: row.viewed_at,
@@ -352,8 +558,10 @@ export default function StatisticsFilmsPage({
               viewPercent: Math.max(0, Math.min(100, row.view_percent ?? 0)),
               mediaType: normalizeFilmMediaType(item?.film_media_type),
               genres: normalizeGenres(item?.genres),
-              director,
-              actors: normalizeActors(item?.actors),
+              genreItems,
+              director: directorNames[0] ?? director,
+              actors: actorNames.length > 0 ? actorNames : normalizeActors(item?.actors),
+              people: sortedPeople,
             };
           });
 
@@ -400,6 +608,7 @@ export default function StatisticsFilmsPage({
 
     const summary = {
       totalTitles: rows.length,
+      watchedTitles: rows.filter((row) => row.isViewed).length,
       completedTitles: completedRows.length,
       partialTitles: partialRows.length,
       plannedTitles: plannedRows.length,
@@ -472,20 +681,20 @@ export default function StatisticsFilmsPage({
           <strong className={styles.kpiValue}>{statistics.summary.totalTitles}</strong>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Частково переглянуто</span>
+          <span className={styles.kpiLabel}>Переглянуто</span>
           <strong className={styles.kpiValue}>
-            {statistics.summary.partialTitles}{" "}
+            {statistics.summary.watchedTitles}{" "}
             <span className={styles.kpiValueMuted}>
-              ({formatShare(statistics.summary.partialTitles, statistics.summary.totalTitles)})
+              ({formatShare(statistics.summary.watchedTitles, statistics.summary.totalTitles)})
             </span>
           </strong>
         </div>
         <div className={styles.kpiCard}>
-          <span className={styles.kpiLabel}>Повністю переглянуто</span>
+          <span className={styles.kpiLabel}>Кинуто</span>
           <strong className={styles.kpiValue}>
-            {statistics.summary.completedTitles}{" "}
+            {statistics.summary.partialTitles}{" "}
             <span className={styles.kpiValueMuted}>
-              ({formatShare(statistics.summary.completedTitles, statistics.summary.totalTitles)})
+              ({formatShare(statistics.summary.partialTitles, statistics.summary.totalTitles)})
             </span>
           </strong>
         </div>
@@ -538,7 +747,16 @@ export default function StatisticsFilmsPage({
                         <strong className={styles.kpiValue}>{entry.totalTitles}</strong>
                       </div>
                       <div className={styles.kpiCard}>
-                        <span className={styles.kpiLabel}>Частково переглянуто</span>
+                        <span className={styles.kpiLabel}>Переглянуто</span>
+                        <strong className={styles.kpiValue}>
+                          {entry.watchedTitles}{" "}
+                          <span className={styles.kpiValueMuted}>
+                            ({formatShare(entry.watchedTitles, entry.totalTitles)})
+                          </span>
+                        </strong>
+                      </div>
+                      <div className={styles.kpiCard}>
+                        <span className={styles.kpiLabel}>Кинуто</span>
                         <strong className={styles.kpiValue}>
                           {entry.partialTitles}{" "}
                           <span className={styles.kpiValueMuted}>
@@ -552,15 +770,6 @@ export default function StatisticsFilmsPage({
                           {entry.plannedTitles}{" "}
                           <span className={styles.kpiValueMuted}>
                             ({formatShare(entry.plannedTitles, entry.totalTitles)})
-                          </span>
-                        </strong>
-                      </div>
-                      <div className={styles.kpiCard}>
-                        <span className={styles.kpiLabel}>Повністю переглянуто</span>
-                        <strong className={styles.kpiValue}>
-                          {entry.completedTitles}{" "}
-                          <span className={styles.kpiValueMuted}>
-                            ({formatShare(entry.completedTitles, entry.totalTitles)})
                           </span>
                         </strong>
                       </div>
@@ -625,6 +834,30 @@ export default function StatisticsFilmsPage({
                         />
                       </section>
                       <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ сценаристів, які сподобались</h3>
+                        <StatisticsRankedList
+                          entries={entry.topLikedWriters}
+                          valueLabel="points"
+                          emptyMessage="Поставте більше оцінок, щоб побачити смакову статистику."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ сценаристів, які не зайшли</h3>
+                        <StatisticsRankedList
+                          entries={entry.topDislikedWriters}
+                          valueLabel="points"
+                          emptyMessage="Поки немає достатньо низьких оцінок по сценаристах."
+                        />
+                      </section>
+                      <section className={styles.section}>
+                        <h3 className={styles.sectionTitle}>Топ сценаристів, яких кинуто</h3>
+                        <StatisticsRankedList
+                          entries={entry.topDroppedWriters}
+                          valueLabel="films"
+                          emptyMessage="Поки немає достатньо частково переглянутих позицій по сценаристах."
+                        />
+                      </section>
+                      <section className={styles.section}>
                         <h3 className={styles.sectionTitle}>Топ акторів, які сподобались</h3>
                         <StatisticsRankedList
                           entries={entry.topLikedActors}
@@ -648,7 +881,7 @@ export default function StatisticsFilmsPage({
                           emptyMessage="Поки немає достатньо частково переглянутих позицій по акторах."
                         />
                       </section>
-                      <section className={styles.section}>
+                      <section className={`${styles.section} ${styles.sectionFull}`}>
                         <h3 className={styles.sectionTitle}>Перегляди по місяцях</h3>
                         <StatisticsMonthlyList entries={entry.monthlyEntries} initialLimit={5} />
                       </section>
@@ -681,12 +914,11 @@ export default function StatisticsFilmsPage({
                 переглядів або оцінок, щоб робити стабільні висновки.
               </p>
               <p className={styles.sectionText}>
-                «Частково переглянуто» означає, що є позначка перегляду, але прогрес ще менший за
-                100%.
+                «Переглянуто» означає, що увімкнена галочка перегляду незалежно від відсотка
+                прогресу.
               </p>
               <p className={styles.sectionText}>
-                «Повністю переглянуто» означає, що є позначка перегляду і прогрес досяг 100% або
-                більше.
+                «Кинуто» означає, що є позначка перегляду, але прогрес перегляду менший за 100%.
               </p>
               <p className={styles.sectionText}>
                 «Не переглянуто» означає, що позначка перегляду відсутня.

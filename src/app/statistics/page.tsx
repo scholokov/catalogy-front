@@ -23,7 +23,7 @@ export default function StatisticsPage() {
     <div className={styles.headerMeta}>
       <button
         type="button"
-        className="btnBase btnSecondary"
+        className={`btnBase btnSecondary ${styles.exportButton}`}
         onClick={() => {
           activeExportHandler?.();
           if (activeExportHandler) {

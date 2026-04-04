@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { downloadCsvFile } from "@/lib/csv/downloadCsv";
 import { getCsvTimestamp } from "@/lib/csv/getCsvTimestamp";
+import { buildGenreHref } from "@/lib/genres/routes";
 import { normalizeGamePlatforms } from "@/lib/games/platforms";
 import StatisticsMonthlyList from "./StatisticsMonthlyList";
 import StatisticsRankedList from "./StatisticsRankedList";
@@ -32,11 +33,13 @@ type RawStatsRow = {
   platforms: string[] | null;
   items:
     | {
+        id?: string | null;
         title?: string | null;
         genres?: string | null;
         type?: string | null;
       }
     | Array<{
+        id?: string | null;
         title?: string | null;
         genres?: string | null;
         type?: string | null;
@@ -45,6 +48,7 @@ type RawStatsRow = {
 };
 
 type GameStatsRow = {
+  itemId: string | null;
   title: string;
   createdAt: string | null;
   viewedAt: string | null;
@@ -53,6 +57,11 @@ type GameStatsRow = {
   viewPercent: number;
   platforms: string[];
   genres: string[];
+  genreItems: Array<{
+    source: "rawg" | "igdb";
+    sourceGenreId: string;
+    name: string;
+  }>;
 };
 
 const HIGH_RATED_THRESHOLD = 4;
@@ -77,6 +86,8 @@ const normalizeGenres = (value?: string | null) => {
     });
 };
 
+const normalizeGenreLabelKey = (value: string) => value.trim().toLocaleLowerCase("uk-UA");
+
 const isCompletedGame = (row: GameStatsRow) => row.isViewed && row.viewPercent >= 100;
 
 const isDroppedGame = (row: GameStatsRow) =>
@@ -95,14 +106,40 @@ const isAddedInLast30Days = (row: GameStatsRow, now: Date) => {
 };
 
 const buildRankedEntries = (rows: GameStatsRow[], mode: "genres" | "platforms") => {
-  const aggregate = new Map<string, { value: number; itemCount: number }>();
+  const aggregate = new Map<string, { label: string; href?: string; value: number; itemCount: number }>();
 
   rows.forEach((row) => {
-    const labels = mode === "genres" ? row.genres : row.platforms;
-    if (labels.length === 0) return;
-    labels.forEach((label) => {
-      const current = aggregate.get(label) ?? { value: 0, itemCount: 0 };
-      aggregate.set(label, {
+    const entries: Array<{ key: string; label: string; href?: string }> =
+      mode === "genres"
+        ? row.genreItems.length > 0
+          ? row.genreItems.map((genre) => ({
+              key: normalizeGenreLabelKey(genre.name),
+              label: genre.name,
+              href: buildGenreHref({
+                mediaKind: "game",
+                source: genre.source,
+                sourceGenreId: genre.sourceGenreId,
+              }),
+            }))
+          : row.genres.map((genre) => ({
+              key: normalizeGenreLabelKey(genre),
+              label: genre,
+            }))
+        : row.platforms.map((platform) => ({
+            key: platform,
+            label: platform,
+          }));
+    if (entries.length === 0) return;
+    entries.forEach((entry) => {
+      const current = aggregate.get(entry.key) ?? {
+        label: entry.label,
+        href: entry.href,
+        value: 0,
+        itemCount: 0,
+      };
+      aggregate.set(entry.key, {
+        label: current.label,
+        href: current.href ?? entry.href,
         value: current.value + 1,
         itemCount: current.itemCount + 1,
       });
@@ -110,8 +147,10 @@ const buildRankedEntries = (rows: GameStatsRow[], mode: "genres" | "platforms") 
   });
 
   return Array.from(aggregate.entries())
-    .map(([label, entry]) => ({
-      label,
+    .map(([key, entry]) => ({
+      key,
+      label: entry.label,
+      href: entry.href,
       value: entry.value,
       itemCount: entry.itemCount,
     }))
@@ -181,12 +220,56 @@ export default function StatisticsGamesPage({
         const pageSize = 1000;
         let from = 0;
         const collected: GameStatsRow[] = [];
+        const gameGenreByName = new Map<
+          string,
+          {
+            source: "rawg" | "igdb";
+            sourceGenreId: string;
+            name: string;
+          }
+        >();
+
+        const { data: genreDictionaryRows } = await supabase
+          .from("genres")
+          .select("name, source, source_genre_id")
+          .eq("media_kind", "game")
+          .in("source", ["rawg", "igdb"]);
+
+        ((genreDictionaryRows ?? []) as Array<{
+          name?: string | null;
+          source?: string | null;
+          source_genre_id?: string | null;
+        }>)
+          .sort((left, right) => {
+            if (left.source === right.source) return 0;
+            return left.source === "rawg" ? -1 : 1;
+          })
+          .forEach((row) => {
+            if (
+              (row.source !== "rawg" && row.source !== "igdb") ||
+              !row.source_genre_id ||
+              !row.name?.trim()
+            ) {
+              return;
+            }
+
+            const key = normalizeGenreLabelKey(row.name);
+            if (gameGenreByName.has(key)) {
+              return;
+            }
+
+            gameGenreByName.set(key, {
+              source: row.source,
+              sourceGenreId: row.source_genre_id,
+              name: row.name.trim(),
+            });
+          });
 
         while (true) {
           const { data, error } = await supabase
             .from("user_views")
             .select(
-              "created_at, viewed_at, is_viewed, rating, view_percent, platforms, items:items!inner(title, genres, type)",
+              "created_at, viewed_at, is_viewed, rating, view_percent, platforms, items:items!inner(id, title, genres, type)",
             )
             .eq("user_id", user.id)
             .eq("items.type", "game")
@@ -207,9 +290,83 @@ export default function StatisticsGamesPage({
             break;
           }
 
+          const itemIds = chunkRaw
+            .map((row) => (Array.isArray(row.items) ? row.items[0]?.id : row.items?.id))
+            .filter((itemId): itemId is string => Boolean(itemId));
+          const genresByItemId = new Map<
+            string,
+            Array<{
+              source: "rawg" | "igdb";
+              sourceGenreId: string;
+              name: string;
+            }>
+          >();
+
+          if (itemIds.length > 0) {
+            const { data: itemGenreRows } = await supabase
+              .from("item_genres")
+              .select("item_id, genres!inner(source, source_genre_id, name)")
+              .in("item_id", itemIds);
+
+            ((itemGenreRows ?? []) as Array<{
+              item_id?: string | null;
+              genres:
+                | {
+                    source?: string | null;
+                    source_genre_id?: string | null;
+                    name?: string | null;
+                  }
+                | Array<{
+                    source?: string | null;
+                    source_genre_id?: string | null;
+                    name?: string | null;
+                  }>;
+            }>).forEach((row) => {
+              const itemId = row.item_id ?? null;
+              const genre = Array.isArray(row.genres) ? row.genres[0] : row.genres;
+              if (
+                !itemId ||
+                (genre?.source !== "rawg" && genre?.source !== "igdb") ||
+                !genre.source_genre_id ||
+                !genre.name
+              ) {
+                return;
+              }
+              const current = genresByItemId.get(itemId) ?? [];
+              if (
+                current.some(
+                  (entry) =>
+                    entry.source === genre.source &&
+                    entry.sourceGenreId === genre.source_genre_id,
+                )
+              ) {
+                return;
+              }
+              current.push({
+                source: genre.source,
+                sourceGenreId: genre.source_genre_id,
+                name: genre.name,
+              });
+              genresByItemId.set(itemId, current);
+            });
+          }
+
           const chunk = chunkRaw.map((row) => {
             const item = Array.isArray(row.items) ? row.items[0] : row.items;
+            const itemId = item?.id?.trim() || null;
+            const fallbackGenreItems = normalizeGenres(item?.genres)
+              .map((genreName) => gameGenreByName.get(normalizeGenreLabelKey(genreName)) ?? null)
+              .filter(
+                (
+                  genre,
+                ): genre is {
+                  source: "rawg" | "igdb";
+                  sourceGenreId: string;
+                  name: string;
+                } => Boolean(genre),
+              );
             return {
+              itemId,
               title: item?.title?.trim() || "Без назви",
               createdAt: row.created_at,
               viewedAt: row.viewed_at,
@@ -218,6 +375,10 @@ export default function StatisticsGamesPage({
               viewPercent: Math.max(0, Math.min(100, row.view_percent ?? 0)),
               platforms: normalizeGamePlatforms(row.platforms),
               genres: normalizeGenres(item?.genres),
+              genreItems:
+                itemId && (genresByItemId.get(itemId)?.length ?? 0) > 0
+                  ? genresByItemId.get(itemId) ?? []
+                  : fallbackGenreItems,
             };
           });
 

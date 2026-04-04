@@ -45,6 +45,7 @@ type CatalogModalProps = {
   };
   submitLabel?: string;
   onReadOnlyPrimaryAction?: () => Promise<void> | void;
+  showRecommendSimilar?: boolean;
   children: React.ReactNode;
 };
 
@@ -87,6 +88,7 @@ export default function CatalogModal({
   readOnly = false,
   submitLabel = "Додати",
   onReadOnlyPrimaryAction,
+  showRecommendSimilar = true,
   children,
 }: CatalogModalProps) {
   const { showSnackbar } = useSnackbar();
@@ -899,20 +901,22 @@ export default function CatalogModal({
                 </div>
               </label>
 
-              <label
-                className={`${styles.checkboxRow} ${
-                  !isViewed ? styles.labelDisabled : ""
-                }`}
-              >
-                <input
-                  className={styles.checkbox}
-                  type="checkbox"
-                  checked={recommendSimilar}
-                  onChange={(event) => setRecommendSimilar(event.target.checked)}
-                  disabled={readOnly || !isViewed || isSaving}
-                />
-                Рекомендувати подібне
-              </label>
+              {showRecommendSimilar ? (
+                <label
+                  className={`${styles.checkboxRow} ${
+                    !isViewed ? styles.labelDisabled : ""
+                  }`}
+                >
+                  <input
+                    className={styles.checkbox}
+                    type="checkbox"
+                    checked={recommendSimilar}
+                    onChange={(event) => setRecommendSimilar(event.target.checked)}
+                    disabled={readOnly || !isViewed || isSaving}
+                  />
+                  Рекомендувати подібне
+                </label>
+              ) : null}
             </div>
           </div>
         </div>

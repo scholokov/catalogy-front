@@ -48,6 +48,10 @@ export async function GET(
     background_image?: string;
     description_raw?: string;
     description?: string;
+    genres?: Array<{
+      id?: number;
+      name?: string;
+    }>;
   };
   try {
     data = (await response.json()) as {
@@ -57,6 +61,10 @@ export async function GET(
       background_image?: string;
       description_raw?: string;
       description?: string;
+      genres?: Array<{
+        id?: number;
+        name?: string;
+      }>;
     };
   } catch {
     return NextResponse.json(
@@ -122,6 +130,14 @@ export async function GET(
     source: "rawg" as const,
     released: data.released ?? "",
     poster: data.background_image ?? "",
+    genres: (data.genres ?? []).map((genre) => genre.name).filter(Boolean).join(", "),
+    genreItems: (data.genres ?? [])
+      .filter((genre): genre is { id: number; name: string } => Boolean(genre.id && genre.name))
+      .map((genre) => ({
+        source: "rawg" as const,
+        sourceGenreId: String(genre.id),
+        name: genre.name,
+      })),
     description,
     trailers,
   });

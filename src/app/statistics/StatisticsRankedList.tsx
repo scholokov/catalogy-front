@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import PersonHoverLink from "@/components/people/PersonHoverLink";
 import type { RankedEntry } from "./statisticsTypes";
 import styles from "./StatisticsPage.module.css";
 
@@ -23,9 +25,20 @@ export default function StatisticsRankedList({
   return (
     <div className={styles.list}>
       {entries.map((entry) => (
-        <div key={entry.label} className={styles.listItem}>
+        <div key={entry.key ?? entry.href ?? entry.label} className={styles.listItem}>
           <div className={styles.listRow}>
-            <span className={styles.listLabel}>{entry.label}</span>
+            {entry.href?.startsWith("/people/") ? (
+              <PersonHoverLink
+                personId={entry.href.replace("/people/", "")}
+                name={entry.label}
+              />
+            ) : entry.href ? (
+              <Link href={entry.href} className={styles.listLabel}>
+                {entry.label}
+              </Link>
+            ) : (
+              <span className={styles.listLabel}>{entry.label}</span>
+            )}
             <span className={styles.listValue}>
               {entry.value}{" "}
               {valueLabel === "points"

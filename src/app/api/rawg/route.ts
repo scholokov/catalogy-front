@@ -7,7 +7,7 @@ type RawgGame = {
   rating: number;
   released?: string;
   background_image?: string;
-  genres?: { name: string }[];
+  genres?: Array<{ id?: number; name?: string }>;
 };
 
 export async function GET(request: Request) {
@@ -80,6 +80,13 @@ export async function GET(request: Request) {
     released: game.released ?? "",
     poster: game.background_image ?? "",
     genres: (game.genres ?? []).map((g) => g.name).join(", "),
+    genreItems: (game.genres ?? [])
+      .filter((genre): genre is { id: number; name: string } => Boolean(genre.id && genre.name))
+      .map((genre) => ({
+        source: "rawg" as const,
+        sourceGenreId: String(genre.id),
+        name: genre.name,
+      })),
   }));
 
   return NextResponse.json({ results });

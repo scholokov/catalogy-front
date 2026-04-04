@@ -234,6 +234,21 @@ export default function AppShell({ children }: AppShellProps) {
             <span className="navLabel">Фільми</span>
           </Link>
           <Link
+            className={`navLink ${isCurrentPath("/people") ? "navLinkActive" : ""}`}
+            href="/people"
+            aria-label="Персони"
+          >
+            <svg
+              className="navIcon"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 -960 960 960"
+              aria-hidden="true"
+            >
+              <path d="M80-160v-112q0-35 17.5-63t46.5-43q62-31 126-46.5T400-440q66 0 130 15.5T656-378q29 15 46.5 43t17.5 63v112H80Zm720 0v-112q0-66-36-122.5T662-488q51 6 99 22t91 38q29 15 48.5 43.5T920-320v160H800ZM400-480q-66 0-113-47t-47-113q0-66 47-113t113-47q66 0 113 47t47 113q0 66-47 113t-113 47Zm400-160q0 66-47 113t-113 47q-11 0-23-.5t-23-3.5q31-35 48.5-78.5T660-640q0-45-17.5-88.5T594-806q11-3 23-3.5t23-.5q66 0 113 47t47 113Z" />
+            </svg>
+            <span className="navLabel">Персони</span>
+          </Link>
+          <Link
             className={`navLink ${isCurrentPath("/friends") ? "navLinkActive" : ""}`}
             href="/friends"
             aria-label="Friends"

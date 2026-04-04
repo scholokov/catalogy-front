@@ -915,6 +915,109 @@
   color: var(--color-text-muted);
 }
 
+.metaEntityLinks {
+  display: inline;
+}
+
+.metaEntityLink {
+  color: var(--color-link);
+  text-decoration: none;
+}
+
+.metaEntityLink:hover {
+  color: var(--color-link-hover);
+}
+
+.personHoverAnchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.personPreviewPopover {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-elevated);
+  box-shadow: var(--shadow-card);
+  z-index: 30;
+  display: grid;
+  gap: 10px;
+}
+
+.personPreviewHeader {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.personPreviewPoster {
+  display: block;
+  width: 56px;
+  height: 84px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
+.personPreviewImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.personPreviewPlaceholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.personPreviewMain {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.personPreviewName {
+  font-size: 14px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.personPreviewBadge {
+  font-size: 12px;
+  color: var(--color-link);
+}
+
+.personPreviewMeta,
+.personPreviewBio,
+.personPreviewLoading {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+.personPreviewBio {
+  color: var(--color-text-primary);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .personPreviewPopover {
+    display: none;
+  }
+}
+
 .copyableInlineButton {
   border: 0;
   background: transparent;

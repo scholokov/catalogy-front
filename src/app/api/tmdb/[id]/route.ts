@@ -1,8 +1,24 @@
 import { NextResponse } from "next/server";
 
 type TmdbCredits = {
-  cast?: { name: string }[];
-  crew?: { job: string; name: string }[];
+  cast?: {
+    id: number;
+    name: string;
+    original_name?: string;
+    character?: string | null;
+    order?: number | null;
+    profile_path?: string | null;
+    known_for_department?: string;
+  }[];
+  crew?: {
+    id: number;
+    name: string;
+    original_name?: string;
+    job: string;
+    department?: string | null;
+    profile_path?: string | null;
+    known_for_department?: string;
+  }[];
 };
 
 type TmdbVideo = {
@@ -26,9 +42,14 @@ type TmdbDetail = {
   first_air_date?: string;
   poster_path?: string | null;
   overview?: string | null;
-  genres?: { name: string }[];
+  genres?: { id: number; name: string }[];
   vote_average?: number | null;
-  created_by?: { name: string }[];
+  created_by?: {
+    id?: number;
+    name: string;
+    original_name?: string;
+    profile_path?: string | null;
+  }[];
   credits?: TmdbCredits;
   images?: {
     posters?: { file_path: string }[];
@@ -136,14 +157,116 @@ export async function GET(
 
   const directorJobs =
     resolvedMediaType === "tv" ? ["Series Director", "Director", "Creator"] : ["Director"];
+  const directorCredits = (detail.credits?.crew ?? [])
+    .filter((member) => directorJobs.includes(member.job))
+    .slice(0, 3);
+  const writerJobs =
+    resolvedMediaType === "tv"
+      ? ["Writer", "Screenplay", "Teleplay", "Story Editor", "Series Composition"]
+      : ["Writer", "Screenplay"];
+  const writerCredits = (detail.credits?.crew ?? [])
+    .filter((member) => writerJobs.includes(member.job))
+    .slice(0, 4);
+  const producerJobs =
+    resolvedMediaType === "tv"
+      ? ["Producer", "Executive Producer", "Co-Producer", "Series Producer"]
+      : ["Producer", "Executive Producer", "Co-Producer"];
+  const producerCredits = (detail.credits?.crew ?? [])
+    .filter((member) => producerJobs.includes(member.job))
+    .slice(0, 4);
+  const actorCredits = (detail.credits?.cast ?? []).slice(0, 12);
   const director =
-    detail.credits?.crew?.find((member) => directorJobs.includes(member.job))?.name ??
+    directorCredits[0]?.name ??
     detail.created_by?.[0]?.name ??
     "";
-  const actors = (detail.credits?.cast ?? [])
+  const actors = actorCredits
     .slice(0, 5)
     .map((member) => member.name)
     .join(", ");
+  const creatorPeople = (detail.created_by ?? [])
+    .filter((member) => typeof member.id === "number" && !directorCredits.some((credit) => credit.id === member.id))
+    .map((member, index) => ({
+      tmdbPersonId: String(member.id),
+      name: member.name,
+      originalName: member.original_name ?? member.name,
+      roleKind: "director" as const,
+      creditGroup: "crew" as const,
+      department: "Creator",
+      job: "Creator",
+      characterName: "",
+      creditOrder: directorCredits.length + index,
+      isPrimary: directorCredits.length === 0 && index === 0,
+      profileUrl: member.profile_path
+        ? `https://image.tmdb.org/t/p/w500${member.profile_path}`
+        : "",
+    }));
+  const people = [
+    ...directorCredits.map((member, index) => ({
+      tmdbPersonId: String(member.id),
+      name: member.name,
+      originalName: member.original_name ?? member.name,
+      roleKind: "director" as const,
+      creditGroup: "crew" as const,
+      department: member.department ?? member.known_for_department ?? "",
+      job: member.job ?? "",
+      characterName: "",
+      creditOrder: index,
+      isPrimary: index === 0,
+      profileUrl: member.profile_path
+        ? `https://image.tmdb.org/t/p/w500${member.profile_path}`
+        : "",
+    })),
+    ...writerCredits.map((member, index) => ({
+      tmdbPersonId: String(member.id),
+      name: member.name,
+      originalName: member.original_name ?? member.name,
+      roleKind: "writer" as const,
+      creditGroup: "crew" as const,
+      department: member.department ?? member.known_for_department ?? "",
+      job: member.job ?? "",
+      characterName: "",
+      creditOrder: index,
+      isPrimary: index === 0,
+      profileUrl: member.profile_path
+        ? `https://image.tmdb.org/t/p/w500${member.profile_path}`
+        : "",
+    })),
+    ...producerCredits.map((member, index) => ({
+      tmdbPersonId: String(member.id),
+      name: member.name,
+      originalName: member.original_name ?? member.name,
+      roleKind: "producer" as const,
+      creditGroup: "crew" as const,
+      department: member.department ?? member.known_for_department ?? "",
+      job: member.job ?? "",
+      characterName: "",
+      creditOrder: index,
+      isPrimary: index === 0,
+      profileUrl: member.profile_path
+        ? `https://image.tmdb.org/t/p/w500${member.profile_path}`
+        : "",
+    })),
+    ...creatorPeople,
+    ...actorCredits.map((member, index) => ({
+      tmdbPersonId: String(member.id),
+      name: member.name,
+      originalName: member.original_name ?? member.name,
+      roleKind: "actor" as const,
+      creditGroup: "cast" as const,
+      department: member.known_for_department ?? "Acting",
+      job: "Actor",
+      characterName: member.character ?? "",
+      creditOrder: member.order ?? index,
+      isPrimary: index < 5,
+      profileUrl: member.profile_path
+        ? `https://image.tmdb.org/t/p/w500${member.profile_path}`
+        : "",
+    })),
+  ];
+  const genreItems = (detail.genres ?? []).map((genre) => ({
+    tmdbGenreId: String(genre.id),
+    name: genre.name,
+  }));
   const baseImageUrl = "https://image.tmdb.org/t/p/w780";
   const primaryPoster = detail.poster_path
     ? `${baseImageUrl}${detail.poster_path}`
@@ -190,8 +313,10 @@ export async function GET(
     imageUrls,
     plot: detail.overview ?? "",
     genres: (detail.genres ?? []).map((g) => g.name).join(", "),
+    genreItems,
     director,
     actors,
+    people,
     imdbRating:
       typeof detail.vote_average === "number"
         ? detail.vote_average.toFixed(1)

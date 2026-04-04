@@ -10,6 +10,7 @@ import {
   type MouseEvent,
 } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { Range, getTrackBackground } from "react-range";
 import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
 import CatalogModal from "@/components/catalog/CatalogModal";
@@ -20,7 +21,13 @@ import RecommendationRequestModal, {
 import CloseIconButton from "@/components/ui/CloseIconButton";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import { supabase } from "@/lib/supabase/client";
+import { buildGenreHref } from "@/lib/genres/routes";
+import {
+  type GameNormalizedGenre,
+  trySyncGameNormalizedGenres,
+} from "@/lib/games/normalizedMetadata";
 import { normalizeGamePlatforms } from "@/lib/games/platforms";
+import { loadStoredGameGenresForItem } from "@/lib/games/storedGenres";
 import {
   DEFAULT_GAME_PLATFORM_OPTIONS,
   readDisplayPreferences,
@@ -52,6 +59,7 @@ type GameResult = {
   released: string;
   poster: string;
   genres: string;
+  genreItems?: GameNormalizedGenre[];
   trailers?: Trailer[];
   inCollection?: boolean;
   existingViewId?: string;
@@ -91,6 +99,7 @@ type GameItemDraft = {
   ratingSource?: "igdb" | "rawg";
   description: string | null;
   genres: string | null;
+  normalizedGenres?: GameNormalizedGenre[] | null;
   external_id: string | null;
   trailers: Trailer[] | null;
 };
@@ -411,6 +420,7 @@ export default function GamesManager({
   const [selectedViewItemDraft, setSelectedViewItemDraft] = useState<GameItemDraft | null>(
     null,
   );
+  const [selectedViewGenres, setSelectedViewGenres] = useState<GameNormalizedGenre[]>([]);
   const [trailerModal, setTrailerModal] = useState<{
     trailers: Trailer[];
     index: number;
@@ -549,9 +559,32 @@ export default function GamesManager({
 
   useEffect(() => {
     setSelectedViewItemDraft(null);
+    setSelectedViewGenres([]);
     setIsRefreshPickerOpen(false);
     setRefreshSearchQuery("");
   }, [selectedView?.id]);
+
+  useEffect(() => {
+    const selectedItemId = selectedView?.items.id;
+
+    if (!selectedItemId) {
+      setSelectedViewGenres([]);
+      return;
+    }
+
+    let isCancelled = false;
+
+    void (async () => {
+      const storedGenres = await loadStoredGameGenresForItem(supabase, selectedItemId);
+      if (!isCancelled) {
+        setSelectedViewGenres(storedGenres);
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedView?.items.id]);
 
   useEffect(() => {
     if (selectedGame || selectedView) {
@@ -1609,6 +1642,8 @@ export default function GamesManager({
           source?: "igdb" | "rawg";
           released?: string;
           poster?: string;
+          genres?: string;
+          genreItems?: GameNormalizedGenre[];
           description?: string;
           trailers?: Trailer[] | null;
         };
@@ -1626,6 +1661,8 @@ export default function GamesManager({
           ratingSource: detail.source ?? bestMatch.ratingSource,
           released: detail.released?.trim() ? detail.released : bestMatch.released,
           poster: detail.poster?.trim() ? detail.poster : bestMatch.poster,
+          genres: detail.genres?.trim() ? detail.genres : bestMatch.genres,
+          genreItems: detail.genreItems ?? bestMatch.genreItems,
           trailers: detail.trailers ?? bestMatch.trailers,
         } satisfies GameResult;
       }
@@ -2069,18 +2106,31 @@ export default function GamesManager({
       }
 
       itemId = createdItem.id;
+      await trySyncGameNormalizedGenres(supabase, itemId, game.genreItems ?? null);
       if (!descriptionFromSearch) {
         void fetch(`/api/rawg/${game.id}`)
           .then(async (response) => {
             if (!response.ok) return null;
-            return (await response.json()) as { description?: string };
+            return (await response.json()) as {
+              description?: string;
+              genres?: string;
+              genreItems?: GameNormalizedGenre[];
+            };
           })
           .then((detailData) => {
-            if (!detailData?.description) return;
-            void supabase
-              .from("items")
-              .update({ description: detailData.description })
-              .eq("id", createdItem.id);
+            if (!detailData) return;
+            if (detailData.description || detailData.genres) {
+              void supabase
+                .from("items")
+                .update({
+                  description: detailData.description ?? null,
+                  genres: detailData.genres ?? game.genres ?? null,
+                })
+                .eq("id", createdItem.id);
+            }
+            if (detailData.genreItems) {
+              void trySyncGameNormalizedGenres(supabase, createdItem.id, detailData.genreItems);
+            }
           });
       }
     } else {
@@ -2105,6 +2155,7 @@ export default function GamesManager({
       if (Object.keys(itemUpdates).length > 0) {
         await supabase.from("items").update(itemUpdates).eq("id", itemId);
       }
+      await trySyncGameNormalizedGenres(supabase, itemId, game.genreItems ?? null);
     }
 
     const normalizedPlatforms = normalizeGamePlatforms(payload.platforms);
@@ -2200,6 +2251,7 @@ export default function GamesManager({
           throw new Error("Не вдалося оновити дані гри.");
         }
       }
+      await trySyncGameNormalizedGenres(supabase, itemId, itemDraft.normalizedGenres ?? null);
     }
     setCollection((prev) =>
       prev.map((item) => {
@@ -2268,6 +2320,8 @@ export default function GamesManager({
           source?: "igdb" | "rawg";
           released?: string;
           poster?: string;
+          genres?: string;
+          genreItems?: GameNormalizedGenre[];
           trailers?: Trailer[] | null;
         })
       : null;
@@ -2285,9 +2339,11 @@ export default function GamesManager({
       detailData?.poster && detailData.poster.trim()
         ? detailData.poster.trim()
         : game.poster;
-    const genres = game.genres?.trim()
-      ? game.genres.trim()
-      : selectedView.items.genres ?? null;
+    const genres =
+      detailData?.genres?.trim() ||
+      game.genres?.trim() ||
+      selectedView.items.genres ||
+      null;
     const description =
       detailData?.description && detailData.description.trim()
         ? detailData.description.trim()
@@ -2305,6 +2361,7 @@ export default function GamesManager({
           : selectedView.items.imdb_rating ?? null,
       ratingSource: detailData?.source ?? game.ratingSource,
       genres,
+      normalizedGenres: detailData?.genreItems ?? game.genreItems ?? [],
       description,
       external_id: game.id,
       trailers: trailers ?? null,
@@ -2559,6 +2616,34 @@ export default function GamesManager({
           </span>
         ) : null}
       </div>
+    );
+  };
+
+  const renderGenreLinks = (genres?: GameNormalizedGenre[] | null) => {
+    const resolvedGenres = (genres ?? []).slice(0, 8);
+
+    if (resolvedGenres.length === 0) {
+      return null;
+    }
+
+    return (
+      <span className={styles.metaEntityLinks}>
+        {resolvedGenres.map((genre, index) => (
+          <span key={`${genre.source}:${genre.sourceGenreId}:${index}`}>
+            {index > 0 ? ", " : null}
+            <Link
+              href={buildGenreHref({
+                mediaKind: "game",
+                source: genre.source,
+                sourceGenreId: genre.sourceGenreId,
+              })}
+              className={styles.metaEntityLink}
+            >
+              {genre.name}
+            </Link>
+          </span>
+        ))}
+      </span>
     );
   };
 
@@ -3769,8 +3854,10 @@ export default function GamesManager({
                 Рік: {selectedGame.released.slice(0, 4)}
               </p>
             ) : null}
-            {selectedGame.genres ? (
-              <p className={styles.resultMeta}>Жанри: {selectedGame.genres}</p>
+            {selectedGame.genreItems?.length || selectedGame.genres ? (
+              <p className={styles.resultMeta}>
+                Жанри: {renderGenreLinks(selectedGame.genreItems) ?? selectedGame.genres}
+              </p>
             ) : null}
             {searchDescriptions[selectedGame.id] ? (
               <ModalDescription text={searchDescriptions[selectedGame.id]} />
@@ -3861,9 +3948,13 @@ export default function GamesManager({
                 Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
               </p>
             ) : null}
-            {(selectedViewItemDraft?.genres ?? selectedView.items.genres) ? (
+            {selectedViewItemDraft?.normalizedGenres?.length ||
+            selectedViewGenres.length > 0 ||
+            (selectedViewItemDraft?.genres ?? selectedView.items.genres) ? (
               <p className={styles.resultMeta}>
-                Жанри: {selectedViewItemDraft?.genres ?? selectedView.items.genres}
+                Жанри:{" "}
+                {renderGenreLinks(selectedViewItemDraft?.normalizedGenres ?? selectedViewGenres) ??
+                  (selectedViewItemDraft?.genres ?? selectedView.items.genres)}
               </p>
             ) : null}
             {(selectedViewItemDraft?.description ?? selectedView.items.description) ? (
