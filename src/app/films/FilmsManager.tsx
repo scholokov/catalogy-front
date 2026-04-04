@@ -39,6 +39,7 @@ import {
   type FilmNormalizedGenre,
   type FilmNormalizedPerson,
 } from "@/lib/films/normalizedMetadata";
+import { loadRelatedItemCounts } from "@/lib/metadataRefresh/relatedItemIds";
 import { loadStoredGenresForItem } from "@/lib/films/storedGenres";
 import { loadStoredPeopleForItem } from "@/lib/films/storedPeople";
 import type { FilmLlmExportRow } from "@/app/statistics/filmLlmCsv";
@@ -2561,15 +2562,30 @@ export default function FilmsManager({
         return;
       }
 
+      const itemIds = dedupedItems.map((item) => item.id);
+      let itemGenreCounts: Map<string, number>;
+      try {
+        itemGenreCounts = await loadRelatedItemCounts(supabase, "item_genres", itemIds);
+      } catch {
+        setMessage("Не вдалося визначити, які фільми потребують оновлення.");
+        return;
+      }
+      const itemsToRefresh = dedupedItems.filter(
+        (item) =>
+          Boolean(item.external_id) &&
+          normalizePipeList(item.genres).length > (itemGenreCounts.get(item.id) ?? 0),
+      );
+
+      if (itemsToRefresh.length === 0) {
+        setMessage("Усі фільми вже синхронізовані.");
+        return;
+      }
+
       let updatedCount = 0;
 
-      for (let index = 0; index < dedupedItems.length; index += 1) {
-        const item = dedupedItems[index];
-        if (!item.external_id) {
-          continue;
-        }
-
-        setMessage(`Оновлення бібліотеки: ${index + 1}/${dedupedItems.length}`);
+      for (let index = 0; index < itemsToRefresh.length; index += 1) {
+        const item = itemsToRefresh[index];
+        setMessage(`Оновлення бібліотеки: ${index + 1}/${itemsToRefresh.length}`);
 
         const detailResponse = await fetch(
           `/api/tmdb/${item.external_id}?mediaType=${item.film_media_type ?? "movie"}`,
@@ -2632,7 +2648,7 @@ export default function FilmsManager({
         updatedCount += 1;
       }
 
-      setMessage(`Оновлення бібліотеки завершено: ${updatedCount}/${dedupedItems.length}.`);
+      setMessage(`Оновлення бібліотеки завершено: ${updatedCount}/${itemsToRefresh.length}.`);
       showSnackbar("Бібліотеку оновлено");
       setHasApplied(true);
       void fetchPage(0, appliedFilters);

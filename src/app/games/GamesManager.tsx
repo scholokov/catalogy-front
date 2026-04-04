@@ -23,11 +23,13 @@ import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import { supabase } from "@/lib/supabase/client";
 import { buildGenreHref } from "@/lib/genres/routes";
 import {
+  syncGameNormalizedGenres,
   type GameNormalizedGenre,
   trySyncGameNormalizedGenres,
 } from "@/lib/games/normalizedMetadata";
 import { normalizeGamePlatforms } from "@/lib/games/platforms";
 import { loadStoredGameGenresForItem } from "@/lib/games/storedGenres";
+import { loadRelatedItemCounts } from "@/lib/metadataRefresh/relatedItemIds";
 import {
   DEFAULT_GAME_PLATFORM_OPTIONS,
   readDisplayPreferences,
@@ -137,6 +139,20 @@ type GamesManagerProps = {
   onCountChange?: (count: number) => void;
   ownerUserId?: string;
   readOnly?: boolean;
+};
+
+const normalizeGenreList = (value?: string | null) => {
+  if (!value) return [];
+  const unique = new Set<string>();
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => {
+      if (unique.has(entry)) return false;
+      unique.add(entry);
+      return true;
+    });
 };
 
 type Filters = {
@@ -398,6 +414,7 @@ export default function GamesManager({
   const [isLoading, setIsLoading] = useState(false);
   const [isGeneratingRecommendations, setIsGeneratingRecommendations] = useState(false);
   const [isPreparingRecommendationRequest, setIsPreparingRecommendationRequest] = useState(false);
+  const [isRefreshingLibraryMetadata, setIsRefreshingLibraryMetadata] = useState(false);
   const [isPreviewingRecommendationPrompt, setIsPreviewingRecommendationPrompt] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -2383,6 +2400,148 @@ export default function GamesManager({
     setIsRefreshPickerOpen(true);
   };
 
+  const handleRefreshLibraryMetadata = async () => {
+    if (readOnly) return;
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setMessage("Потрібна авторизація.");
+      return;
+    }
+
+    setIsRefreshingLibraryMetadata(true);
+    setMessage("Починаємо оновлення бібліотеки…");
+
+    try {
+      const pageSize = 200;
+      let from = 0;
+      const libraryItems: Array<GameCollectionItem["items"]> = [];
+
+      while (true) {
+        const { data, error } = await supabase
+          .from("user_views")
+          .select(
+            "items:items!inner(id, title, description, genres, poster_url, external_id, imdb_rating, trailers, year, type)",
+          )
+          .eq("user_id", user.id)
+          .eq("items.type", "game")
+          .range(from, from + pageSize - 1);
+
+        if (error) {
+          setMessage("Не вдалося підготувати бібліотеку до оновлення.");
+          return;
+        }
+
+        const chunk = ((data ?? []) as Array<{
+          items: GameCollectionItem["items"] | GameCollectionItem["items"][];
+        }>)
+          .map((row) => (Array.isArray(row.items) ? row.items[0] : row.items))
+          .filter(Boolean);
+
+        libraryItems.push(...chunk);
+
+        if (chunk.length < pageSize) {
+          break;
+        }
+
+        from += pageSize;
+      }
+
+      const dedupedItems = Array.from(
+        new Map(libraryItems.map((item) => [item.id, item])).values(),
+      );
+
+      if (dedupedItems.length === 0) {
+        setMessage("Бібліотека порожня.");
+        return;
+      }
+
+      const itemIds = dedupedItems.map((item) => item.id);
+      let itemGenreCounts: Map<string, number>;
+      try {
+        itemGenreCounts = await loadRelatedItemCounts(supabase, "item_genres", itemIds);
+      } catch {
+        setMessage("Не вдалося визначити, які ігри потребують оновлення.");
+        return;
+      }
+      const itemsToRefresh = dedupedItems.filter(
+        (item) =>
+          Boolean(item.external_id) &&
+          normalizeGenreList(item.genres).length > (itemGenreCounts.get(item.id) ?? 0),
+      );
+
+      if (itemsToRefresh.length === 0) {
+        setMessage("Усі ігри вже синхронізовані.");
+        return;
+      }
+
+      let updatedCount = 0;
+
+      for (let index = 0; index < itemsToRefresh.length; index += 1) {
+        const item = itemsToRefresh[index];
+        setMessage(`Оновлення бібліотеки: ${index + 1}/${itemsToRefresh.length}`);
+
+        const detailResponse = await fetch(`/api/rawg/${item.external_id}`);
+        if (!detailResponse.ok) {
+          continue;
+        }
+
+        const detail = (await detailResponse.json()) as {
+          rating?: number | null;
+          released?: string;
+          poster?: string;
+          genres?: string;
+          genreItems?: GameNormalizedGenre[];
+          description?: string;
+          trailers?: Trailer[] | null;
+        };
+
+        const parsedYear = Number.parseInt(detail.released ?? "", 10);
+        const itemUpdatePayload = {
+          poster_url: detail.poster?.trim() ? detail.poster.trim() : item.poster_url ?? null,
+          year: Number.isFinite(parsedYear) ? parsedYear : item.year ?? null,
+          imdb_rating:
+            typeof detail.rating === "number" && Number.isFinite(detail.rating)
+              ? detail.rating.toFixed(1)
+              : item.imdb_rating ?? null,
+          description: detail.description?.trim() ? detail.description.trim() : item.description ?? null,
+          genres: detail.genres?.trim() ? detail.genres.trim() : item.genres ?? null,
+          trailers: normalizeTrailers(detail.trailers ?? null) ?? item.trailers,
+        };
+
+        const { error: updateItemError } = await supabase
+          .from("items")
+          .update(itemUpdatePayload)
+          .eq("id", item.id);
+
+        if (updateItemError) {
+          setMessage("Не вдалося оновити metadata ігор.");
+          return;
+        }
+
+        await syncGameNormalizedGenres(supabase, item.id, detail.genreItems ?? []);
+        updatedCount += 1;
+      }
+
+      setMessage(`Оновлення бібліотеки завершено: ${updatedCount}/${itemsToRefresh.length}.`);
+      showSnackbar("Бібліотеку оновлено");
+      setHasApplied(true);
+      void (async () => {
+        await loadYearBounds();
+        await fetchPage(0, appliedFilters);
+      })();
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "Не вдалося оновити бібліотеку.",
+      );
+    } finally {
+      setIsRefreshingLibraryMetadata(false);
+    }
+  };
+
   const handleDeleteView = async (viewId: string) => {
     const { error } = await supabase.from("user_views").delete().eq("id", viewId);
 
@@ -3017,7 +3176,11 @@ export default function GamesManager({
                   onClick={() => {
                     void handleOpenRecommendRequest();
                   }}
-                  disabled={isGeneratingRecommendations || isPreparingRecommendationRequest}
+                  disabled={
+                    isGeneratingRecommendations ||
+                    isPreparingRecommendationRequest ||
+                    isRefreshingLibraryMetadata
+                  }
                 >
                   {isPreparingRecommendationRequest
                     ? "Готуємо..."
@@ -3027,9 +3190,19 @@ export default function GamesManager({
                 </button>
                 <button
                   type="button"
+                  className={`btnBase btnSecondary ${styles.desktopOnlyAction}`}
+                  onClick={() => {
+                    void handleRefreshLibraryMetadata();
+                  }}
+                  disabled={isGeneratingRecommendations || isRefreshingLibraryMetadata}
+                >
+                  {isRefreshingLibraryMetadata ? "Оновлюємо..." : "Оновити бібліотеку"}
+                </button>
+                <button
+                  type="button"
                   className="btnBase btnPrimary"
                   onClick={() => setIsAddOpen(true)}
-                  disabled={isGeneratingRecommendations}
+                  disabled={isGeneratingRecommendations || isRefreshingLibraryMetadata}
                 >
                   Додати
                 </button>
