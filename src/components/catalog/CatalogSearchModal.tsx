@@ -6,9 +6,15 @@ import CloseIconButton from "@/components/ui/CloseIconButton";
 import listStyles from "@/components/catalog/CatalogSearch.module.css";
 import styles from "./CatalogSearchModal.module.css";
 
+export type CatalogSearchRequest = {
+  query: string;
+  year?: string;
+  director?: string;
+};
+
 type CatalogSearchModalProps<T> = {
   title: string;
-  onSearch: (query: string) => Promise<T[]>;
+  onSearch: (request: CatalogSearchRequest) => Promise<T[]>;
   renderItem: (item: T) => React.ReactNode;
   getKey: (item: T) => string;
   onSelect: (item: T) => void;
@@ -16,6 +22,9 @@ type CatalogSearchModalProps<T> = {
   resultItemClassName?: string;
   getResultItemClassName?: (item: T) => string;
   initialQuery?: string;
+  initialYear?: string;
+  initialDirector?: string;
+  showDetailedSearch?: boolean;
   emptyQueryMessage?: string;
   emptyResultsMessage?: string;
   errorMessage?: string;
@@ -31,6 +40,9 @@ export default function CatalogSearchModal<T>({
   resultItemClassName,
   getResultItemClassName,
   initialQuery,
+  initialYear,
+  initialDirector,
+  showDetailedSearch = false,
   emptyQueryMessage = "Введіть запит для пошуку.",
   emptyResultsMessage = "Нічого не знайдено.",
   errorMessage = "Не вдалося виконати пошук.",
@@ -38,6 +50,8 @@ export default function CatalogSearchModal<T>({
   const [results, setResults] = useState<T[]>([]);
   const [message, setMessage] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
+  const [year, setYear] = useState(initialYear ?? "");
+  const [director, setDirector] = useState(initialDirector ?? "");
 
   const handleSearch = useCallback(
     async (query: string) => {
@@ -52,7 +66,11 @@ export default function CatalogSearchModal<T>({
       setMessage("");
 
       try {
-        const nextResults = await onSearch(trimmed);
+        const nextResults = await onSearch({
+          query: trimmed,
+          year: year.trim() || undefined,
+          director: director.trim() || undefined,
+        });
         setResults(nextResults);
         setMessage(nextResults.length === 0 ? emptyResultsMessage : "");
       } catch (error) {
@@ -64,7 +82,7 @@ export default function CatalogSearchModal<T>({
         setIsLoading(false);
       }
     },
-    [emptyQueryMessage, emptyResultsMessage, errorMessage, onSearch],
+    [director, emptyQueryMessage, emptyResultsMessage, errorMessage, onSearch, year],
   );
 
   useEffect(() => {
@@ -72,6 +90,16 @@ export default function CatalogSearchModal<T>({
     if (!trimmed) return;
     void handleSearch(trimmed);
   }, [initialQuery, handleSearch]);
+
+  useEffect(() => {
+    if (initialYear === undefined) return;
+    setYear(initialYear);
+  }, [initialYear]);
+
+  useEffect(() => {
+    if (initialDirector === undefined) return;
+    setDirector(initialDirector);
+  }, [initialDirector]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -93,8 +121,39 @@ export default function CatalogSearchModal<T>({
             onSearch={handleSearch}
             isLoading={isLoading}
             initialValue={initialQuery}
+            label={showDetailedSearch ? "Назва" : undefined}
+            placeholder={showDetailedSearch ? "Назва" : undefined}
             autoFocus
-          />
+          >
+            {showDetailedSearch ? (
+              <div className={styles.advancedSearch}>
+                <div className={styles.advancedFields}>
+                  <label className={styles.advancedField}>
+                    <span className={styles.advancedLabel}>Рік</span>
+                    <input
+                      className={styles.advancedInput}
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={4}
+                      placeholder="Наприклад 2021"
+                      value={year}
+                      onChange={(event) => setYear(event.target.value)}
+                    />
+                  </label>
+                  <label className={styles.advancedField}>
+                    <span className={styles.advancedLabel}>Режисер</span>
+                    <input
+                      className={styles.advancedInput}
+                      type="text"
+                      placeholder="Наприклад Nolan"
+                      value={director}
+                      onChange={(event) => setDirector(event.target.value)}
+                    />
+                  </label>
+                </div>
+              </div>
+            ) : null}
+          </Search>
           {message ? <p className={listStyles.message}>{message}</p> : null}
           <div className={`${listStyles.results} ${styles.results}`}>
             {results.map((item) => (

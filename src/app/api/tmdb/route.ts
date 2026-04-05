@@ -40,9 +40,17 @@ type TmdbGenreList = {
   genres?: Array<{ id: number; name: string }>;
 };
 
+const normalizeSearchValue = (value?: string | null) =>
+  value
+    ?.toLocaleLowerCase("uk-UA")
+    .replace(/\s+/g, " ")
+    .trim() ?? "";
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("q")?.trim();
+  const year = searchParams.get("year")?.trim() ?? "";
+  const directorQuery = searchParams.get("director")?.trim() ?? "";
 
   if (!query) {
     return NextResponse.json(
@@ -61,32 +69,49 @@ export async function GET(request: Request) {
     );
   }
 
-  const searchUrl = new URL("https://api.themoviedb.org/3/search/multi");
-  searchUrl.searchParams.set("query", query);
-  searchUrl.searchParams.set("include_adult", "false");
-  searchUrl.searchParams.set("language", "uk-UA");
-  searchUrl.searchParams.set("region", "UA");
-  if (apiKey) {
-    searchUrl.searchParams.set("api_key", apiKey);
-  }
+  const searchTmdb = async (searchQuery: string) => {
+    const searchUrl = new URL("https://api.themoviedb.org/3/search/multi");
+    searchUrl.searchParams.set("query", searchQuery);
+    searchUrl.searchParams.set("include_adult", "false");
+    searchUrl.searchParams.set("language", "uk-UA");
+    searchUrl.searchParams.set("region", "UA");
+    if (apiKey) {
+      searchUrl.searchParams.set("api_key", apiKey);
+    }
 
-  const response = await fetch(searchUrl.toString(), {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
-  const data = (await response.json()) as
-    | { results?: TmdbMovie[] }
-    | { status_message?: string };
+    const response = await fetch(searchUrl.toString(), {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    const data = (await response.json()) as
+      | { results?: TmdbMovie[] }
+      | { status_message?: string };
 
-  if (!response.ok) {
+    if (!response.ok) {
+      throw new Error(
+        "status_message" in data && data.status_message
+          ? data.status_message
+          : "TMDB error.",
+      );
+    }
+
+    return (data as { results?: TmdbMovie[] }).results ?? [];
+  };
+
+  const searchQueries = Array.from(
+    new Set([query, year ? `${query} ${year}` : ""].filter(Boolean)),
+  );
+
+  let rawResults: TmdbMovie[];
+  try {
+    const searchResponses = await Promise.all(searchQueries.map((item) => searchTmdb(item)));
+    rawResults = searchResponses.flat();
+  } catch (error) {
     return NextResponse.json(
       {
         results: [],
-        error:
-          "status_message" in data && data.status_message
-            ? data.status_message
-            : "TMDB error.",
+        error: error instanceof Error ? error.message : "TMDB error.",
       },
-      { status: response.status },
+      { status: 500 },
     );
   }
 
@@ -224,17 +249,20 @@ export async function GET(request: Request) {
     }
   };
 
-  const payload = data as { results?: TmdbMovie[] };
-  const mediaResults = (payload.results ?? []).filter(
+  const mediaResults = rawResults.filter(
     (item): item is TmdbMovie & { media_type: "movie" | "tv" } =>
       item.media_type === "movie" || item.media_type === "tv",
+  );
+  const uniqueMediaResults = Array.from(
+    new Map(mediaResults.map((item) => [`${item.media_type}:${item.id}`, item])).values(),
   );
   const [movieGenreMap, tvGenreMap] = await Promise.all([
     fetchGenreMap("movie"),
     fetchGenreMap("tv"),
   ]);
+  const normalizedDirectorQuery = normalizeSearchValue(directorQuery);
   const results = await Promise.all(
-    mediaResults.map(async (item) => {
+    uniqueMediaResults.map(async (item) => {
       const { director, actors, people } = await fetchCredits(item.id, item.media_type);
       const genreMap = item.media_type === "movie" ? movieGenreMap : tvGenreMap;
       const genreItems = (item.genre_ids ?? [])
@@ -276,6 +304,37 @@ export async function GET(request: Request) {
       };
     }),
   );
+
+  results.sort((left, right) => {
+    const leftDirector = normalizeSearchValue(left.director);
+    const rightDirector = normalizeSearchValue(right.director);
+    const leftScore =
+      (year && left.year === year ? 8 : 0) +
+      (normalizedDirectorQuery &&
+      leftDirector &&
+      (leftDirector.includes(normalizedDirectorQuery) ||
+        normalizedDirectorQuery.includes(leftDirector))
+        ? 6
+        : 0);
+    const rightScore =
+      (year && right.year === year ? 8 : 0) +
+      (normalizedDirectorQuery &&
+      rightDirector &&
+      (rightDirector.includes(normalizedDirectorQuery) ||
+        normalizedDirectorQuery.includes(rightDirector))
+        ? 6
+        : 0);
+
+    if (rightScore !== leftScore) {
+      return rightScore - leftScore;
+    }
+
+    const leftYear = Number.parseInt(left.year, 10);
+    const rightYear = Number.parseInt(right.year, 10);
+    const safeLeftYear = Number.isNaN(leftYear) ? -Infinity : leftYear;
+    const safeRightYear = Number.isNaN(rightYear) ? -Infinity : rightYear;
+    return safeRightYear - safeLeftYear;
+  });
 
   return NextResponse.json({ results });
 }

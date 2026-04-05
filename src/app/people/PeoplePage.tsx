@@ -90,6 +90,7 @@ export default function PeoplePage() {
           <input
             className={styles.searchInput}
             type="search"
+            autoFocus
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Наприклад: Cillian Murphy"

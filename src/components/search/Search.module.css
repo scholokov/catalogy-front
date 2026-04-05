@@ -2,6 +2,13 @@
   width: 100%;
 }
 
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
 .label {
   display: block;
   margin-bottom: 8px;
@@ -38,4 +45,3 @@
     opacity: 0.85;
   }
 }
-

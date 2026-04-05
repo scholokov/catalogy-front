@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import SearchInput from "./SearchInput";
 import styles from "./Search.module.css";
 
@@ -15,6 +15,7 @@ type SearchProps = {
   onButtonClick?: () => void;
   initialValue?: string;
   autoFocus?: boolean;
+  children?: ReactNode;
 };
 
 export default function Search({
@@ -28,6 +29,7 @@ export default function Search({
   onButtonClick,
   initialValue,
   autoFocus = false,
+  children,
 }: SearchProps) {
   const inputId = useId();
   const [value, setValue] = useState(initialValue ?? "");
@@ -56,25 +58,28 @@ export default function Search({
           {label}
         </label>
       ) : null}
-      <form className={styles.row} onSubmit={handleSubmit}>
-        <SearchInput
-          id={inputId}
-          placeholder={placeholder}
-          ariaLabel={label || placeholder}
-          autoFocus={autoFocus}
-          value={value}
-          onChange={setValue}
-        />
-        {showButton ? (
-          <button
-            className={`${styles.button} btnPrimary`}
-            type={mode === "submit" ? "submit" : "button"}
-            disabled={isLoading}
-            onClick={mode === "submit" ? undefined : onButtonClick}
-          >
-            {isLoading && mode === "submit" ? "Шукаємо..." : buttonLabel}
-          </button>
-        ) : null}
+      <form className={styles.form} onSubmit={handleSubmit}>
+        <div className={styles.row}>
+          <SearchInput
+            id={inputId}
+            placeholder={placeholder}
+            ariaLabel={label || placeholder}
+            autoFocus={autoFocus}
+            value={value}
+            onChange={setValue}
+          />
+          {showButton ? (
+            <button
+              className={`${styles.button} btnPrimary`}
+              type={mode === "submit" ? "submit" : "button"}
+              disabled={isLoading}
+              onClick={mode === "submit" ? undefined : onButtonClick}
+            >
+              {isLoading && mode === "submit" ? "Шукаємо..." : buttonLabel}
+            </button>
+          ) : null}
+        </div>
+        {children}
       </form>
     </div>
   );

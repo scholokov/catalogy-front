@@ -13,7 +13,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { Range, getTrackBackground } from "react-range";
 import CatalogModal from "@/components/catalog/CatalogModal";
-import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
+import CatalogSearchModal, {
+  type CatalogSearchRequest,
+} from "@/components/catalog/CatalogSearchModal";
 import FilmMetadataContent from "@/components/films/FilmMetadataContent";
 import TrailerViewerModal from "@/components/films/TrailerViewerModal";
 import PersonHoverLink from "@/components/people/PersonHoverLink";
@@ -269,6 +271,12 @@ const formatPersonalRating = (value: number | null) => {
   if (value === null) return "—";
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 };
+
+const normalizeSearchValue = (value?: string | null) =>
+  value
+    ?.toLocaleLowerCase("uk-UA")
+    .replace(/\s+/g, " ")
+    .trim() ?? "";
 
 const normalizePipeList = (value?: string | null) => {
   if (!value) return [];
@@ -1528,7 +1536,7 @@ export default function FilmsManager({
     recommendation: AiRecommendation,
     requestedMediaType: "movie" | "tv",
   ) => {
-    const searchResults = await handleTmdbSearch(recommendation.title);
+    const searchResults = await handleTmdbSearch({ query: recommendation.title });
     if (searchResults.length === 0) {
       return null;
     }
@@ -1785,6 +1793,13 @@ export default function FilmsManager({
     const normalizedQuery = toolbarQueryDraft.trim();
     setAppliedFilters((prev) => ({ ...prev, query: normalizedQuery }));
     setPendingFilters((prev) => ({ ...prev, query: normalizedQuery }));
+    setHasApplied(true);
+  };
+
+  const clearToolbarQuery = () => {
+    setToolbarQueryDraft("");
+    setAppliedFilters((prev) => ({ ...prev, query: "" }));
+    setPendingFilters((prev) => ({ ...prev, query: "" }));
     setHasApplied(true);
   };
 
@@ -2523,7 +2538,7 @@ export default function FilmsManager({
   const handleRefreshSelectedFilmMetadata = async () => {
     if (!selectedView) return;
     const query = selectedView.items.title.trim();
-    const results = await handleFilmSearch(query);
+    const results = await handleFilmSearch({ query });
     if (results.length === 0) {
       throw new Error("Не знайдено збіг у TMDB.");
     }
@@ -2583,8 +2598,19 @@ export default function FilmsManager({
     setMessage("Додано до твоєї колекції.");
   };
 
-  const handleTmdbSearch = async (query: string) => {
-    const response = await fetch(`/api/tmdb?q=${encodeURIComponent(query)}`);
+  const handleTmdbSearch = async ({ query, year, director }: CatalogSearchRequest) => {
+    const searchParams = new URLSearchParams({
+      q: query,
+    });
+    const trimmedYear = year?.trim();
+    const trimmedDirector = director?.trim();
+    if (trimmedYear) {
+      searchParams.set("year", trimmedYear);
+    }
+    if (trimmedDirector) {
+      searchParams.set("director", trimmedDirector);
+    }
+    const response = await fetch(`/api/tmdb?${searchParams.toString()}`);
     const data = (await response.json()) as {
       results?: FilmResult[];
       error?: string;
@@ -2627,8 +2653,10 @@ export default function FilmsManager({
     setOverflowDescriptions(next);
   }, [expandedDescriptions, collection]);
 
-  const handleFilmSearch = async (query: string) => {
-    const tmdbResults = await handleTmdbSearch(query);
+  const handleFilmSearch = async ({ query, year, director }: CatalogSearchRequest) => {
+    const normalizedDirector = normalizeSearchValue(director);
+    const normalizedYear = year?.trim() ?? "";
+    const tmdbResults = await handleTmdbSearch({ query, year, director });
     return tmdbResults
       .map((item) => {
         const existingView = existingViewsByExternalId.get(
@@ -2641,6 +2669,27 @@ export default function FilmsManager({
         };
       })
       .sort((left, right) => {
+        const leftDirector = normalizeSearchValue(left.director);
+        const rightDirector = normalizeSearchValue(right.director);
+        const leftScore =
+          (normalizedYear && left.year === normalizedYear ? 8 : 0) +
+          (normalizedDirector &&
+          leftDirector &&
+          (leftDirector.includes(normalizedDirector) ||
+            normalizedDirector.includes(leftDirector))
+            ? 6
+            : 0);
+        const rightScore =
+          (normalizedYear && right.year === normalizedYear ? 8 : 0) +
+          (normalizedDirector &&
+          rightDirector &&
+          (rightDirector.includes(normalizedDirector) ||
+            normalizedDirector.includes(rightDirector))
+            ? 6
+            : 0);
+        if (rightScore !== leftScore) {
+          return rightScore - leftScore;
+        }
         const leftYear = Number.parseInt(left.year, 10);
         const rightYear = Number.parseInt(right.year, 10);
         const safeLeftYear = Number.isNaN(leftYear) ? -Infinity : leftYear;
@@ -2944,6 +2993,16 @@ export default function FilmsManager({
                     }
                   }}
                 />
+                {toolbarQueryDraft ? (
+                  <button
+                    type="button"
+                    className={styles.toolbarSearchClear}
+                    onClick={clearToolbarQuery}
+                    aria-label="Очистити пошук"
+                  >
+                    ×
+                  </button>
+                ) : null}
               </div>
               <div
                 ref={sortMenuRef}
@@ -3825,6 +3884,7 @@ export default function FilmsManager({
             film.inCollection ? styles.existingCollectionResult : ""
           }
           initialQuery={appliedFilters.query}
+          showDetailedSearch
           onSelect={async (film) => {
             if (film.existingViewId) {
               const existingView =

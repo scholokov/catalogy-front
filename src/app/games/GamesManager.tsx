@@ -12,7 +12,9 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { Range, getTrackBackground } from "react-range";
-import CatalogSearchModal from "@/components/catalog/CatalogSearchModal";
+import CatalogSearchModal, {
+  type CatalogSearchRequest,
+} from "@/components/catalog/CatalogSearchModal";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
 import RecommendationRequestModal, {
@@ -1277,6 +1279,13 @@ export default function GamesManager({
     setHasApplied(true);
   };
 
+  const clearToolbarQuery = () => {
+    setToolbarQueryDraft("");
+    setAppliedFilters((prev) => ({ ...prev, query: "" }));
+    setPendingFilters((prev) => ({ ...prev, query: "" }));
+    setHasApplied(true);
+  };
+
   const handleSortButtonClick = () => {
     if (typeof window === "undefined") return;
     const isMobile = window.matchMedia("(max-width: 779px)").matches;
@@ -1589,7 +1598,7 @@ export default function GamesManager({
       return null;
     }
 
-    const searchResults = await handleGameSearch(recommendation.title);
+    const searchResults = await handleGameSearch({ query: recommendation.title });
     if (searchResults.length === 0) {
       return null;
     }
@@ -2399,7 +2408,7 @@ export default function GamesManager({
   const handleRefreshSelectedGameMetadata = async () => {
     if (!selectedView) return;
     const query = selectedView.items.title.trim();
-    const results = await handleGameSearch(query);
+    const results = await handleGameSearch({ query });
     if (results.length === 0) {
       throw new Error("Не знайдено збіг.");
     }
@@ -2460,7 +2469,7 @@ export default function GamesManager({
   };
 
   const handleGameSearch = useCallback(
-    async (query: string) => {
+    async ({ query }: CatalogSearchRequest) => {
       const response = await fetch(`/api/rawg?q=${encodeURIComponent(query)}`);
       const data = (await response.json()) as {
         results?: GameResult[];
@@ -2558,8 +2567,8 @@ export default function GamesManager({
   };
 
   const handleRefreshGameSearch = useCallback(
-    async (query: string) => {
-      const results = await handleGameSearch(query);
+    async ({ query }: CatalogSearchRequest) => {
+      const results = await handleGameSearch({ query });
       const currentExternalId = selectedView?.items.external_id ?? null;
       if (!currentExternalId) {
         return results.map((item) => ({ ...item, isRefreshCurrent: false }));
@@ -2875,6 +2884,16 @@ export default function GamesManager({
                     }
                   }}
                 />
+                {toolbarQueryDraft ? (
+                  <button
+                    type="button"
+                    className={styles.toolbarSearchClear}
+                    onClick={clearToolbarQuery}
+                    aria-label="Очистити пошук"
+                  >
+                    ×
+                  </button>
+                ) : null}
               </div>
               <div
                 ref={sortMenuRef}
