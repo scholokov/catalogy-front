@@ -34,12 +34,7 @@ import {
   summarizeFilmPeople,
   updateFilmView as updateFilmViewMutation,
 } from "@/lib/films/collectionFlow";
-import {
-  syncFilmNormalizedMetadata,
-  type FilmNormalizedGenre,
-  type FilmNormalizedPerson,
-} from "@/lib/films/normalizedMetadata";
-import { loadRelatedItemCounts } from "@/lib/metadataRefresh/relatedItemIds";
+import { type FilmNormalizedGenre, type FilmNormalizedPerson } from "@/lib/films/normalizedMetadata";
 import { loadStoredGenresForItem } from "@/lib/films/storedGenres";
 import { loadStoredPeopleForItem } from "@/lib/films/storedPeople";
 import type { FilmLlmExportRow } from "@/app/statistics/filmLlmCsv";
@@ -532,8 +527,6 @@ export default function FilmsManager({
     null,
   );
   const [defaultFilmIsViewed, setDefaultFilmIsViewed] = useState<boolean | null>(null);
-  const [isRefreshingLibraryMetadata, setIsRefreshingLibraryMetadata] = useState(false);
-
   useEffect(() => {
     const applyPreferences = () => {
       const prefs = readDisplayPreferences();
@@ -1463,22 +1456,6 @@ export default function FilmsManager({
     }, {});
   };
 
-  const syncItemRelationsFromMetadata = async (
-    itemId: string,
-    metadata: {
-      people?: FilmNormalizedPerson[] | null;
-      genres?: FilmNormalizedGenre[] | null;
-    },
-  ) => {
-    if (!metadata.people && !metadata.genres) {
-      return;
-    }
-    await syncFilmNormalizedMetadata(supabase, itemId, {
-      people: metadata.people,
-      genres: metadata.genres,
-    });
-  };
-
   const getFilmRecommendationOptions = (rows: FilmLlmExportRow[]): RecommendationRequestOption[] => {
     const mediaTypes: Array<{ value: "movie" | "tv"; label: string }> = [
       { value: "movie", label: "Кіно" },
@@ -2126,6 +2103,33 @@ export default function FilmsManager({
     }, 900);
   };
 
+  const renderCopyableFilmTitle = (
+    value: string | null | undefined,
+    label: "оригінальну" | "англійську",
+  ) => {
+    const resolvedValue = value?.trim();
+    if (!resolvedValue) {
+      return null;
+    }
+
+    return (
+      <button
+        type="button"
+        className={`${styles.copyableInlineButton} ${
+          isCopyTooltipSuppressed ? styles.copyTooltipHidden : ""
+        }`}
+        onClick={() => {
+          suppressCopyTooltip();
+          void copyText(resolvedValue);
+        }}
+        data-copy-tooltip="Клікніть для копіювання"
+        aria-label={`Скопіювати ${label} назву: ${resolvedValue}`}
+      >
+        {resolvedValue}
+      </button>
+    );
+  };
+
   const selectPreferredTrailer = (trailers?: Trailer[] | null) => {
     if (!trailers || trailers.length === 0) return null;
     const officialTrailer = trailers.find(
@@ -2150,6 +2154,34 @@ export default function FilmsManager({
       aria-hidden="true"
     >
       <path d="m380-300 280-180-280-180v360ZM480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z" />
+    </svg>
+  );
+
+  const addIcon = (
+    <svg
+      className={styles.toolbarIcon}
+      xmlns="http://www.w3.org/2000/svg"
+      height="24px"
+      viewBox="0 -960 960 960"
+      width="24px"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M280-160v-441q0-33 24-56t57-23h439q33 0 56.5 23.5T880-600v320L680-80H360q-33 0-56.5-23.5T280-160ZM81-710q-6-33 13-59.5t52-32.5l434-77q33-6 59.5 13t32.5 52l10 54h-82l-7-40-433 77 40 226v279q-16-9-27.5-24T158-276L81-710Zm279 110v440h280l160-160v-280H360Zm220 220Zm-40 160h80v-120h120v-80H620v-120h-80v120H420v80h120v120Z" />
+    </svg>
+  );
+
+  const recommendIcon = (
+    <svg
+      className={styles.toolbarIcon}
+      xmlns="http://www.w3.org/2000/svg"
+      height="24px"
+      viewBox="0 -960 960 960"
+      width="24px"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M240-40v-329L110-580l185-300h370l185 300-130 211v329l-240-80-240 80Zm80-111 160-53 160 53v-129H320v129Zm20-649L204-580l136 220h280l136-220-136-220H340Zm98 383L296-558l57-57 85 85 169-170 57 56-226 227ZM320-280h320-320Z" />
     </svg>
   );
 
@@ -2501,164 +2533,6 @@ export default function FilmsManager({
     }
     setRefreshSearchQuery(query);
     setIsRefreshPickerOpen(true);
-  };
-
-  const handleRefreshLibraryMetadata = async () => {
-    if (readOnly) return;
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      setMessage("Потрібна авторизація.");
-      return;
-    }
-
-    setIsRefreshingLibraryMetadata(true);
-    setMessage("Починаємо оновлення бібліотеки…");
-
-    try {
-      const pageSize = 200;
-      let from = 0;
-      const libraryItems: Array<FilmCollectionItem["items"]> = [];
-
-      while (true) {
-        const { data, error } = await supabase
-          .from("user_views")
-          .select(
-            "items:items!inner(id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, film_media_type, imdb_rating, trailers, year, type)",
-          )
-          .eq("user_id", user.id)
-          .eq("items.type", "film")
-          .range(from, from + pageSize - 1);
-
-        if (error) {
-          setMessage("Не вдалося підготувати бібліотеку до оновлення.");
-          return;
-        }
-
-        const chunk = ((data ?? []) as Array<{
-          items: FilmCollectionItem["items"] | FilmCollectionItem["items"][];
-        }>)
-          .map((row) => (Array.isArray(row.items) ? row.items[0] : row.items))
-          .filter(Boolean);
-
-        libraryItems.push(...chunk);
-
-        if (chunk.length < pageSize) {
-          break;
-        }
-
-        from += pageSize;
-      }
-
-      const dedupedItems = Array.from(
-        new Map(libraryItems.map((item) => [item.id, item])).values(),
-      );
-
-      if (dedupedItems.length === 0) {
-        setMessage("Бібліотека порожня.");
-        return;
-      }
-
-      const itemIds = dedupedItems.map((item) => item.id);
-      let itemGenreCounts: Map<string, number>;
-      try {
-        itemGenreCounts = await loadRelatedItemCounts(supabase, "item_genres", itemIds);
-      } catch {
-        setMessage("Не вдалося визначити, які фільми потребують оновлення.");
-        return;
-      }
-      const itemsToRefresh = dedupedItems.filter(
-        (item) =>
-          Boolean(item.external_id) &&
-          normalizePipeList(item.genres).length > (itemGenreCounts.get(item.id) ?? 0),
-      );
-
-      if (itemsToRefresh.length === 0) {
-        setMessage("Усі фільми вже синхронізовані.");
-        return;
-      }
-
-      let updatedCount = 0;
-
-      for (let index = 0; index < itemsToRefresh.length; index += 1) {
-        const item = itemsToRefresh[index];
-        setMessage(`Оновлення бібліотеки: ${index + 1}/${itemsToRefresh.length}`);
-
-        const detailResponse = await fetch(
-          `/api/tmdb/${item.external_id}?mediaType=${item.film_media_type ?? "movie"}`,
-        );
-
-        if (!detailResponse.ok) {
-          continue;
-        }
-
-        const detail = (await detailResponse.json()) as FilmResult;
-        const parsedYear = Number.parseInt(detail.year ?? "", 10);
-        const titleUk = normalizeTitle(detail.title) ?? item.title_uk ?? normalizeTitle(item.title);
-        const titleOriginal =
-          normalizeTitle(detail.originalTitle) ??
-          item.title_original ??
-          normalizeTitle(item.title);
-        const titleEn = normalizeEnglishTitle(detail.englishTitle, titleOriginal);
-        const trailers = normalizeTrailers(detail.trailers ?? null) ?? item.trailers;
-        const peopleSummary = summarizeFilmPeople(detail.people ?? null);
-
-        const itemUpdatePayload = {
-          title: titleUk ?? titleEn ?? titleOriginal ?? item.title,
-          title_uk: titleUk ?? null,
-          title_en: titleEn,
-          title_original: titleOriginal,
-          poster_url: detail.poster?.trim() ? detail.poster.trim() : item.poster_url ?? null,
-          year: Number.isFinite(parsedYear) ? parsedYear : item.year ?? null,
-          imdb_rating: detail.imdbRating?.trim()
-            ? detail.imdbRating.trim()
-            : item.imdb_rating ?? null,
-          description: detail.plot?.trim() ? detail.plot.trim() : item.description ?? null,
-          genres: detail.genres?.trim() ? detail.genres.trim() : item.genres ?? null,
-          director:
-            peopleSummary.director ??
-            (detail.director?.trim() ? detail.director.trim() : item.director ?? null),
-          actors:
-            peopleSummary.actors ??
-            (detail.actors?.trim() ? detail.actors.trim() : item.actors ?? null),
-          external_id: detail.id,
-          film_media_type:
-            normalizeFilmMediaType(detail.mediaType ?? item.film_media_type) ?? "movie",
-          trailers: trailers ?? null,
-        };
-
-        const { error: updateItemError } = await supabase
-          .from("items")
-          .update(itemUpdatePayload)
-          .eq("id", item.id);
-
-        if (updateItemError) {
-          setMessage("Не вдалося оновити metadata фільмів.");
-          return;
-        }
-
-        await syncItemRelationsFromMetadata(item.id, {
-          people: detail.people ?? null,
-          genres: detail.genreItems ?? null,
-        });
-
-        updatedCount += 1;
-      }
-
-      setMessage(`Оновлення бібліотеки завершено: ${updatedCount}/${itemsToRefresh.length}.`);
-      showSnackbar("Бібліотеку оновлено");
-      setHasApplied(true);
-      void fetchPage(0, appliedFilters);
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Не вдалося оновити бібліотеку.",
-      );
-    } finally {
-      setIsRefreshingLibraryMetadata(false);
-    }
   };
 
   const handleDeleteView = async (viewId: string) => {
@@ -3251,8 +3125,7 @@ export default function FilmsManager({
                   }}
                   disabled={
                     isGeneratingRecommendations ||
-                    isPreparingRecommendationRequest ||
-                    isRefreshingLibraryMetadata
+                    isPreparingRecommendationRequest
                   }
                 >
                   {isPreparingRecommendationRequest
@@ -3263,21 +3136,34 @@ export default function FilmsManager({
                 </button>
                 <button
                   type="button"
-                  className={`btnBase btnSecondary ${styles.desktopOnlyAction}`}
+                  className={`btnBase btnSecondary ${styles.mobileOnlyAction} ${styles.toolbarIconButton}`}
                   onClick={() => {
-                    void handleRefreshLibraryMetadata();
+                    void handleOpenRecommendRequest();
                   }}
-                  disabled={isGeneratingRecommendations || isRefreshingLibraryMetadata}
+                  disabled={
+                    isGeneratingRecommendations ||
+                    isPreparingRecommendationRequest
+                  }
+                  aria-label="Рекомендувати"
                 >
-                  {isRefreshingLibraryMetadata ? "Оновлюємо..." : "Оновити бібліотеку"}
+                  {recommendIcon}
                 </button>
                 <button
                   type="button"
-                  className="btnBase btnPrimary"
+                  className={`btnBase btnPrimary ${styles.desktopOnlyAction}`}
                   onClick={() => setIsAddOpen(true)}
-                  disabled={isGeneratingRecommendations || isRefreshingLibraryMetadata}
+                  disabled={isGeneratingRecommendations}
                 >
                   Додати
+                </button>
+                <button
+                  type="button"
+                  className={`btnBase btnPrimary ${styles.mobileOnlyAction} ${styles.toolbarIconButton}`}
+                  onClick={() => setIsAddOpen(true)}
+                  disabled={isGeneratingRecommendations}
+                  aria-label="Додати фільм"
+                >
+                  {addIcon}
                 </button>
               </>
             ) : null}
@@ -4083,6 +3969,7 @@ export default function FilmsManager({
           posterUrl={selectedFilm.poster}
           imageUrls={selectedFilm.imageUrls}
           size="wide"
+          showRecommendSimilar={false}
           onClose={() => {
             setSelectedFilm(null);
             setAiRecommendationComment("");
@@ -4106,25 +3993,12 @@ export default function FilmsManager({
             imdbRating={selectedFilm.imdbRating}
             year={selectedFilm.year}
             mediaType={selectedFilm.mediaType}
-            originalTitle={
-              selectedFilm.originalTitle ? (
-                <button
-                  type="button"
-                  className={`${styles.copyableInlineButton} ${
-                    isCopyTooltipSuppressed ? styles.copyTooltipHidden : ""
-                  }`}
-                  onClick={() => {
-                    suppressCopyTooltip();
-                    void copyText(selectedFilm.originalTitle ?? "");
-                  }}
-                  data-copy-tooltip="Клікніть для копіювання"
-                  aria-label={`Скопіювати оригінальну назву: ${selectedFilm.originalTitle}`}
-                >
-                  {selectedFilm.originalTitle}
-                </button>
-              ) : null
+            originalTitle={renderCopyableFilmTitle(selectedFilm.originalTitle, "оригінальну")}
+            englishTitle={renderCopyableFilmTitle(selectedFilm.englishTitle, "англійську")}
+            showEnglishTitle={
+              Boolean(selectedFilm.englishTitle?.trim()) &&
+              selectedFilm.englishTitle?.trim() !== selectedFilm.originalTitle?.trim()
             }
-            englishTitle={selectedFilm.englishTitle}
             director={renderDirectorLinks(selectedFilm.people) ?? selectedFilm.director}
             writers={renderWriterLinks(selectedFilm.people)}
             producers={renderProducerLinks(selectedFilm.people)}
@@ -4202,29 +4076,19 @@ export default function FilmsManager({
             personalRating={formatPersonalRating(selectedView.rating)}
             year={selectedViewItemDraft?.year ?? selectedView.items.year}
             mediaType={selectedViewItemDraft?.film_media_type ?? selectedView.items.film_media_type}
-            originalTitle={
-              selectedViewItemDraft?.title_original ?? selectedView.items.title_original ? (
-                <button
-                  type="button"
-                  className={`${styles.copyableInlineButton} ${
-                    isCopyTooltipSuppressed ? styles.copyTooltipHidden : ""
-                  }`}
-                  onClick={() => {
-                    suppressCopyTooltip();
-                    void copyText(
-                      selectedViewItemDraft?.title_original ??
-                        selectedView.items.title_original ??
-                        "",
-                    );
-                  }}
-                  data-copy-tooltip="Клікніть для копіювання"
-                  aria-label={`Скопіювати оригінальну назву: ${selectedViewItemDraft?.title_original ?? selectedView.items.title_original ?? ""}`}
-                >
-                  {selectedViewItemDraft?.title_original ?? selectedView.items.title_original}
-                </button>
-              ) : null
+            originalTitle={renderCopyableFilmTitle(
+              selectedViewItemDraft?.title_original ?? selectedView.items.title_original,
+              "оригінальну",
+            )}
+            englishTitle={renderCopyableFilmTitle(
+              selectedViewItemDraft?.title_en ?? selectedView.items.title_en,
+              "англійську",
+            )}
+            showEnglishTitle={
+              Boolean((selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim()) &&
+              (selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim() !==
+                (selectedViewItemDraft?.title_original ?? selectedView.items.title_original)?.trim()
             }
-            englishTitle={selectedViewItemDraft?.title_en ?? selectedView.items.title_en}
             director={
               renderDirectorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
               (selectedViewItemDraft?.director ?? selectedView.items.director)

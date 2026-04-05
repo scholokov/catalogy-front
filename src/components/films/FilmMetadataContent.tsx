@@ -73,7 +73,8 @@ type FilmMetadataContentProps = {
   year?: string | number | null;
   mediaType?: string | null;
   originalTitle?: ReactNode | null;
-  englishTitle?: string | null;
+  englishTitle?: ReactNode | null;
+  showEnglishTitle?: boolean;
   director?: ReactNode | null;
   writers?: ReactNode | null;
   producers?: ReactNode | null;
@@ -90,6 +91,7 @@ export default function FilmMetadataContent({
   mediaType,
   originalTitle,
   englishTitle,
+  showEnglishTitle,
   director,
   writers,
   producers,
@@ -103,12 +105,11 @@ export default function FilmMetadataContent({
 
   const resolvedOriginalTitle =
     typeof originalTitle === "string" ? originalTitle.trim() : originalTitle;
+  const resolvedEnglishTitle =
+    typeof englishTitle === "string" ? englishTitle.trim() : englishTitle;
   const resolvedGenres = typeof genres === "string" ? genres.trim() : genres;
 
-  const shouldShowEnglishTitle =
-    Boolean(englishTitle) &&
-    Boolean(resolvedOriginalTitle) &&
-    englishTitle !== resolvedOriginalTitle;
+  const shouldShowEnglishTitle = showEnglishTitle ?? Boolean(resolvedEnglishTitle);
 
   return (
     <div className={styles.resultContent}>
@@ -122,7 +123,7 @@ export default function FilmMetadataContent({
         <p className={styles.resultMeta}>Оригінальна назва: {resolvedOriginalTitle}</p>
       ) : null}
       {shouldShowEnglishTitle ? (
-        <p className={styles.resultMeta}>Англійська назва: {englishTitle}</p>
+        <p className={styles.resultMeta}>Англійська назва: {resolvedEnglishTitle}</p>
       ) : null}
       {resolvedYear ? <p className={styles.resultMeta}>Рік: {resolvedYear}</p> : null}
       <p className={styles.resultMeta}>Тип: {formatFilmMediaType(mediaType)}</p>

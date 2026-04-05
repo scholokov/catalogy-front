@@ -734,6 +734,7 @@ export default function GameGenreDetailPage({
               setSelectedExistingGame(null);
             }}
             size="wide"
+            showRecommendSimilar={false}
             availabilityOptions={AVAILABILITY_OPTIONS}
             platformOptions={GAME_PLATFORM_OPTIONS}
             onAdd={handleUpdateSelectedGame}

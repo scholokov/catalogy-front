@@ -194,6 +194,25 @@
   display: inline-flex;
 }
 
+.mobileOnlyAction {
+  display: none;
+}
+
+.toolbarIconButton {
+  width: 44px;
+  padding: 0;
+  justify-content: center;
+}
+
+.toolbarIcon {
+  display: block;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  flex: 0 0 24px;
+}
+
 .filmsToolbar .toolbarActions {
   grid-column: 4;
   justify-content: flex-end;
@@ -1168,6 +1187,10 @@
 @media (max-width: 900px) {
   .desktopOnlyAction {
     display: none;
+  }
+
+  .mobileOnlyAction {
+    display: inline-flex;
   }
 }
 

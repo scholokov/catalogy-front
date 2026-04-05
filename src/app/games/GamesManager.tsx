@@ -23,13 +23,11 @@ import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import { supabase } from "@/lib/supabase/client";
 import { buildGenreHref } from "@/lib/genres/routes";
 import {
-  syncGameNormalizedGenres,
   type GameNormalizedGenre,
   trySyncGameNormalizedGenres,
 } from "@/lib/games/normalizedMetadata";
 import { normalizeGamePlatforms } from "@/lib/games/platforms";
 import { loadStoredGameGenresForItem } from "@/lib/games/storedGenres";
-import { loadRelatedItemCounts } from "@/lib/metadataRefresh/relatedItemIds";
 import {
   DEFAULT_GAME_PLATFORM_OPTIONS,
   readDisplayPreferences,
@@ -139,20 +137,6 @@ type GamesManagerProps = {
   onCountChange?: (count: number) => void;
   ownerUserId?: string;
   readOnly?: boolean;
-};
-
-const normalizeGenreList = (value?: string | null) => {
-  if (!value) return [];
-  const unique = new Set<string>();
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .filter((entry) => {
-      if (unique.has(entry)) return false;
-      unique.add(entry);
-      return true;
-    });
 };
 
 type Filters = {
@@ -414,7 +398,6 @@ export default function GamesManager({
   const [isLoading, setIsLoading] = useState(false);
   const [isGeneratingRecommendations, setIsGeneratingRecommendations] = useState(false);
   const [isPreparingRecommendationRequest, setIsPreparingRecommendationRequest] = useState(false);
-  const [isRefreshingLibraryMetadata, setIsRefreshingLibraryMetadata] = useState(false);
   const [isPreviewingRecommendationPrompt, setIsPreviewingRecommendationPrompt] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -1920,6 +1903,34 @@ export default function GamesManager({
     </svg>
   );
 
+  const addIcon = (
+    <svg
+      className={styles.toolbarIcon}
+      xmlns="http://www.w3.org/2000/svg"
+      height="24px"
+      viewBox="0 -960 960 960"
+      width="24px"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M280-160v-441q0-33 24-56t57-23h439q33 0 56.5 23.5T880-600v320L680-80H360q-33 0-56.5-23.5T280-160ZM81-710q-6-33 13-59.5t52-32.5l434-77q33-6 59.5 13t32.5 52l10 54h-82l-7-40-433 77 40 226v279q-16-9-27.5-24T158-276L81-710Zm279 110v440h280l160-160v-280H360Zm220 220Zm-40 160h80v-120h120v-80H620v-120h-80v120H420v80h120v120Z" />
+    </svg>
+  );
+
+  const recommendIcon = (
+    <svg
+      className={styles.toolbarIcon}
+      xmlns="http://www.w3.org/2000/svg"
+      height="24px"
+      viewBox="0 -960 960 960"
+      width="24px"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M240-40v-329L110-580l185-300h370l185 300-130 211v329l-240-80-240 80Zm80-111 160-53 160 53v-129H320v129Zm20-649L204-580l136 220h280l136-220-136-220H340Zm98 383L296-558l57-57 85 85 169-170 57 56-226 227ZM320-280h320-320Z" />
+    </svg>
+  );
+
   const openTrailerModal = (title: string, trailers?: Trailer[] | null) => {
     const picked = selectPreferredTrailer(trailers);
     if (!picked) {
@@ -2398,148 +2409,6 @@ export default function GamesManager({
     }
     setRefreshSearchQuery(query);
     setIsRefreshPickerOpen(true);
-  };
-
-  const handleRefreshLibraryMetadata = async () => {
-    if (readOnly) return;
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      setMessage("Потрібна авторизація.");
-      return;
-    }
-
-    setIsRefreshingLibraryMetadata(true);
-    setMessage("Починаємо оновлення бібліотеки…");
-
-    try {
-      const pageSize = 200;
-      let from = 0;
-      const libraryItems: Array<GameCollectionItem["items"]> = [];
-
-      while (true) {
-        const { data, error } = await supabase
-          .from("user_views")
-          .select(
-            "items:items!inner(id, title, description, genres, poster_url, external_id, imdb_rating, trailers, year, type)",
-          )
-          .eq("user_id", user.id)
-          .eq("items.type", "game")
-          .range(from, from + pageSize - 1);
-
-        if (error) {
-          setMessage("Не вдалося підготувати бібліотеку до оновлення.");
-          return;
-        }
-
-        const chunk = ((data ?? []) as Array<{
-          items: GameCollectionItem["items"] | GameCollectionItem["items"][];
-        }>)
-          .map((row) => (Array.isArray(row.items) ? row.items[0] : row.items))
-          .filter(Boolean);
-
-        libraryItems.push(...chunk);
-
-        if (chunk.length < pageSize) {
-          break;
-        }
-
-        from += pageSize;
-      }
-
-      const dedupedItems = Array.from(
-        new Map(libraryItems.map((item) => [item.id, item])).values(),
-      );
-
-      if (dedupedItems.length === 0) {
-        setMessage("Бібліотека порожня.");
-        return;
-      }
-
-      const itemIds = dedupedItems.map((item) => item.id);
-      let itemGenreCounts: Map<string, number>;
-      try {
-        itemGenreCounts = await loadRelatedItemCounts(supabase, "item_genres", itemIds);
-      } catch {
-        setMessage("Не вдалося визначити, які ігри потребують оновлення.");
-        return;
-      }
-      const itemsToRefresh = dedupedItems.filter(
-        (item) =>
-          Boolean(item.external_id) &&
-          normalizeGenreList(item.genres).length > (itemGenreCounts.get(item.id) ?? 0),
-      );
-
-      if (itemsToRefresh.length === 0) {
-        setMessage("Усі ігри вже синхронізовані.");
-        return;
-      }
-
-      let updatedCount = 0;
-
-      for (let index = 0; index < itemsToRefresh.length; index += 1) {
-        const item = itemsToRefresh[index];
-        setMessage(`Оновлення бібліотеки: ${index + 1}/${itemsToRefresh.length}`);
-
-        const detailResponse = await fetch(`/api/rawg/${item.external_id}`);
-        if (!detailResponse.ok) {
-          continue;
-        }
-
-        const detail = (await detailResponse.json()) as {
-          rating?: number | null;
-          released?: string;
-          poster?: string;
-          genres?: string;
-          genreItems?: GameNormalizedGenre[];
-          description?: string;
-          trailers?: Trailer[] | null;
-        };
-
-        const parsedYear = Number.parseInt(detail.released ?? "", 10);
-        const itemUpdatePayload = {
-          poster_url: detail.poster?.trim() ? detail.poster.trim() : item.poster_url ?? null,
-          year: Number.isFinite(parsedYear) ? parsedYear : item.year ?? null,
-          imdb_rating:
-            typeof detail.rating === "number" && Number.isFinite(detail.rating)
-              ? detail.rating.toFixed(1)
-              : item.imdb_rating ?? null,
-          description: detail.description?.trim() ? detail.description.trim() : item.description ?? null,
-          genres: detail.genres?.trim() ? detail.genres.trim() : item.genres ?? null,
-          trailers: normalizeTrailers(detail.trailers ?? null) ?? item.trailers,
-        };
-
-        const { error: updateItemError } = await supabase
-          .from("items")
-          .update(itemUpdatePayload)
-          .eq("id", item.id);
-
-        if (updateItemError) {
-          setMessage("Не вдалося оновити metadata ігор.");
-          return;
-        }
-
-        await syncGameNormalizedGenres(supabase, item.id, detail.genreItems ?? []);
-        updatedCount += 1;
-      }
-
-      setMessage(`Оновлення бібліотеки завершено: ${updatedCount}/${itemsToRefresh.length}.`);
-      showSnackbar("Бібліотеку оновлено");
-      setHasApplied(true);
-      void (async () => {
-        await loadYearBounds();
-        await fetchPage(0, appliedFilters);
-      })();
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Не вдалося оновити бібліотеку.",
-      );
-    } finally {
-      setIsRefreshingLibraryMetadata(false);
-    }
   };
 
   const handleDeleteView = async (viewId: string) => {
@@ -3178,8 +3047,7 @@ export default function GamesManager({
                   }}
                   disabled={
                     isGeneratingRecommendations ||
-                    isPreparingRecommendationRequest ||
-                    isRefreshingLibraryMetadata
+                    isPreparingRecommendationRequest
                   }
                 >
                   {isPreparingRecommendationRequest
@@ -3190,21 +3058,34 @@ export default function GamesManager({
                 </button>
                 <button
                   type="button"
-                  className={`btnBase btnSecondary ${styles.desktopOnlyAction}`}
+                  className={`btnBase btnSecondary ${styles.mobileOnlyAction} ${styles.toolbarIconButton}`}
                   onClick={() => {
-                    void handleRefreshLibraryMetadata();
+                    void handleOpenRecommendRequest();
                   }}
-                  disabled={isGeneratingRecommendations || isRefreshingLibraryMetadata}
+                  disabled={
+                    isGeneratingRecommendations ||
+                    isPreparingRecommendationRequest
+                  }
+                  aria-label="Рекомендувати"
                 >
-                  {isRefreshingLibraryMetadata ? "Оновлюємо..." : "Оновити бібліотеку"}
+                  {recommendIcon}
                 </button>
                 <button
                   type="button"
-                  className="btnBase btnPrimary"
+                  className={`btnBase btnPrimary ${styles.desktopOnlyAction}`}
                   onClick={() => setIsAddOpen(true)}
-                  disabled={isGeneratingRecommendations || isRefreshingLibraryMetadata}
+                  disabled={isGeneratingRecommendations}
                 >
                   Додати
+                </button>
+                <button
+                  type="button"
+                  className={`btnBase btnPrimary ${styles.mobileOnlyAction} ${styles.toolbarIconButton}`}
+                  onClick={() => setIsAddOpen(true)}
+                  disabled={isGeneratingRecommendations}
+                  aria-label="Додати гру"
+                >
+                  {addIcon}
                 </button>
               </>
             ) : null}
@@ -3992,6 +3873,7 @@ export default function GamesManager({
           title={selectedGame.title}
           posterUrl={selectedGame.poster}
           size="wide"
+          showRecommendSimilar={false}
           platformOptions={visiblePlatforms}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
           initialValues={
@@ -4048,6 +3930,7 @@ export default function GamesManager({
             (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined
           }
           size="wide"
+          showRecommendSimilar={false}
           platformOptions={visiblePlatforms}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
           onClose={() => {
