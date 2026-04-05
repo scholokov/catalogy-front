@@ -460,13 +460,14 @@ body {
 
 .storyOverlay {
   position: absolute;
-  right: 24px;
+  left: 24px;
   bottom: 24px;
   width: min(560px, calc(100% - 48px));
 }
 
 .storyText {
   padding: 24px;
+  text-align: left;
 }
 
 .contentImage {
@@ -591,7 +592,7 @@ body {
   }
 
   .storyOverlay {
-    right: 16px;
+    left: 16px;
     bottom: 16px;
     width: calc(100% - 32px);
   }
@@ -625,6 +626,7 @@ body {
 
   .storyText {
     padding: 0 0 16px;
+    text-align: left;
   }
 }
 

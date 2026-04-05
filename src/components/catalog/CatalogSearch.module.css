@@ -198,6 +198,14 @@
   display: none;
 }
 
+:global(.btnBase).desktopOnlyAction {
+  display: inline-flex;
+}
+
+:global(.btnBase).mobileOnlyAction {
+  display: none;
+}
+
 .toolbarIconButton {
   width: 44px;
   padding: 0;
@@ -1190,6 +1198,14 @@
   }
 
   .mobileOnlyAction {
+    display: inline-flex;
+  }
+
+  :global(.btnBase).desktopOnlyAction {
+    display: none;
+  }
+
+  :global(.btnBase).mobileOnlyAction {
     display: inline-flex;
   }
 }
