@@ -22,6 +22,7 @@ import styles from "../statistics/StatisticsPage.module.css";
 
 type RawGameRow = {
   created_at: string | null;
+  viewed_at: string | null;
   is_viewed: boolean | null;
   rating: number | null;
   view_percent: number | null;
@@ -47,6 +48,7 @@ type GameProfileRow = {
   year: string;
   genres: string;
   createdAt: string | null;
+  viewedAt: string | null;
   isViewed: boolean;
   rating: number | null;
   viewPercent: number;
@@ -213,11 +215,15 @@ const getNewGameViewsAfterAnalysis = (
   const analyzedAtTime = new Date(analyzedAt).getTime();
   if (Number.isNaN(analyzedAtTime)) return 0;
   return rows.filter((row) => {
-    if (!row.platforms.includes(platform) || !row.isViewed || !row.createdAt) {
+    if (!row.platforms.includes(platform) || !row.isViewed) {
       return false;
     }
-    const createdAtTime = new Date(row.createdAt).getTime();
-    return !Number.isNaN(createdAtTime) && createdAtTime > analyzedAtTime;
+    const watchedAt = row.viewedAt ?? row.createdAt;
+    if (!watchedAt) {
+      return false;
+    }
+    const watchedAtTime = new Date(watchedAt).getTime();
+    return !Number.isNaN(watchedAtTime) && watchedAtTime > analyzedAtTime;
   }).length;
 };
 
@@ -428,7 +434,7 @@ export default function ProfileGamesSection() {
           const { data, error } = await supabase
             .from("user_views")
             .select(
-              "created_at, is_viewed, rating, view_percent, platforms, items:items!inner(title, year, genres, type)",
+              "created_at, viewed_at, is_viewed, rating, view_percent, platforms, items:items!inner(title, year, genres, type)",
             )
             .eq("user_id", user.id)
             .eq("items.type", "game")
@@ -455,6 +461,7 @@ export default function ProfileGamesSection() {
               year: item?.year == null ? "" : String(item.year),
               genres: item?.genres?.trim() || "",
               createdAt: row.created_at,
+              viewedAt: row.viewed_at,
               isViewed: Boolean(row.is_viewed),
               rating: row.rating,
               viewPercent: Math.max(0, Math.min(100, row.view_percent ?? 0)),

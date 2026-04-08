@@ -2401,11 +2401,77 @@ export default function FilmsManager({
       availability: string | null;
     },
   ) => {
+    let resolvedItemDraft = itemDraft;
+    const shouldBackfillNormalizedPeople =
+      !resolvedItemDraft &&
+      selectedView?.id === viewId &&
+      Boolean(selectedView.items.external_id?.trim()) &&
+      selectedViewPeople.length === 0;
+
+    if (shouldBackfillNormalizedPeople) {
+      try {
+        const detailResponse = await fetch(
+          `/api/tmdb/${selectedView.items.external_id}?mediaType=${selectedView.items.film_media_type ?? "movie"}`,
+        );
+        if (detailResponse.ok) {
+          const detail = (await detailResponse.json()) as FilmResult;
+          const parsedYear = Number.parseInt(detail.year ?? "", 10);
+          const trailers =
+            normalizeTrailers(detail.trailers ?? null) ?? selectedView.items.trailers;
+          const filmMediaType =
+            normalizeFilmMediaType(detail.mediaType ?? selectedView.items.film_media_type) ??
+            "movie";
+          const titleUk = normalizeTitle(detail.title) ?? selectedView.items.title_uk ?? null;
+          const titleOriginal =
+            normalizeTitle(detail.originalTitle) ?? selectedView.items.title_original ?? null;
+          const titleEn = normalizeEnglishTitle(detail.englishTitle, titleOriginal);
+          const resolvedTitle =
+            titleUk ??
+            titleEn ??
+            titleOriginal ??
+            normalizeTitle(selectedView.items.title) ??
+            "Без назви";
+          const peopleSummary = summarizeFilmPeople(detail.people ?? null);
+          resolvedItemDraft = {
+            title: resolvedTitle,
+            title_uk: titleUk,
+            title_en: titleEn,
+            title_original: titleOriginal,
+            poster_url: detail.poster?.trim()
+              ? detail.poster.trim()
+              : selectedView.items.poster_url ?? null,
+            imageUrls: detail.imageUrls ?? null,
+            year: Number.isFinite(parsedYear) ? parsedYear : selectedView.items.year ?? null,
+            imdb_rating: detail.imdbRating?.trim()
+              ? detail.imdbRating.trim()
+              : selectedView.items.imdb_rating ?? null,
+            description: detail.plot?.trim()
+              ? detail.plot.trim()
+              : selectedView.items.description ?? null,
+            genres: detail.genres?.trim() ? detail.genres.trim() : selectedView.items.genres ?? null,
+            director:
+              peopleSummary.director ??
+              (detail.director?.trim() ? detail.director.trim() : selectedView.items.director ?? null),
+            actors:
+              peopleSummary.actors ??
+              (detail.actors?.trim() ? detail.actors.trim() : selectedView.items.actors ?? null),
+            external_id: detail.id,
+            film_media_type: filmMediaType,
+            trailers: trailers ?? null,
+            normalizedGenres: detail.genreItems ?? null,
+            normalizedPeople: detail.people ?? null,
+          };
+        }
+      } catch {
+        resolvedItemDraft = itemDraft;
+      }
+    }
+
     await updateFilmViewMutation({
       supabase,
       viewId,
       itemId,
-      itemDraft,
+      itemDraft: resolvedItemDraft,
       payload,
     });
 
@@ -2421,23 +2487,23 @@ export default function FilmsManager({
           is_viewed: payload.isViewed,
           view_percent: payload.viewPercent,
           availability: payload.availability,
-          items: itemDraft
+          items: resolvedItemDraft
             ? {
                 ...item.items,
-                title: itemDraft.title,
-                title_uk: itemDraft.title_uk,
-                title_en: itemDraft.title_en,
-                title_original: itemDraft.title_original,
-                poster_url: itemDraft.poster_url,
-                year: itemDraft.year,
-                imdb_rating: itemDraft.imdb_rating,
-                description: itemDraft.description,
-                genres: itemDraft.genres,
-                director: itemDraft.director,
-                actors: itemDraft.actors,
-                external_id: itemDraft.external_id,
-                film_media_type: itemDraft.film_media_type,
-                trailers: itemDraft.trailers,
+                title: resolvedItemDraft.title,
+                title_uk: resolvedItemDraft.title_uk,
+                title_en: resolvedItemDraft.title_en,
+                title_original: resolvedItemDraft.title_original,
+                poster_url: resolvedItemDraft.poster_url,
+                year: resolvedItemDraft.year,
+                imdb_rating: resolvedItemDraft.imdb_rating,
+                description: resolvedItemDraft.description,
+                genres: resolvedItemDraft.genres,
+                director: resolvedItemDraft.director,
+                actors: resolvedItemDraft.actors,
+                external_id: resolvedItemDraft.external_id,
+                film_media_type: resolvedItemDraft.film_media_type,
+                trailers: resolvedItemDraft.trailers,
               }
             : item.items,
         };
@@ -2454,23 +2520,23 @@ export default function FilmsManager({
         is_viewed: payload.isViewed,
         view_percent: payload.viewPercent,
         availability: payload.availability,
-        items: itemDraft
+        items: resolvedItemDraft
           ? {
               ...prev.items,
-              title: itemDraft.title,
-              title_uk: itemDraft.title_uk,
-              title_en: itemDraft.title_en,
-              title_original: itemDraft.title_original,
-              poster_url: itemDraft.poster_url,
-              year: itemDraft.year,
-              imdb_rating: itemDraft.imdb_rating,
-              description: itemDraft.description,
-              genres: itemDraft.genres,
-              director: itemDraft.director,
-              actors: itemDraft.actors,
-              external_id: itemDraft.external_id,
-              film_media_type: itemDraft.film_media_type,
-              trailers: itemDraft.trailers,
+              title: resolvedItemDraft.title,
+              title_uk: resolvedItemDraft.title_uk,
+              title_en: resolvedItemDraft.title_en,
+              title_original: resolvedItemDraft.title_original,
+              poster_url: resolvedItemDraft.poster_url,
+              year: resolvedItemDraft.year,
+              imdb_rating: resolvedItemDraft.imdb_rating,
+              description: resolvedItemDraft.description,
+              genres: resolvedItemDraft.genres,
+              director: resolvedItemDraft.director,
+              actors: resolvedItemDraft.actors,
+              external_id: resolvedItemDraft.external_id,
+              film_media_type: resolvedItemDraft.film_media_type,
+              trailers: resolvedItemDraft.trailers,
             }
           : prev.items,
       };
