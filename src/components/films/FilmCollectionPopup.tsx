@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import FilmMetadataContent from "@/components/films/FilmMetadataContent";
 import TrailerViewerModal from "@/components/films/TrailerViewerModal";
 import PersonHoverLink from "@/components/people/PersonHoverLink";
+import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import {
   addFilmToCollection,
   normalizeEnglishTitle,
@@ -133,6 +134,7 @@ export default function FilmCollectionPopup({
   onClose,
   onSaved,
 }: FilmCollectionPopupProps) {
+  const { showSnackbar } = useSnackbar();
   const [detail, setDetail] = useState<FilmResult | null>(null);
   const [itemDraft, setItemDraft] = useState<FilmItemDraftInput | null>(null);
   const [storedPeople, setStoredPeople] = useState<FilmNormalizedPerson[]>([]);
@@ -147,6 +149,8 @@ export default function FilmCollectionPopup({
     index: number;
     baseTitle: string;
   } | null>(null);
+  const [isCopyTooltipSuppressed, setIsCopyTooltipSuppressed] = useState(false);
+  const copyTooltipTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const applyPreferences = () => {
@@ -209,7 +213,10 @@ export default function FilmCollectionPopup({
     setTrailerModal(null);
     setDetail(null);
 
-    if (mode !== "add" || !candidate?.id) {
+    const filmId = mode === "add" ? candidate?.id : existingView?.item.externalId;
+    const mediaType = mode === "add" ? candidate?.mediaType : existingView?.item.mediaType;
+
+    if (!filmId) {
       return;
     }
 
@@ -218,7 +225,7 @@ export default function FilmCollectionPopup({
     void (async () => {
       try {
         const response = await fetch(
-          `/api/tmdb/${candidate.id}?mediaType=${candidate.mediaType ?? "movie"}`,
+          `/api/tmdb/${filmId}?mediaType=${mediaType ?? "movie"}`,
         );
         if (!response.ok) {
           if (!isCancelled) {
@@ -240,7 +247,7 @@ export default function FilmCollectionPopup({
     return () => {
       isCancelled = true;
     };
-  }, [mode, candidate?.id, candidate?.mediaType]);
+  }, [mode, candidate?.id, candidate?.mediaType, existingView?.item.externalId, existingView?.item.mediaType]);
 
   useEffect(() => {
     const itemId = existingView?.item.id;
@@ -273,6 +280,70 @@ export default function FilmCollectionPopup({
     itemDraft?.normalizedPeople ?? (storedPeople.length > 0 ? storedPeople : detail?.people ?? null);
   const currentGenres =
     itemDraft?.normalizedGenres ?? (storedGenres.length > 0 ? storedGenres : detail?.genreItems ?? null);
+
+  const copyText = async (value: string) => {
+    const normalized = value.trim();
+    if (!normalized) return;
+    try {
+      await navigator.clipboard.writeText(normalized);
+    } catch {
+      const textArea = document.createElement("textarea");
+      textArea.value = normalized;
+      textArea.setAttribute("readonly", "");
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+    }
+    showSnackbar("Скопійовано");
+  };
+
+  const suppressCopyTooltip = () => {
+    setIsCopyTooltipSuppressed(true);
+    if (copyTooltipTimeoutRef.current !== null) {
+      window.clearTimeout(copyTooltipTimeoutRef.current);
+    }
+    copyTooltipTimeoutRef.current = window.setTimeout(() => {
+      setIsCopyTooltipSuppressed(false);
+    }, 900);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (copyTooltipTimeoutRef.current !== null) {
+        window.clearTimeout(copyTooltipTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const renderCopyableFilmTitle = (
+    value: string | null | undefined,
+    label: "оригінальну" | "англійську",
+  ) => {
+    const resolvedValue = value?.trim();
+    if (!resolvedValue) {
+      return null;
+    }
+
+    return (
+      <button
+        type="button"
+        className={`${styles.copyableInlineButton} ${
+          isCopyTooltipSuppressed ? styles.copyTooltipHidden : ""
+        }`}
+        onClick={() => {
+          suppressCopyTooltip();
+          void copyText(resolvedValue);
+        }}
+        data-copy-tooltip="Клікніть для копіювання"
+        aria-label={`Скопіювати ${label} назву: ${resolvedValue}`}
+      >
+        {resolvedValue}
+      </button>
+    );
+  };
 
   const renderActorLinks = (
     people?: Array<{
@@ -684,15 +755,19 @@ export default function FilmCollectionPopup({
             }
       }
       availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
-      showRecommendSimilar={mode !== "edit"}
+      showRecommendSimilar={false}
     >
       <FilmMetadataContent
         imdbRating={resolvedImdb}
         personalRating={mode === "edit" ? String(existingView?.rating ?? "—") : null}
         year={resolvedYear}
         mediaType={resolvedMediaType}
-        originalTitle={resolvedOriginalTitle}
-        englishTitle={resolvedEnglishTitle}
+        originalTitle={renderCopyableFilmTitle(resolvedOriginalTitle, "оригінальну")}
+        englishTitle={renderCopyableFilmTitle(resolvedEnglishTitle, "англійську")}
+        showEnglishTitle={
+          Boolean(resolvedEnglishTitle?.trim()) &&
+          resolvedEnglishTitle?.trim() !== resolvedOriginalTitle?.trim()
+        }
         director={renderDirectorLinks(currentPeople) ?? resolvedDirector}
         writers={renderWriterLinks(currentPeople)}
         producers={renderProducerLinks(currentPeople)}
