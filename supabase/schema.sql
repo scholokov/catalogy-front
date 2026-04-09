@@ -115,6 +115,10 @@ create table if not exists user_views (
   is_viewed boolean not null default true,
   view_percent int not null default 100 check (view_percent between 0 and 100),
   recommend_similar boolean not null default false,
+  shishka_fit_label text,
+  shishka_fit_reason text,
+  shishka_fit_profile_analyzed_at timestamptz,
+  shishka_fit_scope_value text,
   availability text,
   platforms text[] not null default '{}',
   updated_at timestamptz not null default now()
@@ -128,6 +132,18 @@ add column if not exists availability text;
 
 alter table user_views
 add column if not exists created_at timestamptz not null default now();
+
+alter table user_views
+add column if not exists shishka_fit_label text;
+
+alter table user_views
+add column if not exists shishka_fit_reason text;
+
+alter table user_views
+add column if not exists shishka_fit_profile_analyzed_at timestamptz;
+
+alter table user_views
+add column if not exists shishka_fit_scope_value text;
 
 create unique index if not exists user_views_user_item_idx
   on user_views (user_id, item_id);

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Search from "@/components/search/Search";
 import CatalogModal from "@/components/catalog/CatalogModal";
+import type { ShishkaFitAssessment } from "@/lib/shishka/fitAssessment";
 import styles from "./CatalogSearch.module.css";
 
 type CatalogSearchProps<T> = {
@@ -23,6 +24,7 @@ type CatalogSearchProps<T> = {
       viewPercent: number;
       platforms: string[];
       availability: string | null;
+      shishkaFitAssessment: ShishkaFitAssessment | null;
     },
   ) => Promise<void>;
   emptyQueryMessage?: string;

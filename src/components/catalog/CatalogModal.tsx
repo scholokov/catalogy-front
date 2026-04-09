@@ -3,6 +3,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
+import {
+  mergeShishkaAssessmentIntoComment,
+  type ShishkaFitAssessment,
+} from "@/lib/shishka/fitAssessment";
 import styles from "./CatalogModal.module.css";
 
 type CatalogModalProps = {
@@ -23,9 +27,21 @@ type CatalogModalProps = {
     viewPercent: number;
     platforms: string[];
     availability: string | null;
+    shishkaFitAssessment: ShishkaFitAssessment | null;
   }) => Promise<void>;
   onDelete?: () => Promise<void>;
   onRefresh?: () => Promise<void>;
+  onEvaluate?: (payload: {
+    viewedAt: string;
+    comment: string;
+    recommendSimilar: boolean;
+    isViewed: boolean;
+    rating: number | null;
+    viewPercent: number;
+    platforms: string[];
+    availability: string | null;
+    shishkaFitAssessment: ShishkaFitAssessment | null;
+  }) => Promise<ShishkaFitAssessment>;
   extraActions?: React.ReactNode;
   previewAction?: {
     label: string;
@@ -33,6 +49,7 @@ type CatalogModalProps = {
     disabled?: boolean;
     icon?: React.ReactNode;
   };
+  fitTargetText?: string;
   initialValues?: {
     viewedAt?: string;
     comment?: string | null;
@@ -42,6 +59,7 @@ type CatalogModalProps = {
     viewPercent?: number | null;
     platforms?: string[] | null;
     availability?: string | null;
+    shishkaFitAssessment?: ShishkaFitAssessment | null;
   };
   submitLabel?: string;
   onReadOnlyPrimaryAction?: () => Promise<void> | void;
@@ -79,8 +97,10 @@ export default function CatalogModal({
   onAdd,
   onDelete,
   onRefresh,
+  onEvaluate,
   extraActions,
   previewAction,
+  fitTargetText = "цей тайтл",
   initialValues,
   platformOptions = [],
   availabilityOptions = [],
@@ -106,6 +126,7 @@ export default function CatalogModal({
   const initialRating = initialValues?.rating;
   const initialViewPercent = initialValues?.viewPercent;
   const initialAvailability = initialValues?.availability;
+  const initialShishkaFitAssessment = initialValues?.shishkaFitAssessment ?? null;
   const images = useMemo(() => {
     if (imageUrls && imageUrls.length > 0) {
       const unique = Array.from(new Set(imageUrls.filter(Boolean)));
@@ -128,17 +149,22 @@ export default function CatalogModal({
   const [viewPercentInput, setViewPercentInput] = useState("100");
   const [platforms, setPlatforms] = useState<string[]>([]);
   const [availability, setAvailability] = useState<string | null>(null);
+  const [shishkaFitAssessment, setShishkaFitAssessment] =
+    useState<ShishkaFitAssessment | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>("");
   const [isDeleting, setIsDeleting] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isEvaluating, setIsEvaluating] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [isPlatformsOpen, setIsPlatformsOpen] = useState(false);
   const [isAvailabilityOpen, setIsAvailabilityOpen] = useState(false);
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+  const [isFitPopoverOpen, setIsFitPopoverOpen] = useState(false);
   const platformsRef = useRef<HTMLDivElement | null>(null);
   const availabilityRef = useRef<HTMLDivElement | null>(null);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  const fitPopoverRef = useRef<HTMLDivElement | null>(null);
   const handleAddRef = useRef<(() => Promise<void>) | null>(null);
   const copyTooltipTimeoutRef = useRef<number | null>(null);
   const [isTitleTooltipSuppressed, setIsTitleTooltipSuppressed] = useState(false);
@@ -155,6 +181,8 @@ export default function CatalogModal({
       setViewPercentInput("100");
       setPlatforms([]);
       setAvailability(null);
+      setShishkaFitAssessment(initialShishkaFitAssessment);
+      setIsFitPopoverOpen(false);
       return;
     }
 
@@ -176,6 +204,8 @@ export default function CatalogModal({
     setViewPercentInput(String(normalizedInitialViewPercent));
     setPlatforms(initialPlatformsKey ? initialPlatformsKey.split("|") : []);
     setAvailability(initialAvailability ?? null);
+    setShishkaFitAssessment(initialShishkaFitAssessment);
+    setIsFitPopoverOpen(false);
   }, [
     isEditMode,
     today,
@@ -187,6 +217,7 @@ export default function CatalogModal({
     initialViewPercent,
     initialViewedAt,
     initialPlatformsKey,
+    initialShishkaFitAssessment,
   ]);
 
   useEffect(() => {
@@ -227,7 +258,7 @@ export default function CatalogModal({
   }, []);
 
   useEffect(() => {
-    if (!isPlatformsOpen && !isAvailabilityOpen && !isMoreMenuOpen) return;
+    if (!isPlatformsOpen && !isAvailabilityOpen && !isMoreMenuOpen && !isFitPopoverOpen) return;
     const handleOutsideClick = (event: MouseEvent) => {
       if (
         platformsRef.current &&
@@ -247,10 +278,16 @@ export default function CatalogModal({
       ) {
         setIsMoreMenuOpen(false);
       }
+      if (
+        fitPopoverRef.current &&
+        !fitPopoverRef.current.contains(event.target as Node)
+      ) {
+        setIsFitPopoverOpen(false);
+      }
     };
     window.addEventListener("mousedown", handleOutsideClick);
     return () => window.removeEventListener("mousedown", handleOutsideClick);
-  }, [isAvailabilityOpen, isPlatformsOpen, isMoreMenuOpen]);
+  }, [isAvailabilityOpen, isPlatformsOpen, isMoreMenuOpen, isFitPopoverOpen]);
 
   useEffect(() => {
     setActiveImageIndex(0);
@@ -316,6 +353,7 @@ export default function CatalogModal({
         viewPercent: isViewed ? viewPercent : 0,
         platforms,
         availability,
+        shishkaFitAssessment,
       });
       showSnackbar(isEditMode ? "Збережено" : "Додано");
       onClose();
@@ -354,6 +392,39 @@ export default function CatalogModal({
       setSaveError(message);
     } finally {
       setIsRefreshing(false);
+    }
+  };
+
+  const handleEvaluate = async () => {
+    if (!onEvaluate) return;
+    setIsEvaluating(true);
+    setSaveError("");
+    try {
+      const nextAssessment = await onEvaluate({
+        viewedAt,
+        comment,
+        recommendSimilar,
+        isViewed,
+        rating: isViewed ? rating : null,
+        viewPercent: isViewed ? viewPercent : 0,
+        platforms,
+        availability,
+        shishkaFitAssessment,
+      });
+      setComment((prev) =>
+        mergeShishkaAssessmentIntoComment(prev, nextAssessment, shishkaFitAssessment),
+      );
+      setShishkaFitAssessment(nextAssessment);
+      setIsFitPopoverOpen(true);
+      showSnackbar("Оцінку оновлено");
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "Не вдалося отримати оцінку.";
+      setSaveError(message);
+    } finally {
+      setIsEvaluating(false);
     }
   };
 
@@ -544,7 +615,7 @@ export default function CatalogModal({
             </button>
           </h2>
           <div className={styles.headerActions}>
-            {onDelete || onRefresh ? (
+            {onDelete || onRefresh || onEvaluate ? (
               <div className={styles.headerMenu} ref={moreMenuRef}>
                 <button
                   type="button"
@@ -552,7 +623,7 @@ export default function CatalogModal({
                   onClick={() => setIsMoreMenuOpen((prev) => !prev)}
                   aria-label="Більше дій"
                   aria-expanded={isMoreMenuOpen}
-                  disabled={isSaving || isDeleting || isRefreshing}
+                  disabled={isSaving || isDeleting || isRefreshing || isEvaluating}
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -569,6 +640,33 @@ export default function CatalogModal({
                 </button>
                 {isMoreMenuOpen ? (
                   <div className={styles.contextMenu} role="menu">
+                    {onEvaluate && !isViewed ? (
+                      <button
+                        type="button"
+                        className={styles.contextMenuItem}
+                        onClick={() => {
+                          setIsMoreMenuOpen(false);
+                          void handleEvaluate();
+                        }}
+                        role="menuitem"
+                        disabled={isSaving || isDeleting || isRefreshing || isEvaluating}
+                      >
+                        <span className={styles.contextMenuIcon} aria-hidden="true">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 -960 960 960"
+                            width="18"
+                            height="18"
+                          >
+                            <path
+                              fill="currentColor"
+                              d="M480-80 373-480 80-587l293-107 107-293 107 293 293 107-293 107L480-80Zm0-212 52-140 140-52-140-52-52-140-52 140-140 52 140 52 52 140Z"
+                            />
+                          </svg>
+                        </span>
+                        <span>{isEvaluating ? "Оцінюємо..." : "Оцінити"}</span>
+                      </button>
+                    ) : null}
                     {onRefresh ? (
                       <button
                         type="button"
@@ -578,7 +676,7 @@ export default function CatalogModal({
                           void handleRefresh();
                         }}
                         role="menuitem"
-                        disabled={isSaving || isDeleting || isRefreshing}
+                        disabled={isSaving || isDeleting || isRefreshing || isEvaluating}
                       >
                         <span className={styles.contextMenuIcon} aria-hidden="true">
                           <svg
@@ -605,7 +703,7 @@ export default function CatalogModal({
                           void handleDelete();
                         }}
                         role="menuitem"
-                        disabled={isSaving || isDeleting || isRefreshing}
+                        disabled={isSaving || isDeleting || isRefreshing || isEvaluating}
                       >
                         <span className={styles.contextMenuIcon} aria-hidden="true">
                           <svg
@@ -867,7 +965,35 @@ export default function CatalogModal({
                   !isViewed ? styles.labelDisabled : ""
                 }`}
               >
-                <span>Особистий рейтинг</span>
+                <span className={styles.inlineLabelTitle}>
+                  <span>Особистий рейтинг</span>
+                  {shishkaFitAssessment ? (
+                    <span className={styles.fitPopoverWrap} ref={fitPopoverRef}>
+                      <button
+                        type="button"
+                        className={styles.fitPopoverTrigger}
+                        onClick={() => setIsFitPopoverOpen((prev) => !prev)}
+                        aria-expanded={isFitPopoverOpen}
+                        aria-label="Пояснення вірогідності сподобатись"
+                      >
+                        Вірогідність сподобатись: {shishkaFitAssessment.label}
+                      </button>
+                      {isFitPopoverOpen ? (
+                        <div className={styles.fitPopover} role="dialog" aria-modal="false">
+                          <p className={styles.fitPopoverTitle}>
+                            Вірогідність того, що {fitTargetText} сподобається
+                          </p>
+                          <p className={styles.fitPopoverLabel}>
+                            {shishkaFitAssessment.label}
+                          </p>
+                          <p className={styles.fitPopoverReason}>
+                            {shishkaFitAssessment.reason}
+                          </p>
+                        </div>
+                      ) : null}
+                    </span>
+                  ) : null}
+                </span>
                 <div className={styles.ratingControl}>
                   <button
                     type="button"

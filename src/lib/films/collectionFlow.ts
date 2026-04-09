@@ -4,6 +4,7 @@ import {
   type FilmNormalizedGenre,
   type FilmNormalizedPerson,
 } from "@/lib/films/normalizedMetadata";
+import type { ShishkaFitAssessment } from "@/lib/shishka/fitAssessment";
 
 export type FilmCollectionTrailer = {
   id: string;
@@ -26,6 +27,7 @@ export type FilmCollectionFormPayload = {
   viewPercent: number;
   platforms: string[];
   availability: string | null;
+  shishkaFitAssessment: ShishkaFitAssessment | null;
 };
 
 export type FilmCollectionSource = {
@@ -269,6 +271,11 @@ export const addFilmToCollection = async ({
     view_percent: payload.viewPercent,
     recommend_similar: payload.recommendSimilar,
     availability: payload.availability,
+    shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
+    shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
+    shishka_fit_profile_analyzed_at:
+      payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
+    shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
   });
 
   if (viewError) {
@@ -283,6 +290,11 @@ export const addFilmToCollection = async ({
           view_percent: payload.viewPercent,
           recommend_similar: payload.recommendSimilar,
           availability: payload.availability,
+          shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
+          shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
+          shishka_fit_profile_analyzed_at:
+            payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
+          shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
         })
         .eq("user_id", user.id)
         .eq("item_id", itemId);
@@ -327,6 +339,11 @@ export const updateFilmView = async ({
       view_percent: payload.viewPercent,
       recommend_similar: payload.recommendSimilar,
       availability: payload.availability,
+      shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
+      shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
+      shishka_fit_profile_analyzed_at:
+        payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
+      shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
     })
     .eq("id", viewId);
 

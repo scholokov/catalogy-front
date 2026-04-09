@@ -22,6 +22,7 @@ import {
 } from "@/lib/games/normalizedMetadata";
 import { normalizeGamePlatforms } from "@/lib/games/platforms";
 import { DEFAULT_GAME_PLATFORM_OPTIONS } from "@/lib/settings/displayPreferences";
+import type { ShishkaFitAssessment } from "@/lib/shishka/fitAssessment";
 import styles from "@/app/actors/ActorsPage.module.css";
 
 type Trailer = {
@@ -53,6 +54,10 @@ type GameGenreView = {
   viewPercent: number;
   availability: string | null;
   platforms: string[];
+  shishkaFitLabel: ShishkaFitAssessment["label"] | null;
+  shishkaFitReason: string | null;
+  shishkaFitProfileAnalyzedAt: string | null;
+  shishkaFitScopeValue: string | null;
   item: {
     id: string;
     title: string;
@@ -82,6 +87,26 @@ const GAME_PLATFORM_OPTIONS = [...DEFAULT_GAME_PLATFORM_OPTIONS];
 const AVAILABILITY_OPTIONS = ["В колекції", "Тимчасовий доступ", "У друзів", "Відсутній"];
 
 const sanitizePosterUrl = (value?: string | null) => value?.trim().replace(/\)+$/, "") || null;
+
+const getStoredShishkaFitAssessment = (
+  view: GameGenreView,
+): ShishkaFitAssessment | null => {
+  if (
+    !view.shishkaFitLabel ||
+    !view.shishkaFitReason?.trim() ||
+    !view.shishkaFitProfileAnalyzedAt ||
+    !view.shishkaFitScopeValue
+  ) {
+    return null;
+  }
+
+  return {
+    label: view.shishkaFitLabel,
+    reason: view.shishkaFitReason.trim(),
+    profileAnalyzedAt: view.shishkaFitProfileAnalyzedAt,
+    scopeValue: view.shishkaFitScopeValue,
+  };
+};
 
 type GameGenreSectionProps = {
   title: string;
@@ -396,7 +421,7 @@ const loadGameGenreCollectionData = async (source: GenreSource, sourceGenreId: s
   const { data, error } = await supabase
     .from("user_views")
     .select(
-      "id, viewed_at, comment, recommend_similar, is_viewed, rating, view_percent, availability, platforms, items!inner(id, title, description, genres, poster_url, external_id, year, imdb_rating, type)",
+      "id, viewed_at, comment, recommend_similar, is_viewed, rating, view_percent, availability, platforms, shishka_fit_label, shishka_fit_reason, shishka_fit_profile_analyzed_at, shishka_fit_scope_value, items!inner(id, title, description, genres, poster_url, external_id, year, imdb_rating, type)",
     )
     .eq("user_id", user.id)
     .in("item_id", itemIds)
@@ -420,6 +445,10 @@ const loadGameGenreCollectionData = async (source: GenreSource, sourceGenreId: s
     view_percent: number;
     availability: string | null;
     platforms: string[] | null;
+    shishka_fit_label?: ShishkaFitAssessment["label"] | null;
+    shishka_fit_reason?: string | null;
+    shishka_fit_profile_analyzed_at?: string | null;
+    shishka_fit_scope_value?: string | null;
     items:
       | {
           id: string;
@@ -457,6 +486,10 @@ const loadGameGenreCollectionData = async (source: GenreSource, sourceGenreId: s
             viewPercent: row.view_percent,
             availability: row.availability,
             platforms: normalizeGamePlatforms(row.platforms),
+            shishkaFitLabel: row.shishka_fit_label ?? null,
+            shishkaFitReason: row.shishka_fit_reason ?? null,
+            shishkaFitProfileAnalyzedAt: row.shishka_fit_profile_analyzed_at ?? null,
+            shishkaFitScopeValue: row.shishka_fit_scope_value ?? null,
             item: {
               id: item.id,
               title: item.title,
@@ -549,6 +582,7 @@ export default function GameGenreDetailPage({
       viewPercent: number;
       platforms: string[];
       availability: string | null;
+      shishkaFitAssessment: ShishkaFitAssessment | null;
     }) => {
       if (!selectedExistingGame) {
         return;
@@ -566,6 +600,11 @@ export default function GameGenreDetailPage({
           view_percent: payload.viewPercent,
           availability: payload.availability,
           platforms: normalizedPlatforms,
+          shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
+          shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
+          shishka_fit_profile_analyzed_at:
+            payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
+          shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
         })
         .eq("id", selectedExistingGame.viewId);
 
@@ -729,6 +768,7 @@ export default function GameGenreDetailPage({
             posterUrl={
               sanitizePosterUrl(selectedDraft?.posterUrl ?? activeGame.item.posterUrl) ?? undefined
             }
+            fitTargetText="ця гра"
             onClose={() => {
               setSelectedDraft(null);
               setSelectedExistingGame(null);
@@ -749,6 +789,7 @@ export default function GameGenreDetailPage({
               viewPercent: activeGame.viewPercent,
               platforms: activeGame.platforms,
               availability: activeGame.availability,
+              shishkaFitAssessment: getStoredShishkaFitAssessment(activeGame),
             }}
             submitLabel="Зберегти"
           >

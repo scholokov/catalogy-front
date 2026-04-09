@@ -33,6 +33,7 @@ import {
 import { getDisplayName } from "@/lib/users/displayName";
 import {
   addFilmToCollection,
+  type FilmCollectionFormPayload,
   summarizeFilmPeople,
   updateFilmView as updateFilmViewMutation,
 } from "@/lib/films/collectionFlow";
@@ -42,6 +43,14 @@ import { loadStoredPeopleForItem } from "@/lib/films/storedPeople";
 import type { FilmLlmExportRow } from "@/app/statistics/filmLlmCsv";
 import { deriveScopeMaturityStatus } from "@/app/statistics/lib/scopeReadiness";
 import type { FilmProfileSystemLayer, FilmProfileUserLayer } from "@/lib/profile-analysis/types";
+import {
+  fetchLatestFilmFitProfileAnalysis,
+  requestFilmFitEvaluation,
+} from "@/lib/shishka/fitEvaluationClient";
+import {
+  mergeShishkaAssessmentIntoComment,
+  type ShishkaFitAssessment,
+} from "@/lib/shishka/fitAssessment";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
 type Trailer = {
@@ -89,6 +98,10 @@ type FilmCollectionItem = {
   recommend_similar: boolean;
   is_viewed: boolean;
   availability: string | null;
+  shishka_fit_label?: ShishkaFitAssessment["label"] | null;
+  shishka_fit_reason?: string | null;
+  shishka_fit_profile_analyzed_at?: string | null;
+  shishka_fit_scope_value?: string | null;
   items: {
     id: string;
     title: string;
@@ -115,6 +128,32 @@ type AiRecommendation = {
   type: string;
   why: string;
   raw: string;
+};
+
+const getStoredShishkaFitAssessment = (
+  item: Pick<
+    FilmCollectionItem,
+    | "shishka_fit_label"
+    | "shishka_fit_reason"
+    | "shishka_fit_profile_analyzed_at"
+    | "shishka_fit_scope_value"
+  >,
+): ShishkaFitAssessment | null => {
+  if (
+    !item.shishka_fit_label ||
+    !item.shishka_fit_reason?.trim() ||
+    !item.shishka_fit_profile_analyzed_at ||
+    !item.shishka_fit_scope_value
+  ) {
+    return null;
+  }
+
+  return {
+    label: item.shishka_fit_label,
+    reason: item.shishka_fit_reason.trim(),
+    profileAnalyzedAt: item.shishka_fit_profile_analyzed_at,
+    scopeValue: item.shishka_fit_scope_value,
+  };
 };
 
 type FilmItemDraft = {
@@ -278,6 +317,9 @@ const normalizeSearchValue = (value?: string | null) =>
     .replace(/\s+/g, " ")
     .trim() ?? "";
 
+const getFilmScopeValue = (mediaType?: "movie" | "tv" | null) =>
+  mediaType === "tv" ? "Серіали" : "Кіно";
+
 const normalizePipeList = (value?: string | null) => {
   if (!value) return [];
   const unique = new Set<string>();
@@ -433,6 +475,11 @@ export default function FilmsManager({
   const [message, setMessage] = useState("");
   const [, setRecommendationMessage] = useState("");
   const [aiRecommendationComment, setAiRecommendationComment] = useState("");
+  const [aiRecommendationScopeValue, setAiRecommendationScopeValue] = useState<string | null>(
+    null,
+  );
+  const [aiRecommendationFitAssessment, setAiRecommendationFitAssessment] =
+    useState<ShishkaFitAssessment | null>(null);
   const [recommendationPromptPreview, setRecommendationPromptPreview] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
@@ -871,7 +918,7 @@ export default function FilmsManager({
     let query = supabase
       .from("user_views")
       .select(
-        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, items:items!inner (id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, film_media_type, imdb_rating, trailers, year, type)",
+        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, shishka_fit_label, shishka_fit_reason, shishka_fit_profile_analyzed_at, shishka_fit_scope_value, items:items!inner (id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, film_media_type, imdb_rating, trailers, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "film");
@@ -1464,6 +1511,107 @@ export default function FilmsManager({
     }, {});
   };
 
+  const evaluateFilmWithProfile = useCallback(
+    async (
+      film: {
+        title: string;
+        year?: string | number | null;
+        mediaType?: "movie" | "tv" | null;
+        genres?: string | null;
+        director?: string | null;
+        actors?: string | null;
+        plot?: string | null;
+      },
+      previousAssessment?: ShishkaFitAssessment | null,
+    ) => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        throw new Error("Не вдалося визначити користувача.");
+      }
+
+      const scopeValue = getFilmScopeValue(film.mediaType);
+      const profileAnalysis = await fetchLatestFilmFitProfileAnalysis(
+        supabase,
+        user.id,
+        scopeValue,
+      );
+
+      if (!profileAnalysis) {
+        throw new Error("Спершу онови профіль для цього формату.");
+      }
+
+      if (
+        previousAssessment?.profileAnalyzedAt &&
+        previousAssessment.profileAnalyzedAt === profileAnalysis.analyzedAt
+      ) {
+        throw new Error("Спершу онови профіль, а потім запускай переоцінку.");
+      }
+
+      return requestFilmFitEvaluation({
+        scopeLabel: scopeValue,
+        profileAnalysis,
+        item: {
+          title: film.title,
+          year: film.year ?? null,
+          mediaType: film.mediaType ?? "movie",
+          genres: film.genres ?? null,
+          director: film.director ?? null,
+          actors: film.actors ?? null,
+          plot: film.plot ?? null,
+        },
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!selectedFilm || !aiRecommendationScopeValue || aiRecommendationFitAssessment) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    void (async () => {
+      try {
+        const assessment = await evaluateFilmWithProfile(
+          {
+            title: selectedFilm.title,
+            year: selectedFilm.year,
+            mediaType: selectedFilm.mediaType,
+            genres: selectedFilm.genres,
+            director: selectedFilm.director,
+            actors: selectedFilm.actors,
+            plot: selectedFilm.plot,
+          },
+          null,
+        );
+
+        if (!isCancelled) {
+          setAiRecommendationFitAssessment(assessment);
+          setAiRecommendationComment((prev) =>
+            mergeShishkaAssessmentIntoComment(prev, assessment),
+          );
+        }
+      } catch {
+        if (!isCancelled) {
+          setAiRecommendationFitAssessment(null);
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    aiRecommendationFitAssessment,
+    aiRecommendationScopeValue,
+    evaluateFilmWithProfile,
+    selectedFilm,
+  ]);
+
   const getFilmRecommendationOptions = (rows: FilmLlmExportRow[]): RecommendationRequestOption[] => {
     const mediaTypes: Array<{ value: "movie" | "tv"; label: string }> = [
       { value: "movie", label: "Кіно" },
@@ -1714,6 +1862,8 @@ export default function FilmsManager({
         }
 
         setAiRecommendationComment(recommendation.why);
+        setAiRecommendationScopeValue(getFilmScopeValue(recommendedFilm.mediaType));
+        setAiRecommendationFitAssessment(null);
         setSelectedFilm(recommendedFilm);
         setRecommendationScopeState(null);
         setRecommendationMessage(
@@ -2350,16 +2500,7 @@ export default function FilmsManager({
 
   const handleAddFilm = async (
     film: FilmResult,
-    payload: {
-      viewedAt: string;
-      comment: string;
-      recommendSimilar: boolean;
-      isViewed: boolean;
-      rating: number | null;
-      viewPercent: number;
-      platforms: string[];
-      availability: string | null;
-    },
+    payload: FilmCollectionFormPayload,
   ) => {
     const detailResponse = await fetch(
       `/api/tmdb/${film.id}?mediaType=${film.mediaType ?? "movie"}`,
@@ -2390,16 +2531,7 @@ export default function FilmsManager({
     viewId: string,
     itemId: string,
     itemDraft: FilmItemDraft | null,
-    payload: {
-      viewedAt: string;
-      comment: string;
-      recommendSimilar: boolean;
-      isViewed: boolean;
-      rating: number | null;
-      viewPercent: number;
-      platforms: string[];
-      availability: string | null;
-    },
+    payload: FilmCollectionFormPayload,
   ) => {
     let resolvedItemDraft = itemDraft;
     const shouldBackfillNormalizedPeople =
@@ -2487,6 +2619,11 @@ export default function FilmsManager({
           is_viewed: payload.isViewed,
           view_percent: payload.viewPercent,
           availability: payload.availability,
+          shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
+          shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
+          shishka_fit_profile_analyzed_at:
+            payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
+          shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
           items: resolvedItemDraft
             ? {
                 ...item.items,
@@ -2520,6 +2657,11 @@ export default function FilmsManager({
         is_viewed: payload.isViewed,
         view_percent: payload.viewPercent,
         availability: payload.availability,
+        shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
+        shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
+        shishka_fit_profile_analyzed_at:
+          payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
+        shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
         items: resolvedItemDraft
           ? {
               ...prev.items,
@@ -3969,6 +4111,8 @@ export default function FilmsManager({
               if (detailResponse.ok) {
                 const detail = (await detailResponse.json()) as FilmResult;
                 setAiRecommendationComment("");
+                setAiRecommendationScopeValue(null);
+                setAiRecommendationFitAssessment(null);
                 setSelectedFilm(detail);
                 setIsAddOpen(false);
                 return;
@@ -3978,6 +4122,8 @@ export default function FilmsManager({
             }
 
             setAiRecommendationComment("");
+            setAiRecommendationScopeValue(null);
+            setAiRecommendationFitAssessment(null);
             setSelectedFilm(film);
             setIsAddOpen(false);
           }}
@@ -4095,10 +4241,13 @@ export default function FilmsManager({
           posterUrl={selectedFilm.poster}
           imageUrls={selectedFilm.imageUrls}
           size="wide"
+          fitTargetText="цей фільм"
           showRecommendSimilar={false}
           onClose={() => {
             setSelectedFilm(null);
             setAiRecommendationComment("");
+            setAiRecommendationScopeValue(null);
+            setAiRecommendationFitAssessment(null);
             setTrailerMessage("");
           }}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
@@ -4106,8 +4255,23 @@ export default function FilmsManager({
             availability: showAvailability ? defaultFilmAvailability : null,
             comment: aiRecommendationComment || null,
             isViewed: defaultFilmIsViewed ?? undefined,
+            shishkaFitAssessment: aiRecommendationFitAssessment,
           }}
           onAdd={(payload) => handleAddFilm(selectedFilm, payload)}
+          onEvaluate={(payload) =>
+            evaluateFilmWithProfile(
+              {
+                title: selectedFilm.title,
+                year: selectedFilm.year,
+                mediaType: selectedFilm.mediaType,
+                genres: selectedFilm.genres,
+                director: selectedFilm.director,
+                actors: selectedFilm.actors,
+                plot: selectedFilm.plot,
+              },
+              payload.shishkaFitAssessment,
+            )
+          }
           previewAction={{
             label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
             onClick: handleWatchSelectedFilmTrailer,
@@ -4145,6 +4309,7 @@ export default function FilmsManager({
           }
           imageUrls={selectedViewItemDraft?.imageUrls ?? selectedViewImageUrls ?? undefined}
           size="wide"
+          fitTargetText="цей фільм"
           onClose={() => {
             setSelectedView(null);
             setSelectedViewPreloadedPeople(null);
@@ -4180,9 +4345,30 @@ export default function FilmsManager({
             rating: selectedView.rating,
             viewPercent: selectedView.view_percent,
             availability: selectedView.availability,
+            shishkaFitAssessment: getStoredShishkaFitAssessment(selectedView),
           }}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
           onRefresh={readOnly ? undefined : handleRefreshSelectedFilmMetadata}
+          onEvaluate={
+            readOnly
+              ? undefined
+              : (payload) =>
+                  evaluateFilmWithProfile(
+                    {
+                      title: selectedViewItemDraft?.title ?? selectedView.items.title,
+                      year: selectedViewItemDraft?.year ?? selectedView.items.year,
+                      mediaType:
+                        selectedViewItemDraft?.film_media_type ??
+                        selectedView.items.film_media_type,
+                      genres: selectedViewItemDraft?.genres ?? selectedView.items.genres,
+                      director: selectedViewItemDraft?.director ?? selectedView.items.director,
+                      actors: selectedViewItemDraft?.actors ?? selectedView.items.actors,
+                      plot:
+                        selectedViewItemDraft?.description ?? selectedView.items.description,
+                    },
+                    payload.shishkaFitAssessment,
+                  )
+          }
           onAdd={
             readOnly
               ? undefined

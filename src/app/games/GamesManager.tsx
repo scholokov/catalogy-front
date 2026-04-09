@@ -39,6 +39,14 @@ import { getDisplayName } from "@/lib/users/displayName";
 import type { GameLlmExportRow } from "@/app/statistics/gameLlmContext";
 import { deriveScopeMaturityStatus } from "@/app/statistics/lib/scopeReadiness";
 import type { GameProfileSystemLayer, GameProfileUserLayer } from "@/lib/profile-analysis/types";
+import {
+  fetchLatestGameFitProfileAnalysis,
+  requestGameFitEvaluation,
+} from "@/lib/shishka/fitEvaluationClient";
+import {
+  mergeShishkaAssessmentIntoComment,
+  type ShishkaFitAssessment,
+} from "@/lib/shishka/fitAssessment";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
 type Trailer = {
@@ -80,6 +88,10 @@ type GameCollectionItem = {
   is_viewed: boolean;
   availability: string | null;
   platforms: string[] | null;
+  shishka_fit_label?: ShishkaFitAssessment["label"] | null;
+  shishka_fit_reason?: string | null;
+  shishka_fit_profile_analyzed_at?: string | null;
+  shishka_fit_scope_value?: string | null;
   items: {
     id: string;
     title: string;
@@ -112,6 +124,32 @@ type AiRecommendation = {
   type: string;
   why: string;
   raw: string;
+};
+
+const getStoredShishkaFitAssessment = (
+  item: Pick<
+    GameCollectionItem,
+    | "shishka_fit_label"
+    | "shishka_fit_reason"
+    | "shishka_fit_profile_analyzed_at"
+    | "shishka_fit_scope_value"
+  >,
+): ShishkaFitAssessment | null => {
+  if (
+    !item.shishka_fit_label ||
+    !item.shishka_fit_reason?.trim() ||
+    !item.shishka_fit_profile_analyzed_at ||
+    !item.shishka_fit_scope_value
+  ) {
+    return null;
+  }
+
+  return {
+    label: item.shishka_fit_label,
+    reason: item.shishka_fit_reason.trim(),
+    profileAnalyzedAt: item.shishka_fit_profile_analyzed_at,
+    scopeValue: item.shishka_fit_scope_value,
+  };
 };
 
 type ContactOption = {
@@ -261,6 +299,11 @@ const normalizeComparableTitle = (value: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const getPrimaryGameScopeValue = (platforms: string[] | null | undefined) => {
+  const normalizedPlatforms = normalizeGamePlatforms(platforms);
+  return normalizedPlatforms[0] ?? "Усі платформи";
+};
+
 const getDefaultSortDirection = (sortBy: SortBy): SortDirection => {
   if (sortBy === "title") return "asc";
   return "desc";
@@ -393,6 +436,11 @@ export default function GamesManager({
   const [message, setMessage] = useState("");
   const [, setRecommendationMessage] = useState("");
   const [aiRecommendationComment, setAiRecommendationComment] = useState("");
+  const [aiRecommendationScopeValue, setAiRecommendationScopeValue] = useState<string | null>(
+    null,
+  );
+  const [aiRecommendationFitAssessment, setAiRecommendationFitAssessment] =
+    useState<ShishkaFitAssessment | null>(null);
   const [recommendationPromptPreview, setRecommendationPromptPreview] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
@@ -799,7 +847,7 @@ export default function GamesManager({
     let query = supabase
       .from("user_views")
       .select(
-        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, items:items!inner (id, title, description, genres, poster_url, external_id, imdb_rating, trailers, year, type)",
+        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, shishka_fit_label, shishka_fit_reason, shishka_fit_profile_analyzed_at, shishka_fit_scope_value, items:items!inner (id, title, description, genres, poster_url, external_id, imdb_rating, trailers, year, type)",
       )
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "game");
@@ -1509,6 +1557,101 @@ export default function GamesManager({
     }, {});
   };
 
+  const evaluateGameWithProfile = useCallback(
+    async (
+      game: {
+        title: string;
+        year?: string | number | null;
+        genres?: string | null;
+        description?: string | null;
+        platforms?: string[] | null;
+      },
+      previousAssessment?: ShishkaFitAssessment | null,
+    ) => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        throw new Error("Не вдалося визначити користувача.");
+      }
+
+      const scopeValue = getPrimaryGameScopeValue(game.platforms);
+      const profileAnalysis = await fetchLatestGameFitProfileAnalysis(
+        supabase,
+        user.id,
+        scopeValue,
+      );
+
+      if (!profileAnalysis) {
+        throw new Error("Спершу онови профіль для цієї платформи.");
+      }
+
+      if (
+        previousAssessment?.profileAnalyzedAt &&
+        previousAssessment.profileAnalyzedAt === profileAnalysis.analyzedAt
+      ) {
+        throw new Error("Спершу онови профіль, а потім запускай переоцінку.");
+      }
+
+      return requestGameFitEvaluation({
+        scopeLabel: scopeValue,
+        profileAnalysis,
+        item: {
+          title: game.title,
+          year: game.year ?? null,
+          genres: game.genres ?? null,
+          description: game.description ?? null,
+          platforms: game.platforms ?? null,
+        },
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!selectedGame || !aiRecommendationScopeValue || aiRecommendationFitAssessment) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    void (async () => {
+      try {
+        const assessment = await evaluateGameWithProfile(
+          {
+            title: selectedGame.title,
+            year: selectedGame.released,
+            genres: selectedGame.genres,
+            description: null,
+            platforms: aiRecommendationScopeValue ? [aiRecommendationScopeValue] : null,
+          },
+          null,
+        );
+
+        if (!isCancelled) {
+          setAiRecommendationFitAssessment(assessment);
+          setAiRecommendationComment((prev) =>
+            mergeShishkaAssessmentIntoComment(prev, assessment),
+          );
+        }
+      } catch {
+        if (!isCancelled) {
+          setAiRecommendationFitAssessment(null);
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    aiRecommendationFitAssessment,
+    aiRecommendationScopeValue,
+    evaluateGameWithProfile,
+    selectedGame,
+  ]);
+
   const getGameRecommendationOptions = (rows: GameLlmExportRow[]): RecommendationRequestOption[] => {
     const platformBuckets = new Map<string, GameLlmExportRow[]>();
 
@@ -2092,6 +2235,7 @@ export default function GamesManager({
       viewPercent: number;
       platforms: string[];
       availability: string | null;
+      shishkaFitAssessment: ShishkaFitAssessment | null;
     },
   ) => {
     const {
@@ -2207,6 +2351,11 @@ export default function GamesManager({
       recommend_similar: payload.recommendSimilar,
       platforms: normalizedPlatforms,
       availability: payload.availability,
+      shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
+      shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
+      shishka_fit_profile_analyzed_at:
+        payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
+      shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
     });
 
     if (viewError) {
@@ -2233,6 +2382,7 @@ export default function GamesManager({
       viewPercent: number;
       platforms: string[];
       availability: string | null;
+      shishkaFitAssessment: ShishkaFitAssessment | null;
     },
   ) => {
     const normalizedPlatforms = normalizeGamePlatforms(payload.platforms);
@@ -2247,6 +2397,11 @@ export default function GamesManager({
         recommend_similar: payload.recommendSimilar,
         platforms: normalizedPlatforms,
         availability: payload.availability,
+        shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
+        shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
+        shishka_fit_profile_analyzed_at:
+          payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
+        shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
       })
       .eq("id", viewId);
 
@@ -2303,6 +2458,11 @@ export default function GamesManager({
           view_percent: payload.viewPercent,
           platforms: normalizedPlatforms,
           availability: payload.availability,
+          shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
+          shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
+          shishka_fit_profile_analyzed_at:
+            payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
+          shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
           items: itemDraft
             ? {
                 ...item.items,
@@ -2330,6 +2490,11 @@ export default function GamesManager({
         view_percent: payload.viewPercent,
         platforms: normalizedPlatforms,
         availability: payload.availability,
+        shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
+        shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
+        shishka_fit_profile_analyzed_at:
+          payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
+        shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
         items: itemDraft
           ? {
               ...prev.items,
@@ -2550,6 +2715,8 @@ export default function GamesManager({
         }
 
         setAiRecommendationComment(recommendation.why);
+        setAiRecommendationScopeValue(platform);
+        setAiRecommendationFitAssessment(null);
         setSelectedGame(recommendedGame);
         setRecommendationScopeState(null);
         showSnackbar("Рекомендацію відкрито");
@@ -3860,6 +4027,8 @@ export default function GamesManager({
               }
             }
             setAiRecommendationComment("");
+            setAiRecommendationScopeValue(null);
+            setAiRecommendationFitAssessment(null);
             setSelectedGame(game);
             setIsAddOpen(false);
           }}
@@ -3892,6 +4061,7 @@ export default function GamesManager({
           title={selectedGame.title}
           posterUrl={selectedGame.poster}
           size="wide"
+          fitTargetText="ця гра"
           showRecommendSimilar={false}
           platformOptions={visiblePlatforms}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
@@ -3901,14 +4071,29 @@ export default function GamesManager({
               platforms: defaultGamePlatform ? [defaultGamePlatform] : [],
               availability: showAvailability ? defaultGameAvailability : null,
               isViewed: defaultGameIsViewed ?? undefined,
+              shishkaFitAssessment: aiRecommendationFitAssessment,
             }
           }
           onClose={() => {
             setSelectedGame(null);
             setAiRecommendationComment("");
+            setAiRecommendationScopeValue(null);
+            setAiRecommendationFitAssessment(null);
             setTrailerMessage("");
           }}
           onAdd={(payload) => handleAddGame(selectedGame, payload)}
+          onEvaluate={(payload) =>
+            evaluateGameWithProfile(
+              {
+                title: selectedGame.title,
+                year: selectedGame.released,
+                genres: selectedGame.genres,
+                description: null,
+                platforms: payload.platforms,
+              },
+              payload.shishkaFitAssessment,
+            )
+          }
           previewAction={{
             label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
             onClick: handleWatchSelectedGameTrailer,
@@ -3949,6 +4134,7 @@ export default function GamesManager({
             (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined
           }
           size="wide"
+          fitTargetText="ця гра"
           showRecommendSimilar={false}
           platformOptions={visiblePlatforms}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
@@ -3987,8 +4173,25 @@ export default function GamesManager({
             viewPercent: selectedView.view_percent,
             platforms: selectedView.platforms ?? [],
             availability: selectedView.availability,
+            shishkaFitAssessment: getStoredShishkaFitAssessment(selectedView),
           }}
           onRefresh={readOnly ? undefined : handleRefreshSelectedGameMetadata}
+          onEvaluate={
+            readOnly
+              ? undefined
+              : (payload) =>
+                  evaluateGameWithProfile(
+                    {
+                      title: selectedView.items.title,
+                      year: selectedViewItemDraft?.year ?? selectedView.items.year,
+                      genres: selectedViewItemDraft?.genres ?? selectedView.items.genres,
+                      description:
+                        selectedViewItemDraft?.description ?? selectedView.items.description,
+                      platforms: payload.platforms,
+                    },
+                    payload.shishkaFitAssessment,
+                  )
+          }
           onAdd={
             readOnly
               ? undefined
