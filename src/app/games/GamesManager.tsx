@@ -2512,6 +2512,47 @@ export default function GamesManager({
     setSelectedViewItemDraft(null);
   };
 
+  const persistViewAssessment = async (
+    viewId: string,
+    assessment: ShishkaFitAssessment,
+  ) => {
+    const updatePayload = {
+      shishka_fit_label: assessment.label,
+      shishka_fit_reason: assessment.reason,
+      shishka_fit_profile_analyzed_at: assessment.profileAnalyzedAt,
+      shishka_fit_scope_value: assessment.scopeValue,
+    };
+
+    const { error } = await supabase
+      .from("user_views")
+      .update(updatePayload)
+      .eq("id", viewId);
+
+    if (error) {
+      throw new Error("Не вдалося зберегти оцінку.");
+    }
+
+    setCollection((prev) =>
+      prev.map((item) =>
+        item.id === viewId
+          ? {
+              ...item,
+              ...updatePayload,
+            }
+          : item,
+      ),
+    );
+
+    setSelectedView((prev) =>
+      prev && prev.id === viewId
+        ? {
+            ...prev,
+            ...updatePayload,
+          }
+        : prev,
+    );
+  };
+
   const applyRefreshedGameMetadata = async (game: GameResult) => {
     if (!selectedView) return;
     const detailResponse = await fetch(`/api/rawg/${game.id}`);
@@ -4082,18 +4123,6 @@ export default function GamesManager({
             setTrailerMessage("");
           }}
           onAdd={(payload) => handleAddGame(selectedGame, payload)}
-          onEvaluate={(payload) =>
-            evaluateGameWithProfile(
-              {
-                title: selectedGame.title,
-                year: selectedGame.released,
-                genres: selectedGame.genres,
-                description: null,
-                platforms: payload.platforms,
-              },
-              payload.shishkaFitAssessment,
-            )
-          }
           previewAction={{
             label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
             onClick: handleWatchSelectedGameTrailer,
@@ -4101,28 +4130,32 @@ export default function GamesManager({
             icon: playIcon,
           }}
         >
-          <div className={styles.resultContent}>
-            <div className={styles.titleRow}>
-              <span className={styles.resultRating}>
-                {getExternalRatingLabel(selectedGame.ratingSource, selectedGame.rating)}:{" "}
-                {selectedGame.rating ?? "—"}
-              </span>
+          {({ fitBadge }) => (
+            <div className={styles.resultContent}>
+              <div className={styles.titleRow}>
+                <span className={styles.resultRating}>
+                  {getExternalRatingLabel(selectedGame.ratingSource, selectedGame.rating)}:{" "}
+                  {selectedGame.rating ?? "—"}
+                </span>
+                {fitBadge}
+                <span className={styles.resultRating}>Мій: —</span>
+              </div>
+              {selectedGame.released ? (
+                <p className={styles.resultMeta}>
+                  Рік: {selectedGame.released.slice(0, 4)}
+                </p>
+              ) : null}
+              {selectedGame.genreItems?.length || selectedGame.genres ? (
+                <p className={styles.resultMeta}>
+                  Жанри: {renderGenreLinks(selectedGame.genreItems) ?? selectedGame.genres}
+                </p>
+              ) : null}
+              {searchDescriptions[selectedGame.id] ? (
+                <ModalDescription text={searchDescriptions[selectedGame.id]} />
+              ) : null}
+              {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
             </div>
-            {selectedGame.released ? (
-              <p className={styles.resultMeta}>
-                Рік: {selectedGame.released.slice(0, 4)}
-              </p>
-            ) : null}
-            {selectedGame.genreItems?.length || selectedGame.genres ? (
-              <p className={styles.resultMeta}>
-                Жанри: {renderGenreLinks(selectedGame.genreItems) ?? selectedGame.genres}
-              </p>
-            ) : null}
-            {searchDescriptions[selectedGame.id] ? (
-              <ModalDescription text={searchDescriptions[selectedGame.id]} />
-            ) : null}
-            {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
-          </div>
+          )}
         </CatalogModal>
       ) : null}
 
@@ -4192,6 +4225,11 @@ export default function GamesManager({
                     payload.shishkaFitAssessment,
                   )
           }
+          onPersistEvaluatedAssessment={
+            readOnly
+              ? undefined
+              : async (assessment) => persistViewAssessment(selectedView.id, assessment)
+          }
           onAdd={
             readOnly
               ? undefined
@@ -4205,49 +4243,52 @@ export default function GamesManager({
           }
           onDelete={readOnly ? undefined : () => handleDeleteView(selectedView.id)}
         >
-          <div className={styles.resultContent}>
-            <div className={styles.titleRow}>
-              <span className={styles.resultRating}>
-                {getExternalRatingLabel(
-                  selectedViewItemDraft?.ratingSource,
-                  selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating,
-                )}
-                :{" "}
-                {selectedViewItemDraft?.imdb_rating ??
-                  selectedView.items.imdb_rating ??
-                  "—"}
-              </span>
-              <span className={styles.resultRating}>
-                Мій: {formatPersonalRating(selectedView.rating)}
-              </span>
+          {({ fitBadge }) => (
+            <div className={styles.resultContent}>
+              <div className={styles.titleRow}>
+                <span className={styles.resultRating}>
+                  {getExternalRatingLabel(
+                    selectedViewItemDraft?.ratingSource,
+                    selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating,
+                  )}
+                  :{" "}
+                  {selectedViewItemDraft?.imdb_rating ??
+                    selectedView.items.imdb_rating ??
+                    "—"}
+                </span>
+                {fitBadge}
+                <span className={styles.resultRating}>
+                  Мій: {formatPersonalRating(selectedView.rating)}
+                </span>
+              </div>
+              {(selectedViewItemDraft?.year ?? selectedView.items.year) ? (
+                <p className={styles.resultMeta}>
+                  Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
+                </p>
+              ) : null}
+              {selectedViewItemDraft?.normalizedGenres?.length ||
+              selectedViewGenres.length > 0 ||
+              (selectedViewItemDraft?.genres ?? selectedView.items.genres) ? (
+                <p className={styles.resultMeta}>
+                  Жанри:{" "}
+                  {renderGenreLinks(selectedViewItemDraft?.normalizedGenres ?? selectedViewGenres) ??
+                    (selectedViewItemDraft?.genres ?? selectedView.items.genres)}
+                </p>
+              ) : null}
+              {(selectedViewItemDraft?.description ?? selectedView.items.description) ? (
+                <ModalDescription
+                  text={
+                    selectedViewItemDraft?.description ??
+                    selectedView.items.description ??
+                    ""
+                  }
+                />
+              ) : (
+                <p className={styles.resultPlot}>Опис недоступний.</p>
+              )}
+              {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
             </div>
-            {(selectedViewItemDraft?.year ?? selectedView.items.year) ? (
-              <p className={styles.resultMeta}>
-                Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
-              </p>
-            ) : null}
-            {selectedViewItemDraft?.normalizedGenres?.length ||
-            selectedViewGenres.length > 0 ||
-            (selectedViewItemDraft?.genres ?? selectedView.items.genres) ? (
-              <p className={styles.resultMeta}>
-                Жанри:{" "}
-                {renderGenreLinks(selectedViewItemDraft?.normalizedGenres ?? selectedViewGenres) ??
-                  (selectedViewItemDraft?.genres ?? selectedView.items.genres)}
-              </p>
-            ) : null}
-            {(selectedViewItemDraft?.description ?? selectedView.items.description) ? (
-              <ModalDescription
-                text={
-                  selectedViewItemDraft?.description ??
-                  selectedView.items.description ??
-                  ""
-                }
-              />
-            ) : (
-              <p className={styles.resultPlot}>Опис недоступний.</p>
-            )}
-            {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
-          </div>
+          )}
         </CatalogModal>
       ) : null}
 

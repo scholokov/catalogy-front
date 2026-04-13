@@ -2686,6 +2686,47 @@ export default function FilmsManager({
     setSelectedViewItemDraft(null);
   };
 
+  const persistViewAssessment = async (
+    viewId: string,
+    assessment: ShishkaFitAssessment,
+  ) => {
+    const updatePayload = {
+      shishka_fit_label: assessment.label,
+      shishka_fit_reason: assessment.reason,
+      shishka_fit_profile_analyzed_at: assessment.profileAnalyzedAt,
+      shishka_fit_scope_value: assessment.scopeValue,
+    };
+
+    const { error } = await supabase
+      .from("user_views")
+      .update(updatePayload)
+      .eq("id", viewId);
+
+    if (error) {
+      throw new Error("Не вдалося зберегти оцінку.");
+    }
+
+    setCollection((prev) =>
+      prev.map((item) =>
+        item.id === viewId
+          ? {
+              ...item,
+              ...updatePayload,
+            }
+          : item,
+      ),
+    );
+
+    setSelectedView((prev) =>
+      prev && prev.id === viewId
+        ? {
+            ...prev,
+            ...updatePayload,
+          }
+        : prev,
+    );
+  };
+
   const applyRefreshedFilmMetadata = async (film: FilmResult) => {
     if (!selectedView) return;
 
@@ -4258,20 +4299,6 @@ export default function FilmsManager({
             shishkaFitAssessment: aiRecommendationFitAssessment,
           }}
           onAdd={(payload) => handleAddFilm(selectedFilm, payload)}
-          onEvaluate={(payload) =>
-            evaluateFilmWithProfile(
-              {
-                title: selectedFilm.title,
-                year: selectedFilm.year,
-                mediaType: selectedFilm.mediaType,
-                genres: selectedFilm.genres,
-                director: selectedFilm.director,
-                actors: selectedFilm.actors,
-                plot: selectedFilm.plot,
-              },
-              payload.shishkaFitAssessment,
-            )
-          }
           previewAction={{
             label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
             onClick: handleWatchSelectedFilmTrailer,
@@ -4279,24 +4306,28 @@ export default function FilmsManager({
             icon: playIcon,
           }}
         >
-          <FilmMetadataContent
-            imdbRating={selectedFilm.imdbRating}
-            year={selectedFilm.year}
-            mediaType={selectedFilm.mediaType}
-            originalTitle={renderCopyableFilmTitle(selectedFilm.originalTitle, "оригінальну")}
-            englishTitle={renderCopyableFilmTitle(selectedFilm.englishTitle, "англійську")}
-            showEnglishTitle={
-              Boolean(selectedFilm.englishTitle?.trim()) &&
-              selectedFilm.englishTitle?.trim() !== selectedFilm.originalTitle?.trim()
-            }
-            director={renderDirectorLinks(selectedFilm.people) ?? selectedFilm.director}
-            writers={renderWriterLinks(selectedFilm.people)}
-            producers={renderProducerLinks(selectedFilm.people)}
-            actors={renderActorLinks(selectedFilm.people) ?? selectedFilm.actors}
-            genres={renderGenreLinks(selectedFilm.genreItems) ?? selectedFilm.genres}
-            description={selectedFilm.plot}
-            message={trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
-          />
+          {({ fitBadge }) => (
+            <FilmMetadataContent
+              imdbRating={selectedFilm.imdbRating}
+              fitBadge={fitBadge}
+              personalRating="—"
+              year={selectedFilm.year}
+              mediaType={selectedFilm.mediaType}
+              originalTitle={renderCopyableFilmTitle(selectedFilm.originalTitle, "оригінальну")}
+              englishTitle={renderCopyableFilmTitle(selectedFilm.englishTitle, "англійську")}
+              showEnglishTitle={
+                Boolean(selectedFilm.englishTitle?.trim()) &&
+                selectedFilm.englishTitle?.trim() !== selectedFilm.originalTitle?.trim()
+              }
+              director={renderDirectorLinks(selectedFilm.people) ?? selectedFilm.director}
+              writers={renderWriterLinks(selectedFilm.people)}
+              producers={renderProducerLinks(selectedFilm.people)}
+              actors={renderActorLinks(selectedFilm.people) ?? selectedFilm.actors}
+              genres={renderGenreLinks(selectedFilm.genreItems) ?? selectedFilm.genres}
+              description={selectedFilm.plot}
+              message={trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
+            />
+          )}
         </CatalogModal>
       ) : null}
 
@@ -4369,6 +4400,11 @@ export default function FilmsManager({
                     payload.shishkaFitAssessment,
                   )
           }
+          onPersistEvaluatedAssessment={
+            readOnly
+              ? undefined
+              : async (assessment) => persistViewAssessment(selectedView.id, assessment)
+          }
           onAdd={
             readOnly
               ? undefined
@@ -4383,43 +4419,54 @@ export default function FilmsManager({
           onDelete={readOnly ? undefined : () => handleDeleteView(selectedView.id)}
           showRecommendSimilar={false}
         >
-          <FilmMetadataContent
-            imdbRating={selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating ?? "—"}
-            personalRating={formatPersonalRating(selectedView.rating)}
-            year={selectedViewItemDraft?.year ?? selectedView.items.year}
-            mediaType={selectedViewItemDraft?.film_media_type ?? selectedView.items.film_media_type}
-            originalTitle={renderCopyableFilmTitle(
-              selectedViewItemDraft?.title_original ?? selectedView.items.title_original,
-              "оригінальну",
-            )}
-            englishTitle={renderCopyableFilmTitle(
-              selectedViewItemDraft?.title_en ?? selectedView.items.title_en,
-              "англійську",
-            )}
-            showEnglishTitle={
-              Boolean((selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim()) &&
-              (selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim() !==
-                (selectedViewItemDraft?.title_original ?? selectedView.items.title_original)?.trim()
-            }
-            director={
-              renderDirectorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
-              (selectedViewItemDraft?.director ?? selectedView.items.director)
-            }
-            writers={renderWriterLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople)}
-            producers={
-              renderProducerLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople)
-            }
-            actors={
-              renderActorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
-              (selectedViewItemDraft?.actors ?? selectedView.items.actors)
-            }
-            genres={
-              renderGenreLinks(selectedViewItemDraft?.normalizedGenres ?? selectedViewGenres) ??
-              (selectedViewItemDraft?.genres ?? selectedView.items.genres)
-            }
-            description={selectedViewItemDraft?.description ?? selectedView.items.description}
-            message={trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
-          />
+          {({ fitBadge }) => (
+            <FilmMetadataContent
+              imdbRating={
+                selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating ?? "—"
+              }
+              fitBadge={fitBadge}
+              personalRating={formatPersonalRating(selectedView.rating)}
+              year={selectedViewItemDraft?.year ?? selectedView.items.year}
+              mediaType={
+                selectedViewItemDraft?.film_media_type ?? selectedView.items.film_media_type
+              }
+              originalTitle={renderCopyableFilmTitle(
+                selectedViewItemDraft?.title_original ?? selectedView.items.title_original,
+                "оригінальну",
+              )}
+              englishTitle={renderCopyableFilmTitle(
+                selectedViewItemDraft?.title_en ?? selectedView.items.title_en,
+                "англійську",
+              )}
+              showEnglishTitle={
+                Boolean((selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim()) &&
+                (selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim() !==
+                  (
+                    selectedViewItemDraft?.title_original ?? selectedView.items.title_original
+                  )?.trim()
+              }
+              director={
+                renderDirectorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
+                (selectedViewItemDraft?.director ?? selectedView.items.director)
+              }
+              writers={renderWriterLinks(
+                selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople,
+              )}
+              producers={renderProducerLinks(
+                selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople,
+              )}
+              actors={
+                renderActorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
+                (selectedViewItemDraft?.actors ?? selectedView.items.actors)
+              }
+              genres={
+                renderGenreLinks(selectedViewItemDraft?.normalizedGenres ?? selectedViewGenres) ??
+                (selectedViewItemDraft?.genres ?? selectedView.items.genres)
+              }
+              description={selectedViewItemDraft?.description ?? selectedView.items.description}
+              message={trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
+            />
+          )}
         </CatalogModal>
       ) : null}
 

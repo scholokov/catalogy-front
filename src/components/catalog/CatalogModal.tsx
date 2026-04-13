@@ -4,7 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import {
-  mergeShishkaAssessmentIntoComment,
+  stripShishkaAssessmentFromComment,
   type ShishkaFitAssessment,
 } from "@/lib/shishka/fitAssessment";
 import styles from "./CatalogModal.module.css";
@@ -42,6 +42,7 @@ type CatalogModalProps = {
     availability: string | null;
     shishkaFitAssessment: ShishkaFitAssessment | null;
   }) => Promise<ShishkaFitAssessment>;
+  onPersistEvaluatedAssessment?: (assessment: ShishkaFitAssessment) => Promise<void>;
   extraActions?: React.ReactNode;
   previewAction?: {
     label: string;
@@ -64,7 +65,11 @@ type CatalogModalProps = {
   submitLabel?: string;
   onReadOnlyPrimaryAction?: () => Promise<void> | void;
   showRecommendSimilar?: boolean;
-  children: React.ReactNode;
+  children:
+    | React.ReactNode
+    | ((context: {
+        fitBadge: React.ReactNode | null;
+      }) => React.ReactNode);
 };
 
 const RATING_MIN = 1;
@@ -98,6 +103,7 @@ export default function CatalogModal({
   onDelete,
   onRefresh,
   onEvaluate,
+  onPersistEvaluatedAssessment,
   extraActions,
   previewAction,
   fitTargetText = "цей тайтл",
@@ -181,7 +187,6 @@ export default function CatalogModal({
       setViewPercentInput("100");
       setPlatforms([]);
       setAvailability(null);
-      setShishkaFitAssessment(initialShishkaFitAssessment);
       setIsFitPopoverOpen(false);
       return;
     }
@@ -194,7 +199,7 @@ export default function CatalogModal({
     };
 
     setViewedAt(normalizeDate(initialViewedAt));
-    setComment(initialComment ?? "");
+    setComment(stripShishkaAssessmentFromComment(initialComment));
     setRecommendSimilar(Boolean(initialRecommendSimilar));
     setIsViewed(initialIsViewed ?? true);
     setRating(initialRating ?? null);
@@ -204,7 +209,6 @@ export default function CatalogModal({
     setViewPercentInput(String(normalizedInitialViewPercent));
     setPlatforms(initialPlatformsKey ? initialPlatformsKey.split("|") : []);
     setAvailability(initialAvailability ?? null);
-    setShishkaFitAssessment(initialShishkaFitAssessment);
     setIsFitPopoverOpen(false);
   }, [
     isEditMode,
@@ -217,8 +221,11 @@ export default function CatalogModal({
     initialViewPercent,
     initialViewedAt,
     initialPlatformsKey,
-    initialShishkaFitAssessment,
   ]);
+
+  useEffect(() => {
+    setShishkaFitAssessment(initialShishkaFitAssessment);
+  }, [initialShishkaFitAssessment]);
 
   useEffect(() => {
     if (platformOptions.length === 0) {
@@ -411,9 +418,9 @@ export default function CatalogModal({
         availability,
         shishkaFitAssessment,
       });
-      setComment((prev) =>
-        mergeShishkaAssessmentIntoComment(prev, nextAssessment, shishkaFitAssessment),
-      );
+      if (onPersistEvaluatedAssessment) {
+        await onPersistEvaluatedAssessment(nextAssessment);
+      }
       setShishkaFitAssessment(nextAssessment);
       setIsFitPopoverOpen(true);
       showSnackbar("Оцінку оновлено");
@@ -463,6 +470,29 @@ export default function CatalogModal({
     if (images.length < 2) return;
     setActiveImageIndex((prev) => (prev + 1) % images.length);
   };
+
+  const fitBadge = shishkaFitAssessment ? (
+    <span className={styles.fitPopoverWrap} ref={fitPopoverRef}>
+      <button
+        type="button"
+        className={styles.fitPopoverTrigger}
+        onClick={() => setIsFitPopoverOpen((prev) => !prev)}
+        aria-expanded={isFitPopoverOpen}
+        aria-label="Пояснення вірогідності сподобатись"
+      >
+        {shishkaFitAssessment.label}
+      </button>
+      {isFitPopoverOpen ? (
+        <div className={styles.fitPopover} role="dialog" aria-modal="false">
+          <p className={styles.fitPopoverTitle}>
+            Вірогідність того, що {fitTargetText} сподобається
+          </p>
+          <p className={styles.fitPopoverLabel}>{shishkaFitAssessment.label}</p>
+          <p className={styles.fitPopoverReason}>{shishkaFitAssessment.reason}</p>
+        </div>
+      ) : null}
+    </span>
+  ) : null;
 
   const viewedAtDisplay = isViewed ? viewedAt : "";
   const selectedPlatformsLabel =
@@ -640,33 +670,6 @@ export default function CatalogModal({
                 </button>
                 {isMoreMenuOpen ? (
                   <div className={styles.contextMenu} role="menu">
-                    {onEvaluate && !isViewed ? (
-                      <button
-                        type="button"
-                        className={styles.contextMenuItem}
-                        onClick={() => {
-                          setIsMoreMenuOpen(false);
-                          void handleEvaluate();
-                        }}
-                        role="menuitem"
-                        disabled={isSaving || isDeleting || isRefreshing || isEvaluating}
-                      >
-                        <span className={styles.contextMenuIcon} aria-hidden="true">
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 -960 960 960"
-                            width="18"
-                            height="18"
-                          >
-                            <path
-                              fill="currentColor"
-                              d="M480-80 373-480 80-587l293-107 107-293 107 293 293 107-293 107L480-80Zm0-212 52-140 140-52-140-52-52-140-52 140-140 52 140 52 52 140Z"
-                            />
-                          </svg>
-                        </span>
-                        <span>{isEvaluating ? "Оцінюємо..." : "Оцінити"}</span>
-                      </button>
-                    ) : null}
                     {onRefresh ? (
                       <button
                         type="button"
@@ -692,6 +695,33 @@ export default function CatalogModal({
                           </svg>
                         </span>
                         <span>Оновити</span>
+                      </button>
+                    ) : null}
+                    {onEvaluate && !isViewed ? (
+                      <button
+                        type="button"
+                        className={styles.contextMenuItem}
+                        onClick={() => {
+                          setIsMoreMenuOpen(false);
+                          void handleEvaluate();
+                        }}
+                        role="menuitem"
+                        disabled={isSaving || isDeleting || isRefreshing || isEvaluating}
+                      >
+                        <span className={styles.contextMenuIcon} aria-hidden="true">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 -960 960 960"
+                            width="18"
+                            height="18"
+                          >
+                            <path
+                              fill="currentColor"
+                              d="M360-240h220q17 0 31.5-8.5T632-272l84-196q2-5 3-10t1-10v-32q0-17-11.5-28.5T680-560H496l24-136q2-10-1-19t-10-16l-29-29-184 200q-8 8-12 18t-4 22v200q0 33 23.5 56.5T360-240ZM480-80q-83 0-156-31.5T197-197q-54-54-85.5-127T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 83-31.5 156T763-197q-54 54-127 85.5T480-80Zm0-80q134 0 227-93t93-227q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 134 93 227t227 93Zm0-320Z"
+                            />
+                          </svg>
+                        </span>
+                        <span>{isEvaluating ? "Оцінюємо..." : "Оцінити"}</span>
                       </button>
                     ) : null}
                     {onDelete ? (
@@ -794,7 +824,7 @@ export default function CatalogModal({
             ) : null}
           </div>
           <div className={styles.details}>
-            {children}
+            {typeof children === "function" ? children({ fitBadge }) : children}
 
             <div className={styles.formBlock}>
               {platformOptions.length > 0 ? (
@@ -965,35 +995,7 @@ export default function CatalogModal({
                   !isViewed ? styles.labelDisabled : ""
                 }`}
               >
-                <span className={styles.inlineLabelTitle}>
-                  <span>Особистий рейтинг</span>
-                  {shishkaFitAssessment ? (
-                    <span className={styles.fitPopoverWrap} ref={fitPopoverRef}>
-                      <button
-                        type="button"
-                        className={styles.fitPopoverTrigger}
-                        onClick={() => setIsFitPopoverOpen((prev) => !prev)}
-                        aria-expanded={isFitPopoverOpen}
-                        aria-label="Пояснення вірогідності сподобатись"
-                      >
-                        Вірогідність сподобатись: {shishkaFitAssessment.label}
-                      </button>
-                      {isFitPopoverOpen ? (
-                        <div className={styles.fitPopover} role="dialog" aria-modal="false">
-                          <p className={styles.fitPopoverTitle}>
-                            Вірогідність того, що {fitTargetText} сподобається
-                          </p>
-                          <p className={styles.fitPopoverLabel}>
-                            {shishkaFitAssessment.label}
-                          </p>
-                          <p className={styles.fitPopoverReason}>
-                            {shishkaFitAssessment.reason}
-                          </p>
-                        </div>
-                      ) : null}
-                    </span>
-                  ) : null}
-                </span>
+                <span className={styles.inlineLabelTitle}>Особистий рейтинг</span>
                 <div className={styles.ratingControl}>
                   <button
                     type="button"

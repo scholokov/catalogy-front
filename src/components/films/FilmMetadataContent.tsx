@@ -70,6 +70,7 @@ function ModalDescription({ text }: { text: string }) {
 type FilmMetadataContentProps = {
   imdbRating?: string | null;
   personalRating?: string | null;
+  fitBadge?: ReactNode | null;
   year?: string | number | null;
   mediaType?: string | null;
   originalTitle?: ReactNode | null;
@@ -87,6 +88,7 @@ type FilmMetadataContentProps = {
 export default function FilmMetadataContent({
   imdbRating,
   personalRating,
+  fitBadge,
   year,
   mediaType,
   originalTitle,
@@ -113,9 +115,10 @@ export default function FilmMetadataContent({
 
   return (
     <div className={styles.resultContent}>
-      {imdbRating || personalRating ? (
+      {imdbRating || fitBadge || personalRating ? (
         <div className={styles.titleRow}>
           {imdbRating ? <span className={styles.resultRating}>IMDb: {imdbRating}</span> : null}
+          {fitBadge}
           {personalRating ? <span className={styles.resultRating}>Мій: {personalRating}</span> : null}
         </div>
       ) : null}

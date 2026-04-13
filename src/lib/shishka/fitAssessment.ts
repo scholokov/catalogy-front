@@ -64,3 +64,27 @@ export const mergeShishkaAssessmentIntoComment = (
 
   return `${nextBlock}\n\n${remainder}`;
 };
+
+export const stripShishkaAssessmentFromComment = (comment?: string | null) => {
+  const value = (comment ?? "").trim();
+  if (!value) return "";
+
+  if (
+    !value.startsWith(FIT_ASSESSMENT_PREFIX) &&
+    !value.startsWith(LEGACY_FIT_ASSESSMENT_PREFIX)
+  ) {
+    return value;
+  }
+
+  const blocks = value.split(/\r?\n\r?\n+/);
+  if (blocks.length > 1) {
+    return blocks.slice(1).join("\n\n").trim();
+  }
+
+  const lines = value.split(/\r?\n/);
+  if (lines.length <= 2) {
+    return "";
+  }
+
+  return lines.slice(2).join("\n").trim();
+};

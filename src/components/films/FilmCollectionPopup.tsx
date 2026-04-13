@@ -24,10 +24,6 @@ import {
   readDisplayPreferences,
 } from "@/lib/settings/displayPreferences";
 import { supabase } from "@/lib/supabase/client";
-import {
-  fetchLatestFilmFitProfileAnalysis,
-  requestFilmFitEvaluation,
-} from "@/lib/shishka/fitEvaluationClient";
 import type { ShishkaFitAssessment } from "@/lib/shishka/fitAssessment";
 import type { FilmNormalizedGenre, FilmNormalizedPerson } from "@/lib/films/normalizedMetadata";
 import { loadStoredGenresForItem } from "@/lib/films/storedGenres";
@@ -111,9 +107,6 @@ export type FilmCollectionPopupView = {
     year: number | null;
   };
 };
-
-const getFilmScopeValue = (mediaType?: "movie" | "tv" | null) =>
-  mediaType === "tv" ? "Серіали" : "Кіно";
 
 const getStoredShishkaFitAssessment = (
   existingView?: FilmCollectionPopupView | null,
@@ -312,62 +305,6 @@ export default function FilmCollectionPopup({
     itemDraft?.normalizedPeople ?? (storedPeople.length > 0 ? storedPeople : detail?.people ?? null);
   const currentGenres =
     itemDraft?.normalizedGenres ?? (storedGenres.length > 0 ? storedGenres : detail?.genreItems ?? null);
-
-  const evaluateFilmWithProfile = async (
-    previousAssessment?: ShishkaFitAssessment | null,
-  ) => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      throw new Error("Не вдалося визначити користувача.");
-    }
-
-    const title =
-      itemDraft?.title ??
-      detail?.title ??
-      existingView?.item.title ??
-      candidate?.title ??
-      "Без назви";
-    const mediaType =
-      itemDraft?.film_media_type ??
-      detail?.mediaType ??
-      existingView?.item.mediaType ??
-      candidate?.mediaType ??
-      "movie";
-    const scopeValue = getFilmScopeValue(mediaType);
-    const profileAnalysis = await fetchLatestFilmFitProfileAnalysis(
-      supabase,
-      user.id,
-      scopeValue,
-    );
-
-    if (!profileAnalysis) {
-      throw new Error("Спершу онови профіль для цього формату.");
-    }
-
-    if (
-      previousAssessment?.profileAnalyzedAt &&
-      previousAssessment.profileAnalyzedAt === profileAnalysis.analyzedAt
-    ) {
-      throw new Error("Спершу онови профіль, а потім запускай переоцінку.");
-    }
-
-    return requestFilmFitEvaluation({
-      scopeLabel: scopeValue,
-      profileAnalysis,
-      item: {
-        title,
-        year: itemDraft?.year ?? detail?.year ?? existingView?.item.year ?? candidate?.year ?? null,
-        mediaType,
-        genres: itemDraft?.genres ?? detail?.genres ?? existingView?.item.genres ?? null,
-        director: itemDraft?.director ?? detail?.director ?? existingView?.item.director ?? null,
-        actors: itemDraft?.actors ?? detail?.actors ?? existingView?.item.actors ?? null,
-        plot: itemDraft?.description ?? detail?.plot ?? existingView?.item.description ?? null,
-      },
-    });
-  };
 
   const copyText = async (value: string) => {
     const normalized = value.trim();
@@ -846,7 +783,6 @@ export default function FilmCollectionPopup({
       }
       availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
       showRecommendSimilar={false}
-      onEvaluate={(payload) => evaluateFilmWithProfile(payload.shishkaFitAssessment)}
     >
       <FilmMetadataContent
         imdbRating={resolvedImdb}
