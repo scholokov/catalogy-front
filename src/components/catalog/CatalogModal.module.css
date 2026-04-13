@@ -428,6 +428,34 @@
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.fitLabelContent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fitLabelIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
+.fitLabelIcon svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  fill: currentColor;
+}
+
+.fitLabelIconDown {
+  transform: rotate(180deg);
 }
 
 .fitPopover {

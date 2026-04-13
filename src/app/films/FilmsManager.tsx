@@ -4299,6 +4299,20 @@ export default function FilmsManager({
             shishkaFitAssessment: aiRecommendationFitAssessment,
           }}
           onAdd={(payload) => handleAddFilm(selectedFilm, payload)}
+          onEvaluate={(payload) =>
+            evaluateFilmWithProfile(
+              {
+                title: selectedFilm.title,
+                year: selectedFilm.year,
+                mediaType: selectedFilm.mediaType,
+                genres: selectedFilm.genres,
+                director: selectedFilm.director,
+                actors: selectedFilm.actors,
+                plot: selectedFilm.plot,
+              },
+              payload.shishkaFitAssessment,
+            )
+          }
           previewAction={{
             label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
             onClick: handleWatchSelectedFilmTrailer,
@@ -4310,7 +4324,6 @@ export default function FilmsManager({
             <FilmMetadataContent
               imdbRating={selectedFilm.imdbRating}
               fitBadge={fitBadge}
-              personalRating="—"
               year={selectedFilm.year}
               mediaType={selectedFilm.mediaType}
               originalTitle={renderCopyableFilmTitle(selectedFilm.originalTitle, "оригінальну")}
@@ -4421,15 +4434,11 @@ export default function FilmsManager({
         >
           {({ fitBadge }) => (
             <FilmMetadataContent
-              imdbRating={
-                selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating ?? "—"
-              }
+              imdbRating={selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating ?? "—"}
               fitBadge={fitBadge}
               personalRating={formatPersonalRating(selectedView.rating)}
               year={selectedViewItemDraft?.year ?? selectedView.items.year}
-              mediaType={
-                selectedViewItemDraft?.film_media_type ?? selectedView.items.film_media_type
-              }
+              mediaType={selectedViewItemDraft?.film_media_type ?? selectedView.items.film_media_type}
               originalTitle={renderCopyableFilmTitle(
                 selectedViewItemDraft?.title_original ?? selectedView.items.title_original,
                 "оригінальну",
@@ -4441,20 +4450,16 @@ export default function FilmsManager({
               showEnglishTitle={
                 Boolean((selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim()) &&
                 (selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim() !==
-                  (
-                    selectedViewItemDraft?.title_original ?? selectedView.items.title_original
-                  )?.trim()
+                  (selectedViewItemDraft?.title_original ?? selectedView.items.title_original)?.trim()
               }
               director={
                 renderDirectorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
                 (selectedViewItemDraft?.director ?? selectedView.items.director)
               }
-              writers={renderWriterLinks(
-                selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople,
-              )}
-              producers={renderProducerLinks(
-                selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople,
-              )}
+              writers={renderWriterLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople)}
+              producers={
+                renderProducerLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople)
+              }
               actors={
                 renderActorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
                 (selectedViewItemDraft?.actors ?? selectedView.items.actors)

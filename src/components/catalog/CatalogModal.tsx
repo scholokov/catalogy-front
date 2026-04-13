@@ -471,6 +471,71 @@ export default function CatalogModal({
     setActiveImageIndex((prev) => (prev + 1) % images.length);
   };
 
+  const renderChevronIcon = (variant: "single" | "double" | "triple", direction: "up" | "down") => {
+    const pathByVariant = {
+      single: "M7.41,15.41L12,10.83L16.59,15.41L18,14L12,8L6,14L7.41,15.41Z",
+      double:
+        "M7.41,18.41L6,17L12,11L18,17L16.59,18.41L12,13.83L7.41,18.41M7.41,12.41L6,11L12,5L18,11L16.59,12.41L12,7.83L7.41,12.41Z",
+      triple:
+        "M16.59,9.42L12,4.83L7.41,9.42L6,8L12,2L18,8L16.59,9.42M16.59,15.42L12,10.83L7.41,15.42L6,14L12,8L18,14L16.59,15.42M16.59,21.42L12,16.83L7.41,21.42L6,20L12,14L18,20L16.59,21.42Z",
+    } as const;
+
+    return (
+      <span
+        className={`${styles.fitLabelIcon} ${
+          direction === "down" ? styles.fitLabelIconDown : ""
+        }`}
+        aria-hidden="true"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+          <path d={pathByVariant[variant]} />
+        </svg>
+      </span>
+    );
+  };
+
+  const renderFitLabel = (label: ShishkaFitAssessment["label"]) => {
+    switch (label) {
+      case "Навряд":
+        return (
+          <span className={styles.fitLabelContent}>
+            {renderChevronIcon("double", "down")}
+            <span>{label}</span>
+          </span>
+        );
+      case "Слабко":
+        return (
+          <span className={styles.fitLabelContent}>
+            {renderChevronIcon("single", "down")}
+            <span>{label}</span>
+          </span>
+        );
+      case "Можливо":
+        return (
+          <span className={styles.fitLabelContent}>
+            {renderChevronIcon("single", "up")}
+            <span>{label}</span>
+          </span>
+        );
+      case "Схоже":
+        return (
+          <span className={styles.fitLabelContent}>
+            {renderChevronIcon("double", "up")}
+            <span>{label}</span>
+          </span>
+        );
+      case "Явно":
+        return (
+          <span className={styles.fitLabelContent}>
+            {renderChevronIcon("triple", "up")}
+            <span>{label}</span>
+          </span>
+        );
+      default:
+        return label;
+    }
+  };
+
   const fitBadge = shishkaFitAssessment ? (
     <span className={styles.fitPopoverWrap} ref={fitPopoverRef}>
       <button
@@ -480,14 +545,14 @@ export default function CatalogModal({
         aria-expanded={isFitPopoverOpen}
         aria-label="Пояснення вірогідності сподобатись"
       >
-        {shishkaFitAssessment.label}
+        {renderFitLabel(shishkaFitAssessment.label)}
       </button>
       {isFitPopoverOpen ? (
         <div className={styles.fitPopover} role="dialog" aria-modal="false">
           <p className={styles.fitPopoverTitle}>
             Вірогідність того, що {fitTargetText} сподобається
           </p>
-          <p className={styles.fitPopoverLabel}>{shishkaFitAssessment.label}</p>
+          <p className={styles.fitPopoverLabel}>{renderFitLabel(shishkaFitAssessment.label)}</p>
           <p className={styles.fitPopoverReason}>{shishkaFitAssessment.reason}</p>
         </div>
       ) : null}

@@ -1,12 +1,8 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
-import CatalogModal from "@/components/catalog/CatalogModal";
-import FilmMetadataContent from "@/components/films/FilmMetadataContent";
+import { useEffect, useMemo, useState } from "react";
+import FilmCatalogModal from "@/components/films/FilmCatalogModal";
 import TrailerViewerModal from "@/components/films/TrailerViewerModal";
-import PersonHoverLink from "@/components/people/PersonHoverLink";
-import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import {
   addFilmToCollection,
   normalizeEnglishTitle,
@@ -19,6 +15,11 @@ import {
   type FilmItemDraftInput,
   updateFilmView,
 } from "@/lib/films/collectionFlow";
+import {
+  evaluateFilmWithProfile,
+  getStoredFilmFitAssessment,
+  persistFilmViewAssessment,
+} from "@/lib/films/fitAssessmentFlow";
 import {
   DISPLAY_PREFERENCES_STORAGE_KEY,
   readDisplayPreferences,
@@ -108,25 +109,14 @@ export type FilmCollectionPopupView = {
   };
 };
 
-const getStoredShishkaFitAssessment = (
-  existingView?: FilmCollectionPopupView | null,
-): ShishkaFitAssessment | null => {
-  if (
-    !existingView?.shishkaFitLabel ||
-    !existingView.shishkaFitReason?.trim() ||
-    !existingView.shishkaFitProfileAnalyzedAt ||
-    !existingView.shishkaFitScopeValue
-  ) {
-    return null;
-  }
-
-  return {
-    label: existingView.shishkaFitLabel,
-    reason: existingView.shishkaFitReason.trim(),
-    profileAnalyzedAt: existingView.shishkaFitProfileAnalyzedAt,
-    scopeValue: existingView.shishkaFitScopeValue,
-  };
-};
+const getStoredShishkaFitAssessment = (existingView?: FilmCollectionPopupView | null) =>
+  getStoredFilmFitAssessment({
+    label: existingView?.shishkaFitLabel ?? null,
+    reason: existingView?.shishkaFitReason ?? null,
+    profileAnalyzedAt: existingView?.shishkaFitProfileAnalyzedAt ?? null,
+    scopeValue: existingView?.shishkaFitScopeValue ?? null,
+    mediaType: existingView?.item.mediaType ?? null,
+  });
 
 export type FilmCollectionPopupCandidate = {
   id: string;
@@ -159,7 +149,6 @@ export default function FilmCollectionPopup({
   onClose,
   onSaved,
 }: FilmCollectionPopupProps) {
-  const { showSnackbar } = useSnackbar();
   const [detail, setDetail] = useState<FilmResult | null>(null);
   const [itemDraft, setItemDraft] = useState<FilmItemDraftInput | null>(null);
   const [storedPeople, setStoredPeople] = useState<FilmNormalizedPerson[]>([]);
@@ -174,8 +163,6 @@ export default function FilmCollectionPopup({
     index: number;
     baseTitle: string;
   } | null>(null);
-  const [isCopyTooltipSuppressed, setIsCopyTooltipSuppressed] = useState(false);
-  const copyTooltipTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const applyPreferences = () => {
@@ -306,222 +293,32 @@ export default function FilmCollectionPopup({
   const currentGenres =
     itemDraft?.normalizedGenres ?? (storedGenres.length > 0 ? storedGenres : detail?.genreItems ?? null);
 
-  const copyText = async (value: string) => {
-    const normalized = value.trim();
-    if (!normalized) return;
-    try {
-      await navigator.clipboard.writeText(normalized);
-    } catch {
-      const textArea = document.createElement("textarea");
-      textArea.value = normalized;
-      textArea.setAttribute("readonly", "");
-      textArea.style.position = "fixed";
-      textArea.style.opacity = "0";
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textArea);
-    }
-    showSnackbar("Скопійовано");
-  };
-
-  const suppressCopyTooltip = () => {
-    setIsCopyTooltipSuppressed(true);
-    if (copyTooltipTimeoutRef.current !== null) {
-      window.clearTimeout(copyTooltipTimeoutRef.current);
-    }
-    copyTooltipTimeoutRef.current = window.setTimeout(() => {
-      setIsCopyTooltipSuppressed(false);
-    }, 900);
-  };
-
-  useEffect(() => {
-    return () => {
-      if (copyTooltipTimeoutRef.current !== null) {
-        window.clearTimeout(copyTooltipTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const renderCopyableFilmTitle = (
-    value: string | null | undefined,
-    label: "оригінальну" | "англійську",
-  ) => {
-    const resolvedValue = value?.trim();
-    if (!resolvedValue) {
-      return null;
-    }
-
-    return (
-      <button
-        type="button"
-        className={`${styles.copyableInlineButton} ${
-          isCopyTooltipSuppressed ? styles.copyTooltipHidden : ""
-        }`}
-        onClick={() => {
-          suppressCopyTooltip();
-          void copyText(resolvedValue);
-        }}
-        data-copy-tooltip="Клікніть для копіювання"
-        aria-label={`Скопіювати ${label} назву: ${resolvedValue}`}
-      >
-        {resolvedValue}
-      </button>
+  const evaluateCurrentFilm = async (
+    previousAssessment?: ShishkaFitAssessment | null,
+  ) =>
+    evaluateFilmWithProfile(
+      supabase,
+      {
+        title:
+          itemDraft?.title ??
+          detail?.title ??
+          existingView?.item.title ??
+          candidate?.title ??
+          "Без назви",
+        year: itemDraft?.year ?? detail?.year ?? existingView?.item.year ?? candidate?.year ?? null,
+        mediaType:
+          itemDraft?.film_media_type ??
+          detail?.mediaType ??
+          existingView?.item.mediaType ??
+          candidate?.mediaType ??
+          "movie",
+        genres: itemDraft?.genres ?? detail?.genres ?? existingView?.item.genres ?? null,
+        director: itemDraft?.director ?? detail?.director ?? existingView?.item.director ?? null,
+        actors: itemDraft?.actors ?? detail?.actors ?? existingView?.item.actors ?? null,
+        plot: itemDraft?.description ?? detail?.plot ?? existingView?.item.description ?? null,
+      },
+      previousAssessment,
     );
-  };
-
-  const renderActorLinks = (
-    people?: Array<{
-      tmdbPersonId: string;
-      name: string;
-      roleKind: "actor" | "director" | "writer" | "producer";
-      creditOrder?: number | null;
-    }> | null,
-  ) => {
-    const actors = (people ?? [])
-      .filter((person) => person.roleKind === "actor")
-      .sort((left, right) => {
-        const leftOrder = left.creditOrder ?? Number.MAX_SAFE_INTEGER;
-        const rightOrder = right.creditOrder ?? Number.MAX_SAFE_INTEGER;
-        return leftOrder - rightOrder;
-      })
-      .slice(0, 12);
-
-    if (actors.length === 0) {
-      return null;
-    }
-
-    return (
-      <span className={styles.metaEntityLinks}>
-        {actors.map((actor, index) => (
-          <span key={`${actor.tmdbPersonId}-${index}`}>
-            {index > 0 ? ", " : null}
-            <PersonHoverLink personId={actor.tmdbPersonId} name={actor.name} />
-          </span>
-        ))}
-      </span>
-    );
-  };
-
-  const renderDirectorLinks = (
-    people?: Array<{
-      tmdbPersonId: string;
-      name: string;
-      roleKind: "actor" | "director" | "writer" | "producer";
-      creditOrder?: number | null;
-    }> | null,
-  ) => {
-    const directors = (people ?? [])
-      .filter((person) => person.roleKind === "director")
-      .sort((left, right) => {
-        const leftOrder = left.creditOrder ?? Number.MAX_SAFE_INTEGER;
-        const rightOrder = right.creditOrder ?? Number.MAX_SAFE_INTEGER;
-        return leftOrder - rightOrder;
-      })
-      .slice(0, 6);
-
-    if (directors.length === 0) {
-      return null;
-    }
-
-    return (
-      <span className={styles.metaEntityLinks}>
-        {directors.map((director, index) => (
-          <span key={`${director.tmdbPersonId}-${index}`}>
-            {index > 0 ? ", " : null}
-            <PersonHoverLink personId={director.tmdbPersonId} name={director.name} />
-          </span>
-        ))}
-      </span>
-    );
-  };
-
-  const renderWriterLinks = (
-    people?: Array<{
-      tmdbPersonId: string;
-      name: string;
-      roleKind: "actor" | "director" | "writer" | "producer";
-      creditOrder?: number | null;
-    }> | null,
-  ) => {
-    const writers = (people ?? [])
-      .filter((person) => person.roleKind === "writer")
-      .sort((left, right) => {
-        const leftOrder = left.creditOrder ?? Number.MAX_SAFE_INTEGER;
-        const rightOrder = right.creditOrder ?? Number.MAX_SAFE_INTEGER;
-        return leftOrder - rightOrder;
-      })
-      .slice(0, 6);
-
-    if (writers.length === 0) {
-      return null;
-    }
-
-    return (
-      <span className={styles.metaEntityLinks}>
-        {writers.map((writer, index) => (
-          <span key={`${writer.tmdbPersonId}-${index}`}>
-            {index > 0 ? ", " : null}
-            <PersonHoverLink personId={writer.tmdbPersonId} name={writer.name} />
-          </span>
-        ))}
-      </span>
-    );
-  };
-
-  const renderProducerLinks = (
-    people?: Array<{
-      tmdbPersonId: string;
-      name: string;
-      roleKind: "actor" | "director" | "writer" | "producer";
-      creditOrder?: number | null;
-    }> | null,
-  ) => {
-    const producers = (people ?? [])
-      .filter((person) => person.roleKind === "producer")
-      .sort((left, right) => {
-        const leftOrder = left.creditOrder ?? Number.MAX_SAFE_INTEGER;
-        const rightOrder = right.creditOrder ?? Number.MAX_SAFE_INTEGER;
-        return leftOrder - rightOrder;
-      })
-      .slice(0, 6);
-
-    if (producers.length === 0) {
-      return null;
-    }
-
-    return (
-      <span className={styles.metaEntityLinks}>
-        {producers.map((producer, index) => (
-          <span key={`${producer.tmdbPersonId}-${index}`}>
-            {index > 0 ? ", " : null}
-            <PersonHoverLink personId={producer.tmdbPersonId} name={producer.name} />
-          </span>
-        ))}
-      </span>
-    );
-  };
-
-  const renderGenreLinks = (genres?: FilmNormalizedGenre[] | null) => {
-    const resolvedGenres = (genres ?? []).slice(0, 8);
-
-    if (resolvedGenres.length === 0) {
-      return null;
-    }
-
-    return (
-      <span className={styles.metaEntityLinks}>
-        {resolvedGenres.map((genre, index) => (
-          <span key={`${genre.tmdbGenreId}-${index}`}>
-            {index > 0 ? ", " : null}
-            <Link href={`/genres/${genre.tmdbGenreId}`} className={styles.metaEntityLink}>
-              {genre.name}
-            </Link>
-          </span>
-        ))}
-      </span>
-    );
-  };
 
   const resolvedTitle = useMemo(() => {
     if (itemDraft?.title) return itemDraft.title;
@@ -625,6 +422,15 @@ export default function FilmCollectionPopup({
       payload,
     });
 
+    await onSaved();
+  };
+
+  const persistAssessmentOnly = async (assessment: ShishkaFitAssessment) => {
+    if (!existingView) {
+      return;
+    }
+
+    await persistFilmViewAssessment(supabase, existingView.viewId, assessment);
     await onSaved();
   };
 
@@ -748,10 +554,23 @@ export default function FilmCollectionPopup({
   };
 
   return (
-    <CatalogModal
+    <FilmCatalogModal
       title={resolvedTitle}
       posterUrl={resolvedPoster || undefined}
       imageUrls={resolvedImageUrls}
+      imdbRating={resolvedImdb}
+      personalRating={mode === "edit" ? String(existingView?.rating ?? "—") : "—"}
+      year={resolvedYear}
+      mediaType={resolvedMediaType}
+      originalTitle={resolvedOriginalTitle}
+      englishTitle={resolvedEnglishTitle}
+      director={resolvedDirector}
+      actors={resolvedActors}
+      genres={resolvedGenres}
+      description={resolvedDescription}
+      people={currentPeople}
+      genreItems={currentGenres}
+      message={trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
       size="wide"
       fitTargetText="цей фільм"
       onClose={onClose}
@@ -783,26 +602,15 @@ export default function FilmCollectionPopup({
       }
       availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
       showRecommendSimilar={false}
+      onEvaluate={
+        mode === "edit"
+          ? (payload) => evaluateCurrentFilm(payload.shishkaFitAssessment)
+          : undefined
+      }
+      onPersistEvaluatedAssessment={
+        mode === "edit" ? async (assessment) => persistAssessmentOnly(assessment) : undefined
+      }
     >
-      <FilmMetadataContent
-        imdbRating={resolvedImdb}
-        personalRating={mode === "edit" ? String(existingView?.rating ?? "—") : null}
-        year={resolvedYear}
-        mediaType={resolvedMediaType}
-        originalTitle={renderCopyableFilmTitle(resolvedOriginalTitle, "оригінальну")}
-        englishTitle={renderCopyableFilmTitle(resolvedEnglishTitle, "англійську")}
-        showEnglishTitle={
-          Boolean(resolvedEnglishTitle?.trim()) &&
-          resolvedEnglishTitle?.trim() !== resolvedOriginalTitle?.trim()
-        }
-        director={renderDirectorLinks(currentPeople) ?? resolvedDirector}
-        writers={renderWriterLinks(currentPeople)}
-        producers={renderProducerLinks(currentPeople)}
-        actors={renderActorLinks(currentPeople) ?? resolvedActors}
-        genres={renderGenreLinks(currentGenres) ?? resolvedGenres}
-        description={resolvedDescription}
-        message={trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
-      />
       {trailerModal ? (
         <TrailerViewerModal
           key={`${trailerModal.baseTitle}:${trailerModal.index}:${trailerModal.trailers.length}`}
@@ -812,6 +620,6 @@ export default function FilmCollectionPopup({
           onClose={() => setTrailerModal(null)}
         />
       ) : null}
-    </CatalogModal>
+    </FilmCatalogModal>
   );
 }

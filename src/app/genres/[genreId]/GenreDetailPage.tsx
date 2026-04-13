@@ -215,7 +215,7 @@ const loadGenreCollectionData = async (genreId: string) => {
   const { data, error } = await supabase
     .from("user_views")
     .select(
-      "id, viewed_at, comment, recommend_similar, is_viewed, rating, view_percent, availability, items!inner(id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, film_media_type, imdb_rating, trailers, year, type)",
+      "id, viewed_at, comment, recommend_similar, is_viewed, rating, view_percent, availability, shishka_fit_label, shishka_fit_reason, shishka_fit_profile_analyzed_at, shishka_fit_scope_value, items!inner(id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, film_media_type, imdb_rating, trailers, year, type)",
     )
     .eq("user_id", user.id)
     .in("item_id", itemIds)
@@ -238,6 +238,10 @@ const loadGenreCollectionData = async (genreId: string) => {
     rating: number | null;
     view_percent: number;
     availability: string | null;
+    shishka_fit_label?: FilmCollectionPopupView["shishkaFitLabel"] | null;
+    shishka_fit_reason?: string | null;
+    shishka_fit_profile_analyzed_at?: string | null;
+    shishka_fit_scope_value?: string | null;
     items:
       | {
           id: string;
@@ -285,6 +289,10 @@ const loadGenreCollectionData = async (genreId: string) => {
       rating: row.rating,
       viewPercent: row.view_percent,
       availability: row.availability,
+      shishkaFitLabel: row.shishka_fit_label ?? null,
+      shishkaFitReason: row.shishka_fit_reason ?? null,
+      shishkaFitProfileAnalyzedAt: row.shishka_fit_profile_analyzed_at ?? null,
+      shishkaFitScopeValue: row.shishka_fit_scope_value ?? null,
       item: Array.isArray(row.items) ? row.items[0] : row.items,
     }))
     .filter((row) => row.item?.type === "film")
@@ -297,6 +305,10 @@ const loadGenreCollectionData = async (genreId: string) => {
       rating: row.rating,
       viewPercent: row.viewPercent,
       availability: row.availability,
+      shishkaFitLabel: row.shishkaFitLabel,
+      shishkaFitReason: row.shishkaFitReason,
+      shishkaFitProfileAnalyzedAt: row.shishkaFitProfileAnalyzedAt,
+      shishkaFitScopeValue: row.shishkaFitScopeValue,
       item: {
         id: row.item.id,
         title: row.item.title,

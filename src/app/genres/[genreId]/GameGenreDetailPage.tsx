@@ -13,6 +13,7 @@ import {
 } from "react";
 import CatalogLayout from "@/components/catalog/CatalogLayout";
 import CatalogModal from "@/components/catalog/CatalogModal";
+import TrailerViewerModal from "@/components/films/TrailerViewerModal";
 import searchStyles from "@/components/catalog/CatalogSearch.module.css";
 import { supabase } from "@/lib/supabase/client";
 import { buildGenreHref, type GenreSource } from "@/lib/genres/routes";
@@ -22,6 +23,10 @@ import {
 } from "@/lib/games/normalizedMetadata";
 import { normalizeGamePlatforms } from "@/lib/games/platforms";
 import { DEFAULT_GAME_PLATFORM_OPTIONS } from "@/lib/settings/displayPreferences";
+import {
+  fetchLatestGameFitProfileAnalysis,
+  requestGameFitEvaluation,
+} from "@/lib/shishka/fitEvaluationClient";
 import type { ShishkaFitAssessment } from "@/lib/shishka/fitAssessment";
 import styles from "@/app/actors/ActorsPage.module.css";
 
@@ -85,8 +90,52 @@ type GameItemDraft = {
 const GAME_BATCH_SIZE = 12;
 const GAME_PLATFORM_OPTIONS = [...DEFAULT_GAME_PLATFORM_OPTIONS];
 const AVAILABILITY_OPTIONS = ["В колекції", "Тимчасовий доступ", "У друзів", "Відсутній"];
+const ALLOWED_GAME_IMAGE_HOSTS = new Set([
+  "images.igdb.com",
+  "media.rawg.io",
+]);
 
-const sanitizePosterUrl = (value?: string | null) => value?.trim().replace(/\)+$/, "") || null;
+const getPrimaryGameScopeValue = (platforms: string[] | null | undefined) => {
+  const normalizedPlatforms = normalizeGamePlatforms(platforms);
+  return normalizedPlatforms[0] ?? "Усі платформи";
+};
+
+const sanitizePosterUrl = (value?: string | null) => {
+  const normalized = value?.trim().replace(/\)+$/, "") || "";
+  if (!normalized) {
+    return null;
+  }
+
+  // Keep relative paths untouched if they ever appear.
+  if (normalized.startsWith("/")) {
+    return normalized;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    if (parsed.protocol !== "https:") {
+      return null;
+    }
+    if (!ALLOWED_GAME_IMAGE_HOSTS.has(parsed.hostname)) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
+const normalizeTrailers = (trailers?: Trailer[] | null) => {
+  const normalized = (trailers ?? []).filter(
+    (trailer) => trailer?.site?.toLowerCase() === "youtube" && trailer.url,
+  );
+  return normalized.length > 0 ? normalized : null;
+};
+
+const selectPreferredTrailer = (trailers?: Trailer[] | null) =>
+  normalizeTrailers(trailers)?.find((trailer) => trailer.official) ??
+  normalizeTrailers(trailers)?.[0] ??
+  null;
 
 const getStoredShishkaFitAssessment = (
   view: GameGenreView,
@@ -533,6 +582,13 @@ export default function GameGenreDetailPage({
   const [selectedExistingGame, setSelectedExistingGame] = useState<GameGenreView | null>(null);
   const [selectedDraft, setSelectedDraft] = useState<GameItemDraft | null>(null);
   const [message, setMessage] = useState("Завантаження жанру…");
+  const [trailerMessage, setTrailerMessage] = useState("");
+  const [isTrailerLoading, setIsTrailerLoading] = useState(false);
+  const [trailerModal, setTrailerModal] = useState<{
+    trailers: Trailer[];
+    index: number;
+    baseTitle: string;
+  } | null>(null);
 
   useEffect(() => {
     let isCancelled = false;
@@ -571,6 +627,58 @@ export default function GameGenreDetailPage({
           : null,
     };
   }, [collectionGames, watchedEntries.length]);
+
+  const evaluateGameWithProfile = useCallback(
+    async (
+      game: {
+        title: string;
+        year?: string | number | null;
+        genres?: string | null;
+        description?: string | null;
+        platforms?: string[] | null;
+      },
+      previousAssessment?: ShishkaFitAssessment | null,
+    ) => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        throw new Error("Не вдалося визначити користувача.");
+      }
+
+      const scopeValue = getPrimaryGameScopeValue(game.platforms);
+      const profileAnalysis = await fetchLatestGameFitProfileAnalysis(
+        supabase,
+        user.id,
+        scopeValue,
+      );
+
+      if (!profileAnalysis) {
+        throw new Error("Спершу онови профіль для цієї платформи.");
+      }
+
+      if (
+        previousAssessment?.profileAnalyzedAt &&
+        previousAssessment.profileAnalyzedAt === profileAnalysis.analyzedAt
+      ) {
+        throw new Error("Спершу онови профіль, а потім запускай переоцінку.");
+      }
+
+      return requestGameFitEvaluation({
+        scopeLabel: scopeValue,
+        profileAnalysis,
+        item: {
+          title: game.title,
+          year: game.year ?? null,
+          genres: game.genres ?? null,
+          description: game.description ?? null,
+          platforms: game.platforms ?? null,
+        },
+      });
+    },
+    [],
+  );
 
   const handleUpdateSelectedGame = useCallback(
     async (payload: {
@@ -662,6 +770,57 @@ export default function GameGenreDetailPage({
     setSelectedExistingGame(null);
   }, [selectedExistingGame, source, sourceGenreId]);
 
+  const persistSelectedGameAssessment = useCallback(
+    async (assessment: ShishkaFitAssessment) => {
+      if (!selectedExistingGame) {
+        return;
+      }
+
+      const updatePayload = {
+        shishka_fit_label: assessment.label,
+        shishka_fit_reason: assessment.reason,
+        shishka_fit_profile_analyzed_at: assessment.profileAnalyzedAt,
+        shishka_fit_scope_value: assessment.scopeValue,
+      };
+
+      const { error } = await supabase
+        .from("user_views")
+        .update(updatePayload)
+        .eq("id", selectedExistingGame.viewId);
+
+      if (error) {
+        throw new Error("Не вдалося зберегти оцінку.");
+      }
+
+      setCollectionGames((prev) =>
+        prev.map((item) =>
+          item.viewId === selectedExistingGame.viewId
+            ? {
+                ...item,
+                shishkaFitLabel: updatePayload.shishka_fit_label,
+                shishkaFitReason: updatePayload.shishka_fit_reason,
+                shishkaFitProfileAnalyzedAt: updatePayload.shishka_fit_profile_analyzed_at,
+                shishkaFitScopeValue: updatePayload.shishka_fit_scope_value,
+              }
+            : item,
+        ),
+      );
+
+      setSelectedExistingGame((prev) =>
+        prev && prev.viewId === selectedExistingGame.viewId
+          ? {
+              ...prev,
+              shishkaFitLabel: updatePayload.shishka_fit_label,
+              shishkaFitReason: updatePayload.shishka_fit_reason,
+              shishkaFitProfileAnalyzedAt: updatePayload.shishka_fit_profile_analyzed_at,
+              shishkaFitScopeValue: updatePayload.shishka_fit_scope_value,
+            }
+          : prev,
+      );
+    },
+    [selectedExistingGame],
+  );
+
   const handleRefreshSelectedGame = useCallback(async () => {
     if (!selectedExistingGame?.item.externalId) {
       return;
@@ -697,6 +856,111 @@ export default function GameGenreDetailPage({
       trailers: detail.trailers ?? selectedExistingGame.item.trailers,
     });
   }, [selectedExistingGame]);
+
+  const openTrailerModal = useCallback((title: string, trailers?: Trailer[] | null) => {
+    const picked = selectPreferredTrailer(trailers);
+    if (!picked) {
+      setTrailerMessage("Трейлер недоступний.");
+      return false;
+    }
+    const safeTrailers = normalizeTrailers(trailers) ?? [];
+    const pickedIndex = safeTrailers.indexOf(picked);
+    setTrailerModal({
+      trailers: safeTrailers,
+      index: pickedIndex >= 0 ? pickedIndex : 0,
+      baseTitle: title,
+    });
+    return true;
+  }, []);
+
+  const fetchGameTrailers = useCallback(async (gameId: string): Promise<Trailer[] | null> => {
+    const response = await fetch(`/api/rawg/${gameId}`);
+    if (!response.ok) return null;
+    const detail = (await response.json()) as { trailers?: Trailer[] | null };
+    return normalizeTrailers(detail.trailers ?? null);
+  }, []);
+
+  const handleWatchSelectedGameTrailer = useCallback(async () => {
+    if (!selectedExistingGame) return;
+    setTrailerMessage("");
+    const currentTrailers =
+      normalizeTrailers(selectedDraft?.trailers ?? null) ??
+      normalizeTrailers(selectedExistingGame.item.trailers ?? null);
+    if (currentTrailers) {
+      openTrailerModal(selectedExistingGame.item.title, currentTrailers);
+      return;
+    }
+    const externalId = selectedExistingGame.item.externalId ?? "";
+    if (!externalId) {
+      setTrailerMessage("Трейлер недоступний.");
+      return;
+    }
+
+    setIsTrailerLoading(true);
+    try {
+      const trailers = await fetchGameTrailers(externalId);
+      if (!trailers) {
+        setTrailerMessage("Трейлер недоступний.");
+        return;
+      }
+
+      setSelectedDraft((prev) => (prev ? { ...prev, trailers } : { ...({
+        posterUrl: selectedExistingGame.item.posterUrl,
+        year: selectedExistingGame.item.year,
+        imdbRating: selectedExistingGame.item.imdbRating,
+        description: selectedExistingGame.item.description,
+        genres: selectedExistingGame.item.genres,
+        normalizedGenres: selectedExistingGame.item.genreItems,
+        trailers,
+      } satisfies GameItemDraft) }));
+
+      const { error } = await supabase
+        .from("items")
+        .update({ trailers })
+        .eq("id", selectedExistingGame.item.id);
+
+      if (error) {
+        setTrailerMessage("Не вдалося зберегти трейлер.");
+        return;
+      }
+
+      setCollectionGames((prev) =>
+        prev.map((item) =>
+          item.item.id === selectedExistingGame.item.id
+            ? {
+                ...item,
+                item: {
+                  ...item.item,
+                  trailers,
+                },
+              }
+            : item,
+        ),
+      );
+
+      setSelectedExistingGame((prev) =>
+        prev && prev.item.id === selectedExistingGame.item.id
+          ? {
+              ...prev,
+              item: {
+                ...prev.item,
+                trailers,
+              },
+            }
+          : prev,
+      );
+
+      openTrailerModal(selectedExistingGame.item.title, trailers);
+    } catch (error) {
+      const nextMessage =
+        error instanceof Error && error.message
+          ? error.message
+          : "Не вдалося отримати трейлер.";
+      setTrailerMessage(nextMessage);
+    } finally {
+      setIsTrailerLoading(false);
+    }
+  }, [fetchGameTrailers, openTrailerModal, selectedDraft, selectedExistingGame]);
 
   const activeGame = selectedExistingGame;
   const activeGenres = selectedDraft?.normalizedGenres ?? activeGame?.item.genreItems ?? null;
@@ -780,6 +1044,24 @@ export default function GameGenreDetailPage({
             onAdd={handleUpdateSelectedGame}
             onDelete={handleDeleteSelectedGame}
             onRefresh={handleRefreshSelectedGame}
+            previewAction={{
+              label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
+              onClick: handleWatchSelectedGameTrailer,
+              disabled: isTrailerLoading,
+            }}
+            onEvaluate={(payload) =>
+              evaluateGameWithProfile(
+                {
+                  title: activeGame.item.title,
+                  year: selectedDraft?.year ?? activeGame.item.year,
+                  genres: selectedDraft?.genres ?? activeGame.item.genres,
+                  description: selectedDraft?.description ?? activeGame.item.description,
+                  platforms: payload.platforms,
+                },
+                payload.shishkaFitAssessment,
+              )
+            }
+            onPersistEvaluatedAssessment={persistSelectedGameAssessment}
             initialValues={{
               viewedAt: activeGame.viewedAt,
               comment: activeGame.comment,
@@ -793,25 +1075,41 @@ export default function GameGenreDetailPage({
             }}
             submitLabel="Зберегти"
           >
-            <div className={searchStyles.resultContent}>
-              {selectedDraft?.year ?? activeGame.item.year ? (
-                <p className={searchStyles.resultMeta}>
-                  Рік: {selectedDraft?.year ?? activeGame.item.year}
-                </p>
-              ) : null}
-              {selectedDraft?.imdbRating ?? activeGame.item.imdbRating ? (
-                <p className={searchStyles.resultMeta}>
-                  RAWG: {selectedDraft?.imdbRating ?? activeGame.item.imdbRating}
-                </p>
-              ) : null}
-              {activeGenres?.length || activeGenreText ? (
-                <p className={searchStyles.resultMeta}>
-                  Жанри: {renderGenreLinks(activeGenres) ?? activeGenreText}
-                </p>
-              ) : null}
-              <ModalDescription text={selectedDraft?.description ?? activeGame.item.description ?? ""} />
-            </div>
+            {({ fitBadge }) => (
+              <div className={searchStyles.resultContent}>
+                <div className={searchStyles.titleRow}>
+                  {selectedDraft?.imdbRating ?? activeGame.item.imdbRating ? (
+                    <span className={searchStyles.resultRating}>
+                      RAWG: {selectedDraft?.imdbRating ?? activeGame.item.imdbRating}
+                    </span>
+                  ) : null}
+                  {fitBadge}
+                  <span className={searchStyles.resultRating}>Мій: {activeGame.rating ?? "—"}</span>
+                </div>
+                {selectedDraft?.year ?? activeGame.item.year ? (
+                  <p className={searchStyles.resultMeta}>
+                    Рік: {selectedDraft?.year ?? activeGame.item.year}
+                  </p>
+                ) : null}
+                {activeGenres?.length || activeGenreText ? (
+                  <p className={searchStyles.resultMeta}>
+                    Жанри: {renderGenreLinks(activeGenres) ?? activeGenreText}
+                  </p>
+                ) : null}
+                {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
+                <ModalDescription text={selectedDraft?.description ?? activeGame.item.description ?? ""} />
+              </div>
+            )}
           </CatalogModal>
+        ) : null}
+        {trailerModal ? (
+          <TrailerViewerModal
+            key={`${trailerModal.baseTitle}:${trailerModal.index}:${trailerModal.trailers.length}`}
+            trailers={trailerModal.trailers}
+            initialIndex={trailerModal.index}
+            baseTitle={trailerModal.baseTitle}
+            onClose={() => setTrailerModal(null)}
+          />
         ) : null}
       </div>
     </CatalogLayout>
