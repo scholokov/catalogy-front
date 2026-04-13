@@ -40,6 +40,28 @@
 
 .exportButton {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.exportLabel {
+  display: inline;
+}
+
+.exportIcon {
+  display: none;
+  line-height: 0;
+}
+
+.exportIconSvg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  flex: 0 0 24px;
+  fill: currentColor;
 }
 
 .message {
@@ -419,8 +441,26 @@
 }
 
 @media (max-width: 560px) {
+  .headerMeta {
+    padding-top: 8px;
+  }
+
   .exportButton {
+    display: inline-flex;
+    width: 44px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+  }
+
+  .exportLabel {
     display: none;
+  }
+
+  .exportIcon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .kpiGrid {
