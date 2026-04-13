@@ -1,0 +1,228 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.modeSwitcher {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+}
+
+.modeButton {
+  min-width: 120px;
+  min-height: 40px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.modeButtonActive {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+.text {
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+.input {
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  padding: 0 48px 0 14px;
+  font-size: 16px;
+  width: 100%;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+}
+
+.inputPlain {
+  padding-right: 14px;
+}
+
+.input:focus {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.inputError {
+  border-color: var(--color-danger);
+}
+
+.inputError:focus {
+  outline-color: var(--color-danger);
+}
+
+.passwordField {
+  position: relative;
+  width: 100%;
+}
+
+.eyeButton {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  width: 32px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--color-text-secondary);
+}
+
+.eyeButton:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.eyeIcon {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.inlineLinkButton {
+  width: fit-content;
+  margin-top: -8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.feedback {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.feedbackError {
+  color: var(--color-danger);
+}
+
+.fieldError {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--color-danger);
+}
+
+.feedbackSuccess {
+  color: var(--color-success);
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.submitButton {
+  width: 100%;
+  min-height: 44px;
+}
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--color-border);
+}
+
+.footerText {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.linkButton {
+  width: fit-content;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.linkButton:hover,
+.inlineLinkButton:hover,
+.modeButton:hover,
+.eyeButton:hover {
+  opacity: 0.85;
+}
+
+.linkButton:focus-visible,
+.inlineLinkButton:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.successPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
+}
+
+.successTitle {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.successText {
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .modeSwitcher {
+    gap: 6px;
+  }
+
+  .modeButton {
+    font-size: 14px;
+  }
+}
