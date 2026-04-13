@@ -14,6 +14,7 @@ type PersonPreviewData = {
   id: string;
   name: string;
   originalName: string;
+  englishName?: string;
   biography: string;
   placeOfBirth: string;
   knownForDepartment: string;
@@ -250,6 +251,13 @@ export default function PersonHoverLink({ personId, name }: PersonHoverLinkProps
                   {preview.originalName && preview.originalName !== preview.name ? (
                     <span className={styles.personPreviewMeta}>
                       Оригінальне ім’я: {preview.originalName}
+                    </span>
+                  ) : null}
+                  {preview.englishName &&
+                  preview.englishName !== preview.originalName &&
+                  preview.englishName !== preview.name ? (
+                    <span className={styles.personPreviewMeta}>
+                      Англійське ім’я: {preview.englishName}
                     </span>
                   ) : null}
                   <span className={styles.personPreviewMeta}>

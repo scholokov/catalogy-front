@@ -41,6 +41,7 @@ type PersonDetail = {
   id: string;
   name: string;
   originalName: string;
+  englishName?: string;
   biography: string;
   birthday: string;
   deathday: string;
@@ -425,7 +426,7 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
       rating: number | null;
       view_percent: number;
       availability: string | null;
-      shishka_fit_label?: "Так" | "Можливо" | "Ні" | null;
+      shishka_fit_label?: FilmCollectionPopupView["shishkaFitLabel"] | null;
       shishka_fit_reason?: string | null;
       shishka_fit_profile_analyzed_at?: string | null;
       shishka_fit_scope_value?: string | null;
@@ -676,6 +677,11 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                 <div className={styles.metaList}>
                   {detail.originalName && detail.originalName !== detail.name ? (
                     <p className={styles.metaItem}>Оригінальне ім’я: {detail.originalName}</p>
+                  ) : null}
+                  {detail.englishName &&
+                  detail.englishName !== detail.originalName &&
+                  detail.englishName !== detail.name ? (
+                    <p className={styles.metaItem}>Англійське ім’я: {detail.englishName}</p>
                   ) : null}
                   {roleLabels.length > 0 ? (
                     <p className={styles.metaItem}>Ролі: {roleLabels.join(" • ")}</p>

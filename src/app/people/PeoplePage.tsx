@@ -11,6 +11,7 @@ type PersonSearchResult = {
   id: string;
   name: string;
   originalName: string;
+  englishName?: string;
   knownForDepartment: string;
   popularity: number | null;
   profileUrl: string;
@@ -142,6 +143,13 @@ export default function PeoplePage() {
                   {person.originalName && person.originalName !== person.name ? (
                     <p className={searchStyles.resultMeta}>
                       Оригінальне ім’я: {person.originalName}
+                    </p>
+                  ) : null}
+                  {person.englishName &&
+                  person.englishName !== person.originalName &&
+                  person.englishName !== person.name ? (
+                    <p className={searchStyles.resultMeta}>
+                      Англійське ім’я: {person.englishName}
                     </p>
                   ) : null}
                   <div className={searchStyles.userMeta}>

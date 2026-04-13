@@ -54,13 +54,19 @@ export async function GET(
   const detailUrl = new URL(`https://api.themoviedb.org/3/person/${id}`);
   detailUrl.searchParams.set("append_to_response", "combined_credits,images,external_ids");
   detailUrl.searchParams.set("language", "uk-UA");
+  const englishDetailUrl = new URL(`https://api.themoviedb.org/3/person/${id}`);
+  englishDetailUrl.searchParams.set("language", "en-US");
   if (apiKey) {
     detailUrl.searchParams.set("api_key", apiKey);
+    englishDetailUrl.searchParams.set("api_key", apiKey);
   }
 
-  const response = await fetch(detailUrl.toString(), {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
+  const [response, englishResponse] = await Promise.all([
+    fetch(detailUrl.toString(), { headers }),
+    fetch(englishDetailUrl.toString(), { headers }),
+  ]);
+
   const data = (await response.json()) as
     | TmdbPersonDetail
     | { status_message?: string };
@@ -78,6 +84,9 @@ export async function GET(
   }
 
   const detail = data as TmdbPersonDetail;
+  const englishData = englishResponse.ok
+    ? ((await englishResponse.json()) as TmdbPersonDetail)
+    : null;
   const imageUrls = (detail.images?.profiles ?? [])
     .map((image) =>
       image.file_path ? `https://image.tmdb.org/t/p/w780${image.file_path}` : "",
@@ -143,6 +152,7 @@ export async function GET(
     id: String(detail.id),
     name: detail.name ?? "",
     originalName: detail.also_known_as?.[0] ?? detail.name ?? "",
+    englishName: englishData?.name ?? detail.name ?? "",
     biography: detail.biography ?? "",
     birthday: detail.birthday ?? "",
     deathday: detail.deathday ?? "",

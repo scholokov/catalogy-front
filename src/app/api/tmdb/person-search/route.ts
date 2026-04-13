@@ -131,6 +131,7 @@ export async function GET(request: Request) {
         id: String(person.id),
         name: person.name ?? "",
         originalName: person.original_name ?? person.name ?? "",
+        englishName: person.original_name ?? person.name ?? "",
         knownForDepartment: person.known_for_department ?? "",
         popularity: person.popularity ?? null,
         profileUrl: person.profile_path
