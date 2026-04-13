@@ -13,6 +13,7 @@ export type AuthMode =
 type AuthFormProps = {
   mode: AuthMode;
   onModeChange: (mode: AuthMode) => void;
+  externalFeedback?: { type: "error" | "success"; text: string } | null;
 };
 
 type FeedbackState =
@@ -77,10 +78,18 @@ const mapAuthErrorMessage = (message: string) => {
     return "Невірний email або пароль.";
   }
 
+  if (message === "Auth session missing!") {
+    return "Сесія відновлення пароля відсутня або вже недійсна. Запроси новий лист.";
+  }
+
   return message;
 };
 
-export default function AuthForm({ mode, onModeChange }: AuthFormProps) {
+export default function AuthForm({
+  mode,
+  onModeChange,
+  externalFeedback = null,
+}: AuthFormProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -479,6 +488,16 @@ export default function AuthForm({ mode, onModeChange }: AuthFormProps) {
               }`}
             >
               {feedback.text}
+            </p>
+          ) : externalFeedback ? (
+            <p
+              className={`${styles.feedback} ${
+                externalFeedback.type === "error"
+                  ? styles.feedbackError
+                  : styles.feedbackSuccess
+              }`}
+            >
+              {externalFeedback.text}
             </p>
           ) : null}
 

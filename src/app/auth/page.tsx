@@ -8,11 +8,44 @@ import AuthForm, { type AuthMode } from "@/components/auth/AuthForm";
 import { supabase } from "@/lib/supabase/client";
 import styles from "./page.module.css";
 
+const getLocationHashParams = () => {
+  if (typeof window === "undefined") {
+    return new URLSearchParams();
+  }
+
+  return new URLSearchParams(window.location.hash.replace(/^#/, ""));
+};
+
+const mapAuthLinkError = (errorCode: string | null, errorDescription: string | null) => {
+  if (errorCode === "otp_expired") {
+    return "Посилання для відновлення пароля недійсне або вже прострочене. Запроси новий лист.";
+  }
+
+  if (errorDescription === "Email link is invalid or has expired") {
+    return "Посилання для відновлення пароля недійсне або вже прострочене. Запроси новий лист.";
+  }
+
+  return null;
+};
+
+const getInitialAuthLinkError = () => {
+  if (typeof window === "undefined") return null;
+
+  const queryParams = new URLSearchParams(window.location.search);
+  const hashParams = getLocationHashParams();
+  const errorCode = queryParams.get("error_code") ?? hashParams.get("error_code");
+  const errorDescription =
+    queryParams.get("error_description") ?? hashParams.get("error_description");
+
+  return mapAuthLinkError(errorCode, errorDescription);
+};
+
 export default function AuthPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [isProcessingAuthLink, setIsProcessingAuthLink] = useState(false);
   const [hasRecoveryFlow, setHasRecoveryFlow] = useState(() => {
     if (typeof window === "undefined") return false;
+    if (getInitialAuthLinkError()) return false;
     return (
       window.location.hash.includes("type=recovery") ||
       window.location.search.includes("mode=reset-password") ||
@@ -28,8 +61,18 @@ export default function AuthPage() {
   const authCode = searchParams.get("code");
   const authType = searchParams.get("type");
   const tokenHash = searchParams.get("token_hash");
+  const authLinkError = useMemo(() => {
+    const hashParams = getLocationHashParams();
+    return mapAuthLinkError(
+      searchParams.get("error_code") ?? hashParams.get("error_code"),
+      searchParams.get("error_description") ?? hashParams.get("error_description"),
+    );
+  }, [searchParams]);
   const mode = useMemo<AuthMode>(
     () => {
+      if (authLinkError && requestedMode === "reset-password") {
+        return "forgot-password";
+      }
       if (hasRecoveryFlow) return "reset-password";
       if (
         requestedMode === "signup" ||
@@ -40,13 +83,18 @@ export default function AuthPage() {
       }
       return "signin";
     },
-    [hasRecoveryFlow, requestedMode],
+    [authLinkError, hasRecoveryFlow, requestedMode],
   );
 
   useEffect(() => {
     let isCancelled = false;
 
     const resolveAuthLink = async () => {
+      if (authLinkError) {
+        setHasRecoveryFlow(false);
+        return;
+      }
+
       if (authCode && handledCodeRef.current !== authCode) {
         handledCodeRef.current = authCode;
         setIsProcessingAuthLink(true);
@@ -91,7 +139,7 @@ export default function AuthPage() {
     return () => {
       isCancelled = true;
     };
-  }, [authCode, authType, requestedMode, router, tokenHash]);
+  }, [authCode, authLinkError, authType, requestedMode, router, tokenHash]);
 
   useEffect(() => {
     let isMounted = true;
@@ -128,6 +176,12 @@ export default function AuthPage() {
 
   const setMode = (nextMode: AuthMode) => {
     const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete("error");
+    nextParams.delete("error_code");
+    nextParams.delete("error_description");
+    nextParams.delete("token_hash");
+    nextParams.delete("type");
+    nextParams.delete("code");
     if (nextMode === "signin") {
       nextParams.delete("mode");
     } else {
@@ -136,6 +190,10 @@ export default function AuthPage() {
     setHasRecoveryFlow(nextMode === "reset-password");
     const nextSearch = nextParams.toString();
     router.replace(nextSearch ? `/auth?${nextSearch}` : "/auth");
+    // If the current URL contains an error hash, ensure it doesn't stick around.
+    if (typeof window !== "undefined" && window.location.hash) {
+      window.location.hash = "";
+    }
   };
 
   const pageTitle =
@@ -157,7 +215,14 @@ export default function AuthPage() {
             onClick={() => router.push("/")}
           />
         </div>
-        <AuthForm key={mode} mode={mode} onModeChange={setMode} />
+        <AuthForm
+          key={mode}
+          mode={mode}
+          onModeChange={setMode}
+          externalFeedback={
+            authLinkError ? { type: "error", text: authLinkError } : null
+          }
+        />
       </main>
     </div>
   );
