@@ -169,6 +169,10 @@
   background: var(--color-surface-subtle);
 }
 
+.cardUnread {
+  border-color: var(--color-accent);
+}
+
 .rowCard {
   display: flex;
   align-items: center;
@@ -226,6 +230,11 @@
   gap: 10px;
 }
 
+.inlineActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .contactInfo {
   display: flex;
   align-items: center;
@@ -237,6 +246,20 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.preferenceGrid {
+  display: grid;
+  gap: 10px;
+  min-width: 260px;
+}
+
+.preferenceItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .avatar,
@@ -330,6 +353,10 @@
   }
 
   .contactActions {
+    justify-content: flex-start;
+  }
+
+  .inlineActions {
     justify-content: flex-start;
   }
 }

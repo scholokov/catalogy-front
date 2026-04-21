@@ -1,4 +1,5 @@
 create extension if not exists "pgcrypto";
+create extension if not exists pg_net;
 
 create table if not exists profiles (
   id uuid primary key references auth.users on delete cascade,
@@ -42,6 +43,12 @@ add column if not exists settings_default_film_is_viewed boolean;
 
 alter table profiles
 add column if not exists settings_default_game_is_viewed boolean;
+
+alter table profiles
+add column if not exists telegram_notifications_enabled boolean not null default false;
+
+alter table profiles
+add column if not exists telegram_chat_id text;
 
 do $$
 begin
@@ -203,10 +210,108 @@ create table if not exists contacts (
   user_id uuid not null references auth.users on delete cascade,
   other_user_id uuid not null references auth.users on delete cascade,
   status text not null check (status in ('pending', 'accepted', 'revoked', 'blocked')),
+  notify_film_added boolean not null default false,
+  notify_film_viewed boolean not null default false,
+  notify_game_added boolean not null default false,
+  notify_game_viewed boolean not null default false,
   created_at timestamptz not null default now(),
   primary key (user_id, other_user_id),
   check (user_id <> other_user_id)
 );
+
+alter table contacts
+add column if not exists notify_film_added boolean not null default false;
+
+alter table contacts
+add column if not exists notify_film_viewed boolean not null default false;
+
+alter table contacts
+add column if not exists notify_game_added boolean not null default false;
+
+alter table contacts
+add column if not exists notify_game_viewed boolean not null default false;
+
+create table if not exists friend_activity_events (
+  id uuid primary key default gen_random_uuid(),
+  actor_user_id uuid not null references auth.users on delete cascade,
+  user_view_id uuid not null references user_views on delete cascade,
+  item_id uuid not null references items on delete cascade,
+  media_kind text not null check (media_kind in ('film', 'game')),
+  event_type text not null check (event_type in ('added', 'viewed')),
+  occurred_at timestamptz not null,
+  payload jsonb not null default '{}'::jsonb,
+  dedupe_key text not null unique,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists friend_activity_events_actor_occurred_idx
+  on friend_activity_events (actor_user_id, occurred_at desc, id desc);
+
+create index if not exists friend_activity_events_user_view_event_idx
+  on friend_activity_events (user_view_id, event_type);
+
+create table if not exists friend_notifications (
+  id uuid primary key default gen_random_uuid(),
+  recipient_user_id uuid not null references auth.users on delete cascade,
+  actor_user_id uuid not null references auth.users on delete cascade,
+  event_id uuid not null references friend_activity_events on delete cascade,
+  media_kind text not null check (media_kind in ('film', 'game')),
+  event_type text not null check (event_type in ('added', 'viewed')),
+  is_read boolean not null default false,
+  read_at timestamptz,
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  unique (recipient_user_id, event_id)
+);
+
+create index if not exists friend_notifications_recipient_unread_idx
+  on friend_notifications (recipient_user_id, is_read, created_at desc, id desc);
+
+create index if not exists friend_notifications_actor_idx
+  on friend_notifications (actor_user_id, created_at desc, id desc);
+
+create table if not exists friend_notification_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  notification_id uuid not null references friend_notifications on delete cascade,
+  recipient_user_id uuid not null references auth.users on delete cascade,
+  channel text not null check (channel in ('telegram')),
+  status text not null default 'pending' check (status in ('pending', 'processing', 'sent', 'failed', 'disabled')),
+  attempt_count int not null default 0,
+  available_at timestamptz not null default now(),
+  last_attempt_at timestamptz,
+  sent_at timestamptz,
+  provider_message_id text,
+  last_error text,
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (notification_id, channel)
+);
+
+create index if not exists friend_notification_deliveries_status_idx
+  on friend_notification_deliveries (channel, status, available_at, created_at);
+
+create index if not exists friend_notification_deliveries_recipient_idx
+  on friend_notification_deliveries (recipient_user_id, created_at desc, id desc);
+
+create table if not exists telegram_link_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users on delete cascade,
+  token text not null unique,
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  telegram_chat_id text,
+  telegram_username text,
+  telegram_first_name text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists telegram_link_tokens_user_created_idx
+  on telegram_link_tokens (user_id, created_at desc, id desc);
+
+create unique index if not exists profiles_telegram_chat_id_unique_idx
+  on profiles (telegram_chat_id)
+  where telegram_chat_id is not null and btrim(telegram_chat_id) <> '';
 
 create or replace function set_updated_at()
 returns trigger as $$
@@ -224,6 +329,236 @@ for each row execute function set_updated_at();
 drop trigger if exists set_profile_analyses_updated_at on profile_analyses;
 create trigger set_profile_analyses_updated_at
 before update on profile_analyses
+for each row execute function set_updated_at();
+
+create or replace function create_friend_activity_event(
+  input_actor_user_id uuid,
+  input_user_view_id uuid,
+  input_item_id uuid,
+  input_event_type text,
+  input_occurred_at timestamptz
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  item_record record;
+  inserted_event_id uuid;
+  event_payload jsonb;
+begin
+  if input_actor_user_id is null
+     or input_user_view_id is null
+     or input_item_id is null
+     or input_event_type not in ('added', 'viewed') then
+    return null;
+  end if;
+
+  select type, title, poster_url
+    into item_record
+  from items
+  where id = input_item_id;
+
+  if not found or item_record.type not in ('film', 'game') then
+    return null;
+  end if;
+
+  event_payload := jsonb_build_object(
+    'itemId', input_item_id,
+    'userViewId', input_user_view_id,
+    'title', item_record.title,
+    'posterUrl', item_record.poster_url,
+    'mediaKind', item_record.type,
+    'eventType', input_event_type,
+    'occurredAt', coalesce(input_occurred_at, now())
+  );
+
+  insert into friend_activity_events (
+    actor_user_id,
+    user_view_id,
+    item_id,
+    media_kind,
+    event_type,
+    occurred_at,
+    payload,
+    dedupe_key
+  )
+  values (
+    input_actor_user_id,
+    input_user_view_id,
+    input_item_id,
+    item_record.type,
+    input_event_type,
+    coalesce(input_occurred_at, now()),
+    event_payload,
+    input_user_view_id::text || ':' || input_event_type
+  )
+  on conflict (dedupe_key)
+  do update set dedupe_key = friend_activity_events.dedupe_key
+  returning id into inserted_event_id;
+
+  insert into friend_notifications (
+    recipient_user_id,
+    actor_user_id,
+    event_id,
+    media_kind,
+    event_type,
+    payload,
+    created_at
+  )
+  select
+    contacts.user_id,
+    input_actor_user_id,
+    inserted_event_id,
+    item_record.type,
+    input_event_type,
+    event_payload,
+    coalesce(input_occurred_at, now())
+  from contacts
+  where contacts.other_user_id = input_actor_user_id
+    and contacts.status = 'accepted'
+    and contacts.user_id <> input_actor_user_id
+    and (
+      (item_record.type = 'film' and input_event_type = 'added' and contacts.notify_film_added)
+      or (item_record.type = 'film' and input_event_type = 'viewed' and contacts.notify_film_viewed)
+      or (item_record.type = 'game' and input_event_type = 'added' and contacts.notify_game_added)
+      or (item_record.type = 'game' and input_event_type = 'viewed' and contacts.notify_game_viewed)
+    )
+  on conflict (recipient_user_id, event_id) do nothing;
+
+  return inserted_event_id;
+end;
+$$;
+
+create or replace function enqueue_friend_notification_delivery()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  recipient_profile record;
+begin
+  select telegram_notifications_enabled, telegram_chat_id
+    into recipient_profile
+  from profiles
+  where id = new.recipient_user_id;
+
+  if not found then
+    return new;
+  end if;
+
+  if recipient_profile.telegram_notifications_enabled
+     and recipient_profile.telegram_chat_id is not null
+     and btrim(recipient_profile.telegram_chat_id) <> '' then
+    insert into friend_notification_deliveries (
+      notification_id,
+      recipient_user_id,
+      channel,
+      status,
+      payload
+    )
+    values (
+      new.id,
+      new.recipient_user_id,
+      'telegram',
+      'pending',
+      new.payload || jsonb_build_object(
+        'notificationId', new.id,
+        'recipientUserId', new.recipient_user_id,
+        'actorUserId', new.actor_user_id,
+        'telegramChatId', recipient_profile.telegram_chat_id
+      )
+    )
+    on conflict (notification_id, channel) do nothing;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function request_telegram_dispatch(
+  dispatch_url text,
+  dispatch_secret text,
+  dispatch_limit int default 20,
+  dispatch_dry_run boolean default false
+)
+returns bigint
+language sql
+security definer
+set search_path = public
+as $$
+  select net.http_post(
+    url := dispatch_url,
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || dispatch_secret
+    ),
+    body := jsonb_build_object(
+      'limit', greatest(1, least(dispatch_limit, 100)),
+      'dryRun', dispatch_dry_run
+    ),
+    timeout_milliseconds := 10000
+  );
+$$;
+
+drop trigger if exists enqueue_friend_notification_delivery on friend_notifications;
+create trigger enqueue_friend_notification_delivery
+after insert on friend_notifications
+for each row execute function enqueue_friend_notification_delivery();
+
+create or replace function handle_user_view_friend_activity()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op = 'INSERT' then
+    perform create_friend_activity_event(
+      new.user_id,
+      new.id,
+      new.item_id,
+      'added',
+      coalesce(new.created_at, now())
+    );
+
+    if new.is_viewed then
+      perform create_friend_activity_event(
+        new.user_id,
+        new.id,
+        new.item_id,
+        'viewed',
+        coalesce(new.viewed_at, new.updated_at, new.created_at, now())
+      );
+    end if;
+
+    return new;
+  end if;
+
+  if coalesce(old.is_viewed, false) = false and coalesce(new.is_viewed, false) = true then
+    perform create_friend_activity_event(
+      new.user_id,
+      new.id,
+      new.item_id,
+      'viewed',
+      coalesce(new.viewed_at, new.updated_at, now())
+    );
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists handle_user_view_friend_activity on user_views;
+create trigger handle_user_view_friend_activity
+after insert or update of is_viewed on user_views
+for each row execute function handle_user_view_friend_activity();
+
+drop trigger if exists set_friend_notification_deliveries_updated_at on friend_notification_deliveries;
+create trigger set_friend_notification_deliveries_updated_at
+before update on friend_notification_deliveries
 for each row execute function set_updated_at();
 
 create or replace function handle_new_user()
@@ -252,6 +587,10 @@ alter table recommendations enable row level security;
 alter table invites enable row level security;
 alter table contacts enable row level security;
 alter table profile_analyses enable row level security;
+alter table friend_activity_events enable row level security;
+alter table friend_notifications enable row level security;
+alter table friend_notification_deliveries enable row level security;
+alter table telegram_link_tokens enable row level security;
 
 drop policy if exists "Profiles are viewable by everyone" on profiles;
 create policy "Profiles are viewable by everyone"
@@ -268,6 +607,27 @@ drop policy if exists "Profiles are insertable by owner" on profiles;
 create policy "Profiles are insertable by owner"
   on profiles for insert
   with check (auth.uid() = id);
+
+drop policy if exists "Telegram link tokens are readable by owner" on telegram_link_tokens;
+create policy "Telegram link tokens are readable by owner"
+  on telegram_link_tokens for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "Telegram link tokens are insertable by owner" on telegram_link_tokens;
+create policy "Telegram link tokens are insertable by owner"
+  on telegram_link_tokens for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Telegram link tokens are updatable by owner" on telegram_link_tokens;
+create policy "Telegram link tokens are updatable by owner"
+  on telegram_link_tokens for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Telegram link tokens are deletable by owner" on telegram_link_tokens;
+create policy "Telegram link tokens are deletable by owner"
+  on telegram_link_tokens for delete
+  using (auth.uid() = user_id);
 
 drop policy if exists "Items are readable by everyone" on items;
 create policy "Items are readable by everyone"
@@ -409,6 +769,32 @@ create policy "Contacts are deletable by owner"
   on contacts for delete
   using (auth.uid() = user_id);
 
+drop policy if exists "Friend activity events are readable by actor" on friend_activity_events;
+create policy "Friend activity events are readable by actor"
+  on friend_activity_events for select
+  using (auth.uid() = actor_user_id);
+
+drop policy if exists "Friend notifications are readable by recipient" on friend_notifications;
+create policy "Friend notifications are readable by recipient"
+  on friend_notifications for select
+  using (auth.uid() = recipient_user_id);
+
+drop policy if exists "Friend notifications are updatable by recipient" on friend_notifications;
+create policy "Friend notifications are updatable by recipient"
+  on friend_notifications for update
+  using (auth.uid() = recipient_user_id)
+  with check (auth.uid() = recipient_user_id);
+
+drop policy if exists "Friend notifications are deletable by recipient" on friend_notifications;
+create policy "Friend notifications are deletable by recipient"
+  on friend_notifications for delete
+  using (auth.uid() = recipient_user_id);
+
+drop policy if exists "Friend notification deliveries are readable by recipient" on friend_notification_deliveries;
+create policy "Friend notification deliveries are readable by recipient"
+  on friend_notification_deliveries for select
+  using (auth.uid() = recipient_user_id);
+
 create or replace function accept_invite(invite_token text)
 returns text
 language plpgsql
@@ -486,6 +872,10 @@ begin
   delete from recommendations
   where (from_user_id = current_user_id and to_user_id = other_user)
      or (from_user_id = other_user and to_user_id = current_user_id);
+
+  delete from friend_notifications
+  where (recipient_user_id = current_user_id and actor_user_id = other_user)
+     or (recipient_user_id = other_user and actor_user_id = current_user_id);
 
   return true;
 end;

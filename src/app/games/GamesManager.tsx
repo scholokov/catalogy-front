@@ -23,11 +23,18 @@ import RecommendationRequestModal, {
 import CloseIconButton from "@/components/ui/CloseIconButton";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import { supabase } from "@/lib/supabase/client";
+import { addExistingItemToCollection } from "@/lib/collection/viewMutations";
 import { buildGenreHref } from "@/lib/genres/routes";
 import {
-  type GameNormalizedGenre,
-  trySyncGameNormalizedGenres,
-} from "@/lib/games/normalizedMetadata";
+  type GameCollectionFormPayload,
+  type GameCollectionSource,
+  type GameCollectionTrailer,
+  type GameItemDraftInput,
+  addGameToCollection,
+  normalizeGameTrailers,
+  updateGameView as updateGameViewMutation,
+} from "@/lib/games/collectionFlow";
+import { type GameNormalizedGenre, trySyncGameNormalizedGenres } from "@/lib/games/normalizedMetadata";
 import { normalizeGamePlatforms } from "@/lib/games/platforms";
 import { loadStoredGameGenresForItem } from "@/lib/games/storedGenres";
 import {
@@ -49,17 +56,7 @@ import {
 } from "@/lib/shishka/fitAssessment";
 import styles from "@/components/catalog/CatalogSearch.module.css";
 
-type Trailer = {
-  id: string;
-  name: string;
-  site: string;
-  key: string;
-  type: string;
-  official: boolean;
-  language: string;
-  region: string;
-  url: string;
-};
+type Trailer = GameCollectionTrailer;
 
 type GameResult = {
   id: string;
@@ -106,16 +103,8 @@ type GameCollectionItem = {
   };
 };
 
-type GameItemDraft = {
-  poster_url: string | null;
-  year: number | null;
-  imdb_rating: string | null;
+type GameItemDraft = GameItemDraftInput & {
   ratingSource?: "igdb" | "rawg";
-  description: string | null;
-  genres: string | null;
-  normalizedGenres?: GameNormalizedGenre[] | null;
-  external_id: string | null;
-  trailers: Trailer[] | null;
 };
 
 type AiRecommendation = {
@@ -2009,7 +1998,7 @@ export default function GamesManager({
   };
 
   const normalizeTrailers = (trailers?: Trailer[] | null) =>
-    trailers && trailers.length > 0 ? trailers : null;
+    normalizeGameTrailers(trailers);
 
   const selectPreferredTrailer = (trailers?: Trailer[] | null) => {
     if (!trailers || trailers.length === 0) return null;
@@ -2226,140 +2215,44 @@ export default function GamesManager({
 
   const handleAddGame = async (
     game: GameResult,
-    payload: {
-      viewedAt: string;
-      comment: string;
-      recommendSimilar: boolean;
-      isViewed: boolean;
-      rating: number | null;
-      viewPercent: number;
-      platforms: string[];
-      availability: string | null;
-      shishkaFitAssessment: ShishkaFitAssessment | null;
-    },
+    payload: GameCollectionFormPayload,
   ) => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
-    if (!user) {
-      throw new Error("Потрібна авторизація.");
-    }
-
-    const overallRating =
-      typeof game.rating === "number" ? game.rating.toFixed(1) : null;
-    const parsedYear = game.released ? Number.parseInt(game.released.slice(0, 4), 10) : NaN;
-    const yearValue = Number.isNaN(parsedYear) ? null : parsedYear;
-
-    const { data: existingItem, error: findError } = await supabase
-      .from("items")
-      .select("id")
-      .eq("type", "game")
-      .eq("external_id", game.id)
-      .maybeSingle();
-
-    if (findError) {
-      throw new Error("Не вдалося перевірити каталог.");
-    }
-
-    let itemId = existingItem?.id;
-
-    if (!itemId) {
-      const descriptionFromSearch = searchDescriptions[game.id] ?? "";
-      const { data: createdItem, error: createError } = await supabase
-        .from("items")
-        .insert({
-          type: "game",
-          title: game.title,
-          description: descriptionFromSearch,
-          genres: game.genres || null,
-          poster_url: game.poster,
-          external_id: game.id,
-          imdb_rating: overallRating,
-          year: yearValue,
-          trailers: normalizeTrailers(game.trailers ?? null),
-        })
-        .select("id")
-        .single();
-
-      if (createError) {
-        throw new Error("Не вдалося створити запис у каталозі.");
-      }
-
-      itemId = createdItem.id;
-      await trySyncGameNormalizedGenres(supabase, itemId, game.genreItems ?? null);
-      if (!descriptionFromSearch) {
-        void fetch(`/api/rawg/${game.id}`)
-          .then(async (response) => {
-            if (!response.ok) return null;
-            return (await response.json()) as {
-              description?: string;
-              genres?: string;
-              genreItems?: GameNormalizedGenre[];
-            };
-          })
-          .then((detailData) => {
-            if (!detailData) return;
-            if (detailData.description || detailData.genres) {
-              void supabase
-                .from("items")
-                .update({
-                  description: detailData.description ?? null,
-                  genres: detailData.genres ?? game.genres ?? null,
-                })
-                .eq("id", createdItem.id);
-            }
-            if (detailData.genreItems) {
-              void trySyncGameNormalizedGenres(supabase, createdItem.id, detailData.genreItems);
-            }
-          });
-      }
-    } else {
-      const itemUpdates: {
-        imdb_rating?: string | null;
-        year?: number | null;
-        genres?: string | null;
-        trailers?: Trailer[] | null;
-      } = {};
-      if (overallRating) {
-        itemUpdates.imdb_rating = overallRating;
-      }
-      if (yearValue) {
-        itemUpdates.year = yearValue;
-      }
-      if (game.genres) {
-        itemUpdates.genres = game.genres;
-      }
-      if (game.trailers && game.trailers.length > 0) {
-        itemUpdates.trailers = normalizeTrailers(game.trailers);
-      }
-      if (Object.keys(itemUpdates).length > 0) {
-        await supabase.from("items").update(itemUpdates).eq("id", itemId);
-      }
-      await trySyncGameNormalizedGenres(supabase, itemId, game.genreItems ?? null);
-    }
-
-    const normalizedPlatforms = normalizeGamePlatforms(payload.platforms);
-    const { error: viewError } = await supabase.from("user_views").insert({
-      user_id: user.id,
-      item_id: itemId,
-      rating: payload.rating,
-      comment: payload.comment,
-      viewed_at: payload.viewedAt,
-      is_viewed: payload.isViewed,
-      view_percent: payload.viewPercent,
-      recommend_similar: payload.recommendSimilar,
-      platforms: normalizedPlatforms,
-      availability: payload.availability,
-      shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
-      shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
-      shishka_fit_profile_analyzed_at:
-        payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
-      shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
+    const descriptionFromSearch = searchDescriptions[game.id] ?? "";
+    const { itemId } = await addGameToCollection({
+      supabase,
+      game: {
+        ...game,
+        description: descriptionFromSearch,
+      } satisfies GameCollectionSource,
+      payload,
+      allowUpdateExistingView: false,
     });
 
-    if (viewError) {
-      throw new Error("Не вдалося зберегти у колекцію.");
+    if (!descriptionFromSearch) {
+      void fetch(`/api/rawg/${game.id}`)
+        .then(async (response) => {
+          if (!response.ok) return null;
+          return (await response.json()) as {
+            description?: string;
+            genres?: string;
+            genreItems?: GameNormalizedGenre[];
+          };
+        })
+        .then((detailData) => {
+          if (!detailData) return;
+          if (detailData.description || detailData.genres) {
+            void supabase
+              .from("items")
+              .update({
+                description: detailData.description ?? null,
+                genres: detailData.genres ?? game.genres ?? null,
+              })
+              .eq("id", itemId);
+          }
+          if (detailData.genreItems) {
+            void trySyncGameNormalizedGenres(supabase, itemId, detailData.genreItems);
+          }
+        });
     }
 
     setHasApplied(true);
@@ -2373,78 +2266,15 @@ export default function GamesManager({
     viewId: string,
     itemId: string,
     itemDraft: GameItemDraft | null,
-    payload: {
-      viewedAt: string;
-      comment: string;
-      recommendSimilar: boolean;
-      isViewed: boolean;
-      rating: number | null;
-      viewPercent: number;
-      platforms: string[];
-      availability: string | null;
-      shishkaFitAssessment: ShishkaFitAssessment | null;
-    },
+    payload: GameCollectionFormPayload,
   ) => {
-    const normalizedPlatforms = normalizeGamePlatforms(payload.platforms);
-    const { error } = await supabase
-      .from("user_views")
-      .update({
-        rating: payload.rating,
-        comment: payload.comment,
-        viewed_at: payload.viewedAt,
-        is_viewed: payload.isViewed,
-        view_percent: payload.viewPercent,
-        recommend_similar: payload.recommendSimilar,
-        platforms: normalizedPlatforms,
-        availability: payload.availability,
-        shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
-        shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
-        shishka_fit_profile_analyzed_at:
-          payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
-        shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
-      })
-      .eq("id", viewId);
-
-    if (error) {
-      throw new Error("Не вдалося оновити запис.");
-    }
-
-    if (itemDraft) {
-      const itemUpdatePayload = {
-        poster_url: itemDraft.poster_url,
-        year: itemDraft.year,
-        imdb_rating: itemDraft.imdb_rating,
-        description: itemDraft.description,
-        genres: itemDraft.genres,
-        external_id: itemDraft.external_id,
-        trailers: itemDraft.trailers,
-      };
-      const { error: updateItemError } = await supabase
-        .from("items")
-        .update(itemUpdatePayload)
-        .eq("id", itemId);
-      if (updateItemError) {
-        if (updateItemError.code === "23505") {
-          const { error: retryError } = await supabase
-            .from("items")
-            .update({
-              poster_url: itemDraft.poster_url,
-              year: itemDraft.year,
-              imdb_rating: itemDraft.imdb_rating,
-              description: itemDraft.description,
-              genres: itemDraft.genres,
-              trailers: itemDraft.trailers,
-            })
-            .eq("id", itemId);
-          if (retryError) {
-            throw new Error("Не вдалося оновити дані гри.");
-          }
-        } else {
-          throw new Error("Не вдалося оновити дані гри.");
-        }
-      }
-      await trySyncGameNormalizedGenres(supabase, itemId, itemDraft.normalizedGenres ?? null);
-    }
+    const { normalizedPlatforms } = await updateGameViewMutation({
+      supabase,
+      viewId,
+      itemId,
+      itemDraft,
+      payload,
+    });
     setCollection((prev) =>
       prev.map((item) => {
         if (item.id !== viewId) return item;
@@ -2638,39 +2468,7 @@ export default function GamesManager({
   };
 
   const handleAddToOwnCollection = async (itemId: string) => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      throw new Error("Потрібна авторизація.");
-    }
-
-    const { data: existing } = await supabase
-      .from("user_views")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("item_id", itemId)
-      .maybeSingle();
-
-    if (existing?.id) {
-      throw new Error("Вже у твоїй колекції.");
-    }
-
-    const { error } = await supabase.from("user_views").insert({
-      user_id: user.id,
-      item_id: itemId,
-      is_viewed: false,
-      view_percent: 0,
-      rating: null,
-    });
-
-    if (error) {
-      if (error.code === "23505") {
-        throw new Error("Вже у твоїй колекції.");
-      }
-      throw new Error("Не вдалося додати у колекцію.");
-    }
-
+    await addExistingItemToCollection({ supabase, itemId });
     setMessage("Додано до твоєї колекції.");
   };
 

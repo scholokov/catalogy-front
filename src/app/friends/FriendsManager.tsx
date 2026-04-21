@@ -4,6 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
+import { addExistingItemToCollection } from "@/lib/collection/viewMutations";
+import {
+  loadFriendNotifications,
+  markFriendNotificationsRead,
+  type FriendNotificationRow,
+} from "@/lib/friends/notifications";
 import { getDisplayName } from "@/lib/users/displayName";
 import styles from "./FriendsManager.module.css";
 
@@ -17,6 +23,10 @@ type Profile = {
 type Contact = {
   other_user_id: string;
   status: "pending" | "accepted" | "revoked" | "blocked";
+  notify_film_added: boolean;
+  notify_film_viewed: boolean;
+  notify_game_added: boolean;
+  notify_game_viewed: boolean;
   created_at: string;
   profile?: Profile;
 };
@@ -48,8 +58,17 @@ type Recommendation = {
   toProfile?: Profile;
 };
 
+type FriendNotification = FriendNotificationRow & {
+  actorProfile?: Profile;
+};
+
 type TabKey = "recommendations" | "contacts" | "settings";
-type RecommendationTabKey = "inbox" | "archive" | "sent";
+type RecommendationTabKey = "inbox" | "updates" | "archive" | "sent";
+type ContactNotificationKey =
+  | "notify_film_added"
+  | "notify_film_viewed"
+  | "notify_game_added"
+  | "notify_game_viewed";
 
 const tabLabels: Record<TabKey, string> = {
   recommendations: "Рекомендації",
@@ -59,6 +78,7 @@ const tabLabels: Record<TabKey, string> = {
 
 const recommendationTabLabels: Record<RecommendationTabKey, string> = {
   inbox: "Вхідні",
+  updates: "Оновлення",
   archive: "Архів",
   sent: "Ваші",
 };
@@ -76,6 +96,7 @@ export default function FriendsManager() {
   const [invites, setInvites] = useState<Invite[]>([]);
   const [inbox, setInbox] = useState<Recommendation[]>([]);
   const [sent, setSent] = useState<Recommendation[]>([]);
+  const [notifications, setNotifications] = useState<FriendNotification[]>([]);
   const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [currentUserId, setCurrentUserId] = useState("");
@@ -86,6 +107,7 @@ export default function FriendsManager() {
   const [nicknameError, setNicknameError] = useState("");
   const [isSavingNickname, setIsSavingNickname] = useState(false);
   const [isUpdatingVisibility, setIsUpdatingVisibility] = useState(false);
+  const [updatingContactSettingKey, setUpdatingContactSettingKey] = useState<string | null>(null);
   const [currentUserViewsVisible, setCurrentUserViewsVisible] = useState(false);
   const [postNicknameAction, setPostNicknameAction] = useState<"createInvite" | null>(
     null,
@@ -103,6 +125,11 @@ export default function FriendsManager() {
     () => inbox.filter((item) => item.status === "accepted" || item.status === "dismissed"),
     [inbox],
   );
+  const unreadNotificationCount = useMemo(
+    () => notifications.filter((item) => !item.is_read).length,
+    [notifications],
+  );
+  const friendsBadgeCount = pendingCount + unreadNotificationCount;
 
   const loadProfiles = useCallback(async (ids: string[]) => {
     if (ids.length === 0) return new Map<string, Profile>();
@@ -129,7 +156,7 @@ export default function FriendsManager() {
     setIsLoading(true);
     setMessage("");
 
-    const [profileRes, contactsRes, invitesRes, inboxRes, sentRes] = await Promise.all([
+    const [profileRes, contactsRes, invitesRes, inboxRes, sentRes, notificationsRes] = await Promise.all([
       supabase
         .from("profiles")
         .select("username, views_visible_to_friends")
@@ -137,7 +164,9 @@ export default function FriendsManager() {
         .maybeSingle(),
       supabase
         .from("contacts")
-        .select("other_user_id, status, created_at")
+        .select(
+          "other_user_id, status, created_at, notify_film_added, notify_film_viewed, notify_game_added, notify_game_viewed",
+        )
         .eq("user_id", user.id)
         .order("created_at", { ascending: false }),
       supabase
@@ -159,6 +188,7 @@ export default function FriendsManager() {
         )
         .eq("from_user_id", user.id)
         .order("created_at", { ascending: false }),
+      loadFriendNotifications(supabase, user.id),
     ]);
 
     if (
@@ -166,7 +196,8 @@ export default function FriendsManager() {
       contactsRes.error ||
       invitesRes.error ||
       inboxRes.error ||
-      sentRes.error
+      sentRes.error ||
+      notificationsRes.error
     ) {
       setMessage("Не вдалося завантажити дані.");
       setIsLoading(false);
@@ -205,11 +236,13 @@ export default function FriendsManager() {
     }
     const inboxRows = (inboxRes.data ?? []) as unknown as Recommendation[];
     const sentRows = (sentRes.data ?? []) as unknown as Recommendation[];
+    const notificationRows = (notificationsRes.data ?? []) as unknown as FriendNotification[];
 
     const profileIds = new Set<string>();
     contactRows.forEach((contact) => profileIds.add(contact.other_user_id));
     inboxRows.forEach((item) => profileIds.add(item.from_user_id));
     sentRows.forEach((item) => profileIds.add(item.to_user_id));
+    notificationRows.forEach((item) => profileIds.add(item.actor_user_id));
 
     const profileMap = await loadProfiles([...profileIds]);
 
@@ -232,12 +265,19 @@ export default function FriendsManager() {
         toProfile: profileMap.get(item.to_user_id),
       })),
     );
+    setNotifications(
+      notificationRows.map((item) => ({
+        ...item,
+        actorProfile: profileMap.get(item.actor_user_id),
+      })),
+    );
 
     if (
       contactRows.length === 0 &&
       activeInviteRows.length === 0 &&
       inboxRows.length === 0 &&
-      sentRows.length === 0
+      sentRows.length === 0 &&
+      notificationRows.length === 0
     ) {
       setMessage("Тут поки що порожньо.");
     }
@@ -412,41 +452,86 @@ export default function FriendsManager() {
     window.dispatchEvent(new CustomEvent("friends:pending-count-refresh"));
   };
 
-  const handleAddToCollection = async (itemId: string) => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      setMessage("Потрібна авторизація.");
-      return;
-    }
+  const markNotificationsRead = useCallback(
+    async (notificationIds: string[], options?: { silent?: boolean }) => {
+      if (notificationIds.length === 0) {
+        return true;
+      }
+      const readAt = new Date().toISOString();
+      const { error } = await markFriendNotificationsRead(supabase, notificationIds, readAt);
+      if (error) {
+        if (!options?.silent) {
+          setMessage("Не вдалося позначити оновлення прочитаними.");
+        }
+        return false;
+      }
+      setNotifications((prev) =>
+        prev.map((item) =>
+          notificationIds.includes(item.id) && !item.is_read
+            ? { ...item, is_read: true, read_at: readAt }
+            : item,
+        ),
+      );
+      window.dispatchEvent(new CustomEvent("friends:activity-count-refresh"));
+      return true;
+    },
+    [],
+  );
 
-    const { data: existing } = await supabase
-      .from("user_views")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("item_id", itemId)
-      .maybeSingle();
+  const handleMarkNotificationRead = async (notificationId: string) => {
+    await markNotificationsRead([notificationId]);
+  };
 
-    if (existing?.id) {
-      setMessage("Вже у твоїй колекції.");
-      return;
-    }
+  const handleMarkAllNotificationsRead = async () => {
+    const unreadIds = notifications.filter((item) => !item.is_read).map((item) => item.id);
+    await markNotificationsRead(unreadIds);
+  };
 
-    const { error } = await supabase.from("user_views").insert({
-      user_id: user.id,
-      item_id: itemId,
-      is_viewed: false,
-      view_percent: 0,
-      rating: null,
-    });
-
+  const handleToggleContactNotification = async (
+    otherUserId: string,
+    key: ContactNotificationKey,
+    nextValue: boolean,
+  ) => {
+    setUpdatingContactSettingKey(`${otherUserId}:${key}`);
+    const { error } = await supabase
+      .from("contacts")
+      .update({ [key]: nextValue })
+      .eq("user_id", currentUserId)
+      .eq("other_user_id", otherUserId);
+    setUpdatingContactSettingKey(null);
     if (error) {
-      setMessage("Не вдалося додати у колекцію.");
+      setMessage("Не вдалося оновити налаштування сповіщень.");
       return;
     }
+    setContacts((prev) =>
+      prev.map((contact) =>
+        contact.other_user_id === otherUserId ? { ...contact, [key]: nextValue } : contact,
+      ),
+    );
+    setMessage("Налаштування сповіщень оновлено.");
+  };
 
-    setMessage("Додано до колекції.");
+  const handleAddToCollection = async (itemId: string) => {
+    try {
+      await addExistingItemToCollection({ supabase, itemId });
+      setMessage("Додано до колекції.");
+      return true;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Не вдалося додати у колекцію.");
+      return false;
+    }
+  };
+
+  const getNotificationText = (notification: FriendNotification) => {
+    const action =
+      notification.event_type === "viewed"
+        ? notification.media_kind === "film"
+          ? "завершив(ла) перегляд фільму"
+          : "завершив(ла) проходження гри"
+        : notification.media_kind === "film"
+          ? "додав(ла) фільм до колекції"
+          : "додав(ла) гру до колекції";
+    return `${action}.`;
   };
 
   return (
@@ -470,8 +555,8 @@ export default function FriendsManager() {
               }}
             >
               {tabLabels[tab]}
-              {tab === "recommendations" && pendingCount > 0 ? (
-                <span className={styles.badge}>{pendingCount}</span>
+              {tab === "recommendations" && friendsBadgeCount > 0 ? (
+                <span className={styles.badge}>{friendsBadgeCount}</span>
               ) : null}
             </button>
           ))}
@@ -491,11 +576,22 @@ export default function FriendsManager() {
                 className={`${styles.subTabButton} ${
                   activeRecommendationTab === tab ? styles.subTabActive : ""
                 }`}
-                onClick={() => setActiveRecommendationTab(tab)}
+                onClick={() => {
+                  setActiveRecommendationTab(tab);
+                  if (tab === "updates") {
+                    const unreadIds = notifications
+                      .filter((item) => !item.is_read)
+                      .map((item) => item.id);
+                    void markNotificationsRead(unreadIds, { silent: true });
+                  }
+                }}
               >
                 {recommendationTabLabels[tab]}
                 {tab === "inbox" && pendingCount > 0 ? (
                   <span className={styles.badge}>{pendingCount}</span>
+                ) : null}
+                {tab === "updates" && unreadNotificationCount > 0 ? (
+                  <span className={styles.badge}>{unreadNotificationCount}</span>
                 ) : null}
               </button>
             ))}
@@ -536,8 +632,10 @@ export default function FriendsManager() {
                           type="button"
                           className="btnBase btnPrimary"
                           onClick={async () => {
-                            await handleAddToCollection(item.items.id);
-                            await updateRecommendationStatus(item.id, "accepted");
+                            const added = await handleAddToCollection(item.items.id);
+                            if (added) {
+                              await updateRecommendationStatus(item.id, "accepted");
+                            }
                           }}
                         >
                           Додати до колекції
@@ -560,6 +658,93 @@ export default function FriendsManager() {
                     </div>
                   </div>
                 ))}
+              </div>
+            ) : null}
+
+            {activeRecommendationTab === "updates" ? (
+              <div className={styles.list}>
+                {unreadNotificationCount > 0 ? (
+                  <div className={styles.inlineActions}>
+                    <button
+                      type="button"
+                      className="btnBase btnSecondary"
+                      onClick={() => void handleMarkAllNotificationsRead()}
+                    >
+                      Позначити всі прочитаними
+                    </button>
+                  </div>
+                ) : null}
+                {notifications.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`${styles.card} ${!item.is_read ? styles.cardUnread : ""}`}
+                  >
+                    {item.payload.posterUrl ? (
+                      <Image
+                        className={styles.poster}
+                        src={item.payload.posterUrl}
+                        alt={`Постер ${item.payload.title ?? "твору"}`}
+                        width={96}
+                        height={140}
+                        unoptimized
+                      />
+                    ) : (
+                      <div className={styles.posterPlaceholder}>No image</div>
+                    )}
+                    <div className={styles.cardBody}>
+                      <div className={styles.cardHeader}>
+                        <h3>{item.payload.title ?? "Без назви"}</h3>
+                        <span className={styles.meta}>
+                          {formatDate(item.payload.occurredAt ?? item.created_at)}
+                        </span>
+                      </div>
+                      <p className={styles.meta}>
+                        {getDisplayName(item.actorProfile?.username, item.actor_user_id)}
+                      </p>
+                      <p className={styles.comment}>{getNotificationText(item)}</p>
+                      <p className={styles.meta}>
+                        {item.is_read ? "Прочитано" : "Нове оновлення"}
+                      </p>
+                      <div className={styles.actionsRow}>
+                        <button
+                          type="button"
+                          className="btnBase btnSecondary"
+                          onClick={() =>
+                            router.push(
+                              `/friends/${item.actor_user_id}/${item.media_kind === "film" ? "films" : "games"}`,
+                            )
+                          }
+                        >
+                          Відкрити бібліотеку
+                        </button>
+                        {item.payload.itemId ? (
+                          <button
+                            type="button"
+                            className="btnBase btnSecondary"
+                            onClick={() => void handleAddToCollection(item.payload.itemId ?? "")}
+                          >
+                            Додати собі
+                          </button>
+                        ) : null}
+                        {!item.is_read ? (
+                          <button
+                            type="button"
+                            className="btnBase btnPrimary"
+                            onClick={() => void handleMarkNotificationRead(item.id)}
+                          >
+                            Позначити прочитаним
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {notifications.length === 0 ? (
+                  <p className={styles.message}>
+                    Оновлень від друзів поки немає. Увімкни потрібні типи сповіщень у вкладці
+                    &quot;Контакти&quot;.
+                  </p>
+                ) : null}
               </div>
             ) : null}
 
@@ -729,6 +914,72 @@ export default function FriendsManager() {
                   >
                     Видалити контакт
                   </button>
+                </div>
+                <div className={styles.preferenceGrid}>
+                  <label className={styles.preferenceItem}>
+                    <input
+                      className={styles.visibilityCheckbox}
+                      type="checkbox"
+                      checked={contact.notify_film_added}
+                      onChange={(event) =>
+                        void handleToggleContactNotification(
+                          contact.other_user_id,
+                          "notify_film_added",
+                          event.target.checked,
+                        )
+                      }
+                      disabled={updatingContactSettingKey === `${contact.other_user_id}:notify_film_added`}
+                    />
+                    Фільми: додано
+                  </label>
+                  <label className={styles.preferenceItem}>
+                    <input
+                      className={styles.visibilityCheckbox}
+                      type="checkbox"
+                      checked={contact.notify_film_viewed}
+                      onChange={(event) =>
+                        void handleToggleContactNotification(
+                          contact.other_user_id,
+                          "notify_film_viewed",
+                          event.target.checked,
+                        )
+                      }
+                      disabled={updatingContactSettingKey === `${contact.other_user_id}:notify_film_viewed`}
+                    />
+                    Фільми: переглянуто
+                  </label>
+                  <label className={styles.preferenceItem}>
+                    <input
+                      className={styles.visibilityCheckbox}
+                      type="checkbox"
+                      checked={contact.notify_game_added}
+                      onChange={(event) =>
+                        void handleToggleContactNotification(
+                          contact.other_user_id,
+                          "notify_game_added",
+                          event.target.checked,
+                        )
+                      }
+                      disabled={updatingContactSettingKey === `${contact.other_user_id}:notify_game_added`}
+                    />
+                    Ігри: додано
+                  </label>
+                  <label className={styles.preferenceItem}>
+                    <input
+                      className={styles.visibilityCheckbox}
+                      type="checkbox"
+                      checked={contact.notify_game_viewed}
+                      onChange={(event) =>
+                        void handleToggleContactNotification(
+                          contact.other_user_id,
+                          "notify_game_viewed",
+                          event.target.checked,
+                        )
+                      }
+                      disabled={updatingContactSettingKey === `${contact.other_user_id}:notify_game_viewed`}
+                    />
+                    Ігри: пройдено
+                  </label>
                 </div>
               </div>
             ))}
