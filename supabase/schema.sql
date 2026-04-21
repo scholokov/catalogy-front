@@ -345,6 +345,7 @@ set search_path = public
 as $$
 declare
   item_record record;
+  view_record record;
   inserted_event_id uuid;
   event_payload jsonb;
 begin
@@ -360,7 +361,12 @@ begin
   from items
   where id = input_item_id;
 
-  if not found or item_record.type not in ('film', 'game') then
+  select rating
+    into view_record
+  from user_views
+  where id = input_user_view_id;
+
+  if item_record.type is null or item_record.type not in ('film', 'game') then
     return null;
   end if;
 
@@ -369,6 +375,7 @@ begin
     'userViewId', input_user_view_id,
     'title', item_record.title,
     'posterUrl', item_record.poster_url,
+    'rating', view_record.rating,
     'mediaKind', item_record.type,
     'eventType', input_event_type,
     'occurredAt', coalesce(input_occurred_at, now())

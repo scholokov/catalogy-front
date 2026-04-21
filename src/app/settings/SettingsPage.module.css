@@ -206,6 +206,14 @@
   gap: 10px;
 }
 
+.telegramActionsRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .actions {
   display: flex;
   justify-content: flex-end;

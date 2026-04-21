@@ -53,7 +53,6 @@ export default function SettingsPage() {
   const [telegramLinkedFirstName, setTelegramLinkedFirstName] = useState<string | null>(null);
   const [isGeneratingTelegramLink, setIsGeneratingTelegramLink] = useState(false);
   const [isRefreshingTelegramState, setIsRefreshingTelegramState] = useState(false);
-  const [isSendingTelegramTest, setIsSendingTelegramTest] = useState(false);
   const [isUnlinkingTelegram, setIsUnlinkingTelegram] = useState(false);
   const [isWaitingForTelegramConnect, setIsWaitingForTelegramConnect] = useState(false);
   const [isPlatformsOpen, setIsPlatformsOpen] = useState(false);
@@ -363,7 +362,7 @@ export default function SettingsPage() {
       return;
     }
 
-    setMessage("Код підключення Telegram оновлено. Тепер відкрий бота і підтвердь прив’язку.");
+    setMessage("Відкрий бота і підтвердь прив’язку.");
   };
 
   const handleRefreshTelegramState = async () => {
@@ -383,35 +382,6 @@ export default function SettingsPage() {
     } finally {
       setIsRefreshingTelegramState(false);
     }
-  };
-
-  const handleSendTelegramTest = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const accessToken = session?.access_token;
-    if (!accessToken) {
-      setMessage("Потрібна авторизація.");
-      return;
-    }
-
-    setIsSendingTelegramTest(true);
-    const response = await fetch("/api/telegram/test-message", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-    const data = (await response.json().catch(() => ({}))) as { error?: string };
-    setIsSendingTelegramTest(false);
-
-    if (!response.ok) {
-      setMessage(data.error || "Не вдалося надіслати тестове повідомлення.");
-      return;
-    }
-
-    setMessage("Тестове повідомлення надіслано в Telegram.");
   };
 
   const handleUnlinkTelegram = async () => {
@@ -711,18 +681,9 @@ export default function SettingsPage() {
         ) : (
           <section className={styles.section}>
             <h2 className={styles.sectionTitle}>Telegram</h2>
-            <p className={styles.sectionText}>
-              Другий канал працює поверх friend notifications: спочатку подія потрапляє в
-              додаток, а потім у Telegram delivery queue.
-            </p>
             <div className={styles.statusCard}>
-              <p className={styles.statusLine}>
-                Bot username:{" "}
-                <strong>{telegramBotUsername ? `@${telegramBotUsername}` : "не задано"}</strong>
-              </p>
               <p className={styles.sectionText}>
-                Натисни кнопку підключення, ми одразу відкриємо бота з готовим payload для
-                прив’язки.
+                Підключи Telegram, підтвердь `Start` у боті, і ми автоматично оновимо статус.
               </p>
             </div>
             {telegramChatId.trim() ? (
@@ -736,15 +697,23 @@ export default function SettingsPage() {
                   </strong>
                 </p>
                 <p className={styles.sectionText}>Chat ID: {telegramChatId}</p>
-                <div className={styles.actionsInline}>
-                  <button
-                    type="button"
-                    className="btnBase btnSecondary"
-                    onClick={() => void handleSendTelegramTest()}
-                    disabled={isLoading || isSaving || isSendingTelegramTest}
-                  >
-                    {isSendingTelegramTest ? "Надсилання..." : "Тестове повідомлення"}
-                  </button>
+              </div>
+            ) : null}
+            <div className={styles.telegramActionsRow}>
+              <div className={styles.actionsInline}>
+                <button
+                  type="button"
+                  className="btnBase btnPrimary"
+                  onClick={() => void handleGenerateTelegramLink()}
+                  disabled={isLoading || isSaving || isGeneratingTelegramLink}
+                >
+                  {isGeneratingTelegramLink
+                    ? "Підготовка..."
+                    : telegramChatId.trim()
+                      ? "Перепідключити Telegram"
+                      : "Підключити Telegram"}
+                </button>
+                {telegramChatId.trim() ? (
                   <button
                     type="button"
                     className="btnBase btnSecondary"
@@ -753,22 +722,8 @@ export default function SettingsPage() {
                   >
                     {isUnlinkingTelegram ? "Відв’язування..." : "Відв’язати Telegram"}
                   </button>
-                </div>
+                ) : null}
               </div>
-            ) : null}
-            <div className={styles.actionsInline}>
-              <button
-                type="button"
-                className="btnBase btnPrimary"
-                onClick={() => void handleGenerateTelegramLink()}
-                disabled={isLoading || isSaving || isGeneratingTelegramLink}
-              >
-                {isGeneratingTelegramLink
-                  ? "Підготовка..."
-                  : telegramChatId.trim()
-                    ? "Перепідключити Telegram"
-                    : "Підключити Telegram"}
-              </button>
               <button
                 type="button"
                 className="btnBase btnSecondary"
@@ -812,21 +767,6 @@ export default function SettingsPage() {
               />
               Увімкнути Telegram-сповіщення
             </label>
-            <label className={styles.field}>
-              Telegram chat ID
-              <input
-                className={styles.input}
-                value={telegramChatId}
-                onChange={(event) => setTelegramChatId(event.target.value)}
-                placeholder="Наприклад: 123456789"
-                disabled={isLoading || isSaving}
-                inputMode="numeric"
-              />
-            </label>
-            <p className={styles.sectionText}>
-              Поле `chat ID` лишається як fallback для ручного підключення. У звичайному
-              сценарії його не потрібно заповнювати вручну.
-            </p>
             <div className={styles.statusCard}>
               <p className={styles.statusLine}>
                 Статус каналу:{" "}
@@ -835,10 +775,6 @@ export default function SettingsPage() {
                     ? "готовий до відправки"
                     : "не налаштовано"}
                 </strong>
-              </p>
-              <p className={styles.sectionText}>
-                Для production ще потрібен cron/scheduler, який викликає Telegram dispatch
-                endpoint.
               </p>
             </div>
           </section>

@@ -5,6 +5,7 @@ export type FriendNotificationPayload = {
   userViewId?: string;
   title?: string;
   posterUrl?: string | null;
+  rating?: number | null;
   mediaKind?: "film" | "game";
   eventType?: "added" | "viewed";
   occurredAt?: string;

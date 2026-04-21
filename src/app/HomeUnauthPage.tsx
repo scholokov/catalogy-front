@@ -402,7 +402,15 @@ export default function HomeUnauthPage() {
                 onClick={() => setIsAuthOpen(false)}
               />
             </div>
-            <AuthForm key={authMode} mode={authMode} onModeChange={setAuthMode} />
+            <AuthForm
+              key={authMode}
+              mode={authMode}
+              onModeChange={setAuthMode}
+              onSignedIn={() => {
+                setIsAuthOpen(false);
+                window.location.reload();
+              }}
+            />
           </div>
         </div>
       ) : null}

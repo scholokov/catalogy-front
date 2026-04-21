@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import {
   computeTelegramRetryAt,
   formatTelegramNotificationText,
-  sendTelegramMessage,
+  sendTelegramNotification,
   type TelegramDeliveryPayload,
 } from "@/lib/friends/telegram";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
@@ -164,10 +164,11 @@ export async function POST(request: Request) {
         .eq("id", delivery.id);
 
       try {
-        const { providerMessageId } = await sendTelegramMessage({
+        const { providerMessageId } = await sendTelegramNotification({
           botToken,
           chatId,
           text,
+          photoUrl: delivery.payload.posterUrl,
         });
 
         await supabaseAdmin

@@ -1,8 +1,47 @@
+import { redirect } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import styles from "./page.module.css";
 
-export default function Home() {
+const getSingleSearchParam = (value: string | string[] | undefined) =>
+  Array.isArray(value) ? value[0] : value;
+
+const hasRecoveryParams = (params: Record<string, string | string[] | undefined>) => {
+  const code = getSingleSearchParam(params.code);
+  const tokenHash = getSingleSearchParam(params.token_hash);
+  const type = getSingleSearchParam(params.type);
+  const errorCode = getSingleSearchParam(params.error_code);
+
+  return Boolean(code || tokenHash || errorCode || type === "recovery");
+};
+
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const resolvedSearchParams = await searchParams;
+
+  if (hasRecoveryParams(resolvedSearchParams)) {
+    const nextParams = new URLSearchParams();
+
+    Object.entries(resolvedSearchParams).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.forEach((entry) => {
+          if (entry) nextParams.append(key, entry);
+        });
+        return;
+      }
+
+      if (value) {
+        nextParams.set(key, value);
+      }
+    });
+
+    nextParams.set("mode", "reset-password");
+    redirect(`/auth?${nextParams.toString()}`);
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.brandLogoBar} aria-hidden="true">

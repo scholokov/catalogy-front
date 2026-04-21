@@ -14,6 +14,7 @@ type AuthFormProps = {
   mode: AuthMode;
   onModeChange: (mode: AuthMode) => void;
   externalFeedback?: { type: "error" | "success"; text: string } | null;
+  onSignedIn?: () => void | Promise<void>;
 };
 
 type FeedbackState =
@@ -89,6 +90,7 @@ export default function AuthForm({
   mode,
   onModeChange,
   externalFeedback = null,
+  onSignedIn,
 }: AuthFormProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -195,6 +197,7 @@ export default function AuthForm({
       } else {
         setValidationErrors({});
         setFeedback({ type: "success", text: "Успішний вхід." });
+        await onSignedIn?.();
       }
 
       setIsLoading(false);
