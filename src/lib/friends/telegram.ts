@@ -1,4 +1,4 @@
-import { buildFriendActivityUrl } from "@/lib/friends/notifications";
+import { buildFriendCollectionEntryUrl } from "@/lib/friends/notifications";
 
 export type TelegramDeliveryPayload = {
   notificationId?: string;
@@ -105,10 +105,8 @@ export const formatTelegramNotificationText = ({
       ? `Дата перегляду: ${new Date(payload.viewedAt).toLocaleDateString("uk-UA")}`
       : null;
   const comment = payload.comment?.trim() || null;
-  const directUrl = buildFriendActivityUrl({
-    actorUserId: payload.actorUserId,
+  const directUrl = buildFriendCollectionEntryUrl({
     mediaKind: payload.mediaKind,
-    userViewId: payload.userViewId,
     itemId: payload.itemId,
     baseUrl: appBaseUrl,
   });

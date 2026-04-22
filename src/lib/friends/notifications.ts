@@ -76,6 +76,53 @@ export const buildFriendActivityUrl = ({
   return `${normalizedBaseUrl}${path}`;
 };
 
+export const buildFriendCollectionEntryPath = ({
+  mediaKind,
+  itemId,
+}: {
+  mediaKind?: "film" | "game" | null;
+  itemId?: string | null;
+}) => {
+  const normalizedItemId = itemId?.trim();
+
+  if (!normalizedItemId || !mediaKind) {
+    return null;
+  }
+
+  const params = new URLSearchParams({
+    addItem: normalizedItemId,
+    addMediaKind: mediaKind,
+  });
+
+  return `/friends?${params.toString()}`;
+};
+
+export const buildFriendCollectionEntryUrl = ({
+  mediaKind,
+  itemId,
+  baseUrl,
+}: {
+  mediaKind?: "film" | "game" | null;
+  itemId?: string | null;
+  baseUrl?: string | null;
+}) => {
+  const path = buildFriendCollectionEntryPath({
+    mediaKind,
+    itemId,
+  });
+
+  if (!path) {
+    return null;
+  }
+
+  const normalizedBaseUrl = baseUrl?.trim().replace(/\/+$/, "");
+  if (!normalizedBaseUrl) {
+    return path;
+  }
+
+  return `${normalizedBaseUrl}${path}`;
+};
+
 export type FriendNotificationRow = {
   id: string;
   recipient_user_id: string;
