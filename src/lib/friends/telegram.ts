@@ -42,13 +42,13 @@ export const getCatalogyAppUrl = () => {
     return explicitUrl;
   }
 
+  if (process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production") {
+    return DEFAULT_PRODUCTION_APP_URL;
+  }
+
   const vercelUrl = normalizeAppBaseUrl(process.env.VERCEL_URL ?? null);
   if (vercelUrl) {
     return vercelUrl;
-  }
-
-  if (process.env.NODE_ENV === "production") {
-    return DEFAULT_PRODUCTION_APP_URL;
   }
 
   return "http://localhost:3000";
