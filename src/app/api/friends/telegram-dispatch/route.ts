@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   computeTelegramRetryAt,
   formatTelegramNotificationText,
+  getCatalogyAppUrl,
   sendTelegramNotification,
   type TelegramDeliveryPayload,
 } from "@/lib/friends/telegram";
@@ -17,6 +18,17 @@ type TelegramDeliveryRow = {
   status: "pending" | "processing" | "sent" | "failed" | "disabled";
   attempt_count: number;
   payload: TelegramDeliveryPayload;
+};
+
+type UserViewDetail = {
+  id: string;
+  user_id: string;
+  item_id: string;
+  rating: number | null;
+  comment: string | null;
+  is_viewed: boolean;
+  view_percent: number;
+  viewed_at: string;
 };
 
 const DEFAULT_LIMIT = 20;
@@ -66,6 +78,7 @@ export async function POST(request: Request) {
       Math.min(Number.isFinite(body.limit) ? Number(body.limit) : DEFAULT_LIMIT, MAX_LIMIT),
     );
     const dryRun = Boolean(body.dryRun);
+    const appBaseUrl = getCatalogyAppUrl();
     const supabaseAdmin = getSupabaseAdmin();
     const now = new Date().toISOString();
 
@@ -97,6 +110,12 @@ export async function POST(request: Request) {
     }
 
     const actorIds = [...new Set(rows.map((row) => row.payload.actorUserId).filter(Boolean))];
+    const userViewIds = [
+      ...new Set(rows.map((row) => row.payload.userViewId?.trim() ?? "").filter(Boolean)),
+    ];
+    const itemIds = [
+      ...new Set(rows.map((row) => row.payload.itemId?.trim() ?? "").filter(Boolean)),
+    ];
     const { data: profiles } =
       actorIds.length > 0
         ? await supabaseAdmin.from("profiles").select("id, username").in("id", actorIds)
@@ -104,6 +123,40 @@ export async function POST(request: Request) {
     const profileMap = new Map(
       (profiles ?? []).map((profile) => [profile.id, profile.username]),
     );
+    const detailsByViewId = new Map<string, UserViewDetail>();
+    const detailsByActorItem = new Map<string, UserViewDetail>();
+
+    if (userViewIds.length > 0) {
+      const { data: userViews } = await supabaseAdmin
+        .from("user_views")
+        .select("id, user_id, item_id, rating, comment, is_viewed, view_percent, viewed_at")
+        .in("id", userViewIds);
+
+      (userViews ?? []).forEach((row) => {
+        const detail = row as UserViewDetail;
+        detailsByViewId.set(detail.id, detail);
+        detailsByActorItem.set(`${detail.user_id}:${detail.item_id}`, detail);
+      });
+    }
+
+    if (actorIds.length > 0 && itemIds.length > 0) {
+      const { data: actorViews } = await supabaseAdmin
+        .from("user_views")
+        .select("id, user_id, item_id, rating, comment, is_viewed, view_percent, viewed_at")
+        .in("user_id", actorIds)
+        .in("item_id", itemIds);
+
+      (actorViews ?? []).forEach((row) => {
+        const detail = row as UserViewDetail;
+        if (!detailsByViewId.has(detail.id)) {
+          detailsByViewId.set(detail.id, detail);
+        }
+        const actorItemKey = `${detail.user_id}:${detail.item_id}`;
+        if (!detailsByActorItem.has(actorItemKey)) {
+          detailsByActorItem.set(actorItemKey, detail);
+        }
+      });
+    }
 
     let sent = 0;
     let failed = 0;
@@ -142,9 +195,35 @@ export async function POST(request: Request) {
         continue;
       }
 
+      const detail =
+        (delivery.payload.userViewId
+          ? detailsByViewId.get(delivery.payload.userViewId)
+          : undefined) ??
+        (actorId && delivery.payload.itemId
+          ? detailsByActorItem.get(`${actorId}:${delivery.payload.itemId}`)
+          : undefined);
+      const payload: TelegramDeliveryPayload = {
+        ...delivery.payload,
+        rating:
+          typeof delivery.payload.rating === "number"
+            ? delivery.payload.rating
+            : detail?.rating ?? null,
+        comment: delivery.payload.comment ?? detail?.comment ?? null,
+        isViewed:
+          typeof delivery.payload.isViewed === "boolean"
+            ? delivery.payload.isViewed
+            : detail?.is_viewed,
+        viewPercent:
+          typeof delivery.payload.viewPercent === "number"
+            ? delivery.payload.viewPercent
+            : detail?.view_percent,
+        viewedAt: delivery.payload.viewedAt ?? detail?.viewed_at ?? null,
+      };
+
       const text = formatTelegramNotificationText({
         actorName,
-        payload: delivery.payload,
+        payload,
+        appBaseUrl,
       });
 
       if (dryRun) {
@@ -168,7 +247,7 @@ export async function POST(request: Request) {
           botToken,
           chatId,
           text,
-          photoUrl: delivery.payload.posterUrl,
+          photoUrl: payload.posterUrl,
         });
 
         await supabaseAdmin

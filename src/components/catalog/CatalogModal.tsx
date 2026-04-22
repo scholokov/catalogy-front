@@ -64,6 +64,8 @@ type CatalogModalProps = {
   };
   submitLabel?: string;
   onReadOnlyPrimaryAction?: () => Promise<void> | void;
+  readOnlyPrimarySuccessMessage?: string | null;
+  readOnlyPrimaryCloses?: boolean;
   showRecommendSimilar?: boolean;
   children:
     | React.ReactNode
@@ -114,6 +116,8 @@ export default function CatalogModal({
   readOnly = false,
   submitLabel = "Додати",
   onReadOnlyPrimaryAction,
+  readOnlyPrimarySuccessMessage = "Додано",
+  readOnlyPrimaryCloses = true,
   showRecommendSimilar = true,
   children,
 }: CatalogModalProps) {
@@ -329,8 +333,12 @@ export default function CatalogModal({
       setSaveError("");
       try {
         await onReadOnlyPrimaryAction();
-        showSnackbar("Додано");
-        onClose();
+        if (readOnlyPrimarySuccessMessage) {
+          showSnackbar(readOnlyPrimarySuccessMessage);
+        }
+        if (readOnlyPrimaryCloses) {
+          onClose();
+        }
       } catch (error) {
         const message =
           error instanceof Error && error.message

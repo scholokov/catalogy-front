@@ -1,13 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
-import { addExistingItemToCollection } from "@/lib/collection/viewMutations";
+import { useCollectionEntryLauncher } from "@/lib/collection/entryLauncher";
 import {
   loadFriendNotifications,
-  markFriendNotificationsRead,
   type FriendNotificationRow,
 } from "@/lib/friends/notifications";
 import { getDisplayName } from "@/lib/users/displayName";
@@ -56,14 +55,31 @@ type Recommendation = {
   };
   fromProfile?: Profile;
   toProfile?: Profile;
+  recommenderViewDetails?: {
+    rating: number | null;
+    comment: string | null;
+    isViewed: boolean;
+    viewPercent: number;
+    viewedAt: string;
+  } | null;
 };
 
 type FriendNotification = FriendNotificationRow & {
   actorProfile?: Profile;
+  viewDetails?: {
+    userViewId: string;
+    itemId: string;
+    comment: string | null;
+    rating: number | null;
+    isViewed: boolean;
+    viewPercent: number;
+    viewedAt: string;
+    createdAt: string;
+  } | null;
 };
 
 type TabKey = "recommendations" | "contacts" | "settings";
-type RecommendationTabKey = "inbox" | "updates" | "archive" | "sent";
+type RecommendationTabKey = "inbox" | "updates" | "sent";
 type ContactNotificationKey =
   | "notify_film_added"
   | "notify_film_viewed"
@@ -77,18 +93,79 @@ const tabLabels: Record<TabKey, string> = {
 };
 
 const recommendationTabLabels: Record<RecommendationTabKey, string> = {
-  inbox: "Вхідні",
-  updates: "Оновлення",
-  archive: "Архів",
-  sent: "Ваші",
+  inbox: "Вхідні рекомендації",
+  updates: "Оновлення від друзів",
+  sent: "Ваші рекомендації",
 };
 
 const formatDate = (value: string) =>
   new Date(value).toLocaleDateString("uk-UA");
 const NICKNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
 
+type FriendsFeedCardTextProps = {
+  title: string;
+  dateText: string;
+  typeLabel: string;
+  byline: ReactNode;
+  comment?: string | null;
+  commentLabel?: string;
+  children?: ReactNode;
+};
+
+function FriendsFeedCardText({
+  title,
+  dateText,
+  typeLabel,
+  byline,
+  comment,
+  commentLabel,
+  children,
+}: FriendsFeedCardTextProps) {
+  return (
+    <div className={styles.cardBody}>
+      <div className={styles.cardHeader}>
+        <h3>{title}</h3>
+        <span className={styles.meta}>{dateText}</span>
+      </div>
+      <p className={styles.cardType}>{typeLabel}</p>
+      <p className={styles.meta}>{byline}</p>
+      {comment ? (
+        <>
+          {commentLabel ? <p className={styles.meta}>{commentLabel}</p> : null}
+          <p className={styles.comment}>{comment}</p>
+        </>
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
+function ArchiveToggle({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className={styles.archiveToggle}>
+      <input
+        type="checkbox"
+        className={styles.archiveToggleInput}
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span className={styles.archiveToggleTrack} aria-hidden="true">
+        <span className={styles.archiveToggleThumb} />
+      </span>
+      <span className={styles.archiveToggleLabel}>Відображати архівні</span>
+    </label>
+  );
+}
+
 export default function FriendsManager() {
   const router = useRouter();
+  const { openCreateOwnEntry } = useCollectionEntryLauncher();
   const [activeTab, setActiveTab] = useState<TabKey>("recommendations");
   const [activeRecommendationTab, setActiveRecommendationTab] =
     useState<RecommendationTabKey>("inbox");
@@ -97,6 +174,9 @@ export default function FriendsManager() {
   const [inbox, setInbox] = useState<Recommendation[]>([]);
   const [sent, setSent] = useState<Recommendation[]>([]);
   const [notifications, setNotifications] = useState<FriendNotification[]>([]);
+  const [ownCollectionItemIds, setOwnCollectionItemIds] = useState<Set<string>>(new Set());
+  const [showArchivedInboxItems, setShowArchivedInboxItems] = useState(false);
+  const [showArchivedNotifications, setShowArchivedNotifications] = useState(false);
   const [message, setMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [currentUserId, setCurrentUserId] = useState("");
@@ -117,17 +197,24 @@ export default function FriendsManager() {
     () => inbox.filter((item) => item.status === "pending").length,
     [inbox],
   );
-  const inboxItems = useMemo(
-    () => inbox.filter((item) => item.status === "pending" || item.status === "saved"),
-    [inbox],
-  );
-  const archiveItems = useMemo(
-    () => inbox.filter((item) => item.status === "accepted" || item.status === "dismissed"),
-    [inbox],
+  const inboxItems = useMemo(() => inbox, [inbox]);
+  const visibleInboxItems = useMemo(
+    () =>
+      showArchivedInboxItems
+        ? inboxItems
+        : inboxItems.filter((item) => item.status === "pending"),
+    [inboxItems, showArchivedInboxItems],
   );
   const unreadNotificationCount = useMemo(
     () => notifications.filter((item) => !item.is_read).length,
     [notifications],
+  );
+  const visibleNotifications = useMemo(
+    () =>
+      showArchivedNotifications
+        ? notifications
+        : notifications.filter((item) => !item.is_read),
+    [notifications, showArchivedNotifications],
   );
   const friendsBadgeCount = pendingCount + unreadNotificationCount;
 
@@ -140,6 +227,114 @@ export default function FriendsManager() {
     const map = new Map<string, Profile>();
     (data ?? []).forEach((profile) => map.set(profile.id, profile));
     return map;
+  }, []);
+
+  const loadNotificationViewDetails = useCallback(
+    async (notificationRows: FriendNotificationRow[]) => {
+      const userViewIds = notificationRows
+        .map((item) => item.payload.userViewId?.trim() ?? "")
+        .filter(Boolean);
+      const actorIds = [...new Set(notificationRows.map((item) => item.actor_user_id))];
+      const itemIds = [
+        ...new Set(notificationRows.map((item) => item.payload.itemId?.trim() ?? "").filter(Boolean)),
+      ];
+
+      const detailsByViewId = new Map<
+        string,
+        FriendNotification["viewDetails"] extends infer T ? Exclude<T, null | undefined> : never
+      >();
+      const detailsByActorItem = new Map<
+        string,
+        FriendNotification["viewDetails"] extends infer T ? Exclude<T, null | undefined> : never
+      >();
+
+      const toDetail = (row: {
+        id: string;
+        user_id: string;
+        item_id: string;
+        comment: string | null;
+        rating: number | null;
+        is_viewed: boolean;
+        view_percent: number;
+        viewed_at: string;
+        created_at: string;
+      }) => ({
+        userViewId: row.id,
+        itemId: row.item_id,
+        comment: row.comment,
+        rating: row.rating,
+        isViewed: row.is_viewed,
+        viewPercent: row.view_percent,
+        viewedAt: row.viewed_at,
+        createdAt: row.created_at,
+      });
+
+      if (userViewIds.length > 0) {
+        const { data } = await supabase
+          .from("user_views")
+          .select("id, user_id, item_id, comment, rating, is_viewed, view_percent, viewed_at, created_at")
+          .in("id", userViewIds);
+
+        (data ?? []).forEach((row) => {
+          const detail = toDetail(row);
+          detailsByViewId.set(row.id, detail);
+          detailsByActorItem.set(`${row.user_id}:${row.item_id}`, detail);
+        });
+      }
+
+      if (actorIds.length > 0 && itemIds.length > 0) {
+        const { data } = await supabase
+          .from("user_views")
+          .select("id, user_id, item_id, comment, rating, is_viewed, view_percent, viewed_at, created_at")
+          .in("user_id", actorIds)
+          .in("item_id", itemIds);
+
+        (data ?? []).forEach((row) => {
+          const detail = toDetail(row);
+          if (!detailsByViewId.has(row.id)) {
+            detailsByViewId.set(row.id, detail);
+          }
+          const actorItemKey = `${row.user_id}:${row.item_id}`;
+          if (!detailsByActorItem.has(actorItemKey)) {
+            detailsByActorItem.set(actorItemKey, detail);
+          }
+        });
+      }
+
+      return { detailsByViewId, detailsByActorItem };
+    },
+    [],
+  );
+
+  const loadRecommendationViewDetails = useCallback(async (recommendationRows: Recommendation[]) => {
+    const actorIds = [...new Set(recommendationRows.map((item) => item.from_user_id))];
+    const itemIds = [...new Set(recommendationRows.map((item) => item.items.id).filter(Boolean))];
+    const detailsByActorItem = new Map<
+      string,
+      NonNullable<Recommendation["recommenderViewDetails"]>
+    >();
+
+    if (actorIds.length === 0 || itemIds.length === 0) {
+      return detailsByActorItem;
+    }
+
+    const { data } = await supabase
+      .from("user_views")
+      .select("user_id, item_id, rating, comment, is_viewed, view_percent, viewed_at")
+      .in("user_id", actorIds)
+      .in("item_id", itemIds);
+
+    (data ?? []).forEach((row) => {
+      detailsByActorItem.set(`${row.user_id}:${row.item_id}`, {
+        rating: row.rating,
+        comment: row.comment,
+        isViewed: row.is_viewed,
+        viewPercent: row.view_percent,
+        viewedAt: row.viewed_at,
+      });
+    });
+
+    return detailsByActorItem;
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -236,7 +431,21 @@ export default function FriendsManager() {
     }
     const inboxRows = (inboxRes.data ?? []) as unknown as Recommendation[];
     const sentRows = (sentRes.data ?? []) as unknown as Recommendation[];
-    const notificationRows = (notificationsRes.data ?? []) as unknown as FriendNotification[];
+    const notificationRows = (notificationsRes.data ?? []) as FriendNotificationRow[];
+    const { detailsByViewId, detailsByActorItem } =
+      await loadNotificationViewDetails(notificationRows);
+    const recommendationViewDetailsByActorItem =
+      await loadRecommendationViewDetails(inboxRows);
+    const relevantOwnItemIds = [
+      ...new Set(
+        [
+          ...inboxRows.map((item) => item.items.id),
+          ...notificationRows
+            .map((item) => item.payload.itemId?.trim() ?? "")
+            .filter(Boolean),
+        ].filter(Boolean),
+      ),
+    ];
 
     const profileIds = new Set<string>();
     contactRows.forEach((contact) => profileIds.add(contact.other_user_id));
@@ -245,6 +454,19 @@ export default function FriendsManager() {
     notificationRows.forEach((item) => profileIds.add(item.actor_user_id));
 
     const profileMap = await loadProfiles([...profileIds]);
+    const ownCollectionItemIdsNext = new Set<string>();
+    if (relevantOwnItemIds.length > 0) {
+      const { data: ownViews } = await supabase
+        .from("user_views")
+        .select("item_id")
+        .eq("user_id", user.id)
+        .in("item_id", relevantOwnItemIds);
+      (ownViews ?? []).forEach((row) => {
+        if (row.item_id) {
+          ownCollectionItemIdsNext.add(row.item_id);
+        }
+      });
+    }
 
     setContacts(
       contactRows.map((contact) => ({
@@ -257,6 +479,10 @@ export default function FriendsManager() {
       inboxRows.map((item) => ({
         ...item,
         fromProfile: profileMap.get(item.from_user_id),
+        recommenderViewDetails:
+          recommendationViewDetailsByActorItem.get(
+            `${item.from_user_id}:${item.items.id}`,
+          ) ?? null,
       })),
     );
     setSent(
@@ -265,10 +491,19 @@ export default function FriendsManager() {
         toProfile: profileMap.get(item.to_user_id),
       })),
     );
+    setOwnCollectionItemIds(ownCollectionItemIdsNext);
     setNotifications(
       notificationRows.map((item) => ({
         ...item,
         actorProfile: profileMap.get(item.actor_user_id),
+        viewDetails:
+          (item.payload.userViewId
+            ? detailsByViewId.get(item.payload.userViewId)
+            : undefined) ??
+          (item.payload.itemId
+            ? detailsByActorItem.get(`${item.actor_user_id}:${item.payload.itemId}`)
+            : undefined) ??
+          null,
       })),
     );
 
@@ -283,7 +518,7 @@ export default function FriendsManager() {
     }
 
     setIsLoading(false);
-  }, [loadProfiles]);
+  }, [loadNotificationViewDetails, loadProfiles, loadRecommendationViewDetails]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -436,39 +671,53 @@ export default function FriendsManager() {
     await loadAll();
   };
 
-  const updateRecommendationStatus = async (
-    recommendationId: string,
-    status: Recommendation["status"],
-  ) => {
-    const { error } = await supabase
-      .from("recommendations")
-      .update({ status })
-      .eq("id", recommendationId);
-    if (error) {
-      setMessage("Не вдалося оновити рекомендацію.");
-      return;
-    }
-    await loadAll();
-    window.dispatchEvent(new CustomEvent("friends:pending-count-refresh"));
-  };
+  const updateRecommendationStatus = useCallback(
+    async (
+      recommendationId: string,
+      status: Recommendation["status"],
+    ) => {
+      const { error } = await supabase
+        .from("recommendations")
+        .update({ status })
+        .eq("id", recommendationId);
+      if (error) {
+        setMessage("Не вдалося оновити рекомендацію.");
+        return;
+      }
+      await loadAll();
+      window.dispatchEvent(new CustomEvent("friends:pending-count-refresh"));
+    },
+    [loadAll],
+  );
 
-  const markNotificationsRead = useCallback(
-    async (notificationIds: string[], options?: { silent?: boolean }) => {
+  const setNotificationsArchived = useCallback(
+    async (
+      notificationIds: string[],
+      archived: boolean,
+      options?: { silent?: boolean },
+    ) => {
       if (notificationIds.length === 0) {
         return true;
       }
-      const readAt = new Date().toISOString();
-      const { error } = await markFriendNotificationsRead(supabase, notificationIds, readAt);
+      const archivedAt = archived ? new Date().toISOString() : null;
+      const { error } = await supabase
+        .from("friend_notifications")
+        .update({ is_read: archived, read_at: archivedAt })
+        .in("id", notificationIds);
       if (error) {
         if (!options?.silent) {
-          setMessage("Не вдалося позначити оновлення прочитаними.");
+          setMessage(
+            archived
+              ? "Не вдалося перемістити оновлення в архів."
+              : "Не вдалося повернути оновлення з архіву.",
+          );
         }
         return false;
       }
       setNotifications((prev) =>
         prev.map((item) =>
-          notificationIds.includes(item.id) && !item.is_read
-            ? { ...item, is_read: true, read_at: readAt }
+          notificationIds.includes(item.id)
+            ? { ...item, is_read: archived, read_at: archivedAt }
             : item,
         ),
       );
@@ -478,13 +727,17 @@ export default function FriendsManager() {
     [],
   );
 
-  const handleMarkNotificationRead = async (notificationId: string) => {
-    await markNotificationsRead([notificationId]);
+  const handleArchiveNotification = async (notificationId: string) => {
+    await setNotificationsArchived([notificationId], true);
   };
 
-  const handleMarkAllNotificationsRead = async () => {
+  const handleRestoreNotification = async (notificationId: string) => {
+    await setNotificationsArchived([notificationId], false);
+  };
+
+  const handleArchiveAllNotifications = async () => {
     const unreadIds = notifications.filter((item) => !item.is_read).map((item) => item.id);
-    await markNotificationsRead(unreadIds);
+    await setNotificationsArchived(unreadIds, true);
   };
 
   const handleToggleContactNotification = async (
@@ -511,28 +764,99 @@ export default function FriendsManager() {
     setMessage("Налаштування сповіщень оновлено.");
   };
 
-  const handleAddToCollection = async (itemId: string) => {
-    try {
-      await addExistingItemToCollection({ supabase, itemId });
-      setMessage("Додано до колекції.");
-      return true;
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Не вдалося додати у колекцію.");
-      return false;
+  const handleOpenRecommendationAddFlow = useCallback((item: Recommendation) => {
+    openCreateOwnEntry({
+      mediaKind: item.items.type === "game" ? "game" : "film",
+      itemId: item.items.id,
+      onCompleted: async () => {
+        await updateRecommendationStatus(item.id, "accepted");
+      },
+    });
+  }, [openCreateOwnEntry, updateRecommendationStatus]);
+
+  const handleArchiveAllRecommendations = async () => {
+    const pendingIds = inbox.filter((item) => item.status === "pending").map((item) => item.id);
+    if (pendingIds.length === 0) {
+      return;
     }
+
+    const { error } = await supabase
+      .from("recommendations")
+      .update({ status: "saved" })
+      .in("id", pendingIds);
+
+    if (error) {
+      setMessage("Не вдалося перемістити рекомендації в архів.");
+      return;
+    }
+
+    await loadAll();
+    window.dispatchEvent(new CustomEvent("friends:pending-count-refresh"));
   };
 
+  const handleOpenRecommendationFriendCollection = useCallback(
+    (item: Recommendation) => {
+      router.push(
+        `/friends/${item.from_user_id}/${item.items.type === "game" ? "games" : "films"}`,
+      );
+    },
+    [router],
+  );
+
+  const handleOpenFriendCollection = useCallback((item: FriendNotification) => {
+    router.push(
+      `/friends/${item.actor_user_id}/${item.media_kind === "film" ? "films" : "games"}`,
+    );
+  }, [router]);
+
+  const handleOpenOwnAddFlow = useCallback((item: FriendNotification) => {
+    const itemId = item.viewDetails?.itemId ?? item.payload.itemId?.trim();
+    if (!itemId) {
+      setMessage("Не вдалося підготувати форму додавання.");
+      return;
+    }
+
+    openCreateOwnEntry({
+      mediaKind: item.media_kind,
+      itemId,
+      onCompleted: async () => {
+        await setNotificationsArchived([item.id], true, { silent: true });
+      },
+    });
+  }, [openCreateOwnEntry, setNotificationsArchived]);
+
   const getNotificationText = (notification: FriendNotification) => {
-    const action =
-      notification.event_type === "viewed"
-        ? notification.media_kind === "film"
-          ? "завершив(ла) перегляд фільму"
-          : "завершив(ла) проходження гри"
-        : notification.media_kind === "film"
-          ? "додав(ла) фільм до колекції"
-          : "додав(ла) гру до колекції";
-    return `${action}.`;
+    return notification.event_type === "viewed"
+      ? notification.media_kind === "film"
+        ? "Завершив(ла) перегляд фільму"
+        : "Завершив(ла) проходження гри"
+      : notification.media_kind === "film"
+        ? "Додав(ла) фільм до колекції"
+        : "Додав(ла) гру до колекції";
   };
+
+  const getNotificationDisplayDate = (notification: FriendNotification) =>
+    notification.payload.occurredAt ??
+    notification.viewDetails?.viewedAt ??
+    notification.created_at;
+
+  const getNotificationDisplayRating = (notification: FriendNotification) =>
+    typeof notification.payload.rating === "number"
+      ? notification.payload.rating
+      : notification.viewDetails?.rating ?? null;
+
+  const getNotificationDisplayComment = (notification: FriendNotification) =>
+    notification.viewDetails?.comment?.trim() || null;
+
+  const isArchivedRecommendation = useCallback(
+    (item: Recommendation) => item.status !== "pending",
+    [],
+  );
+
+  const isOwnCollectionItem = useCallback(
+    (itemId?: string | null) => Boolean(itemId && ownCollectionItemIds.has(itemId)),
+    [ownCollectionItemIds],
+  );
 
   return (
     <div className={styles.wrapper}>
@@ -568,40 +892,78 @@ export default function FriendsManager() {
 
       {activeTab === "recommendations" ? (
         <div className={styles.recommendationsBlock}>
-          <div className={styles.subTabs}>
-            {(Object.keys(recommendationTabLabels) as RecommendationTabKey[]).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                className={`${styles.subTabButton} ${
-                  activeRecommendationTab === tab ? styles.subTabActive : ""
-                }`}
-                onClick={() => {
-                  setActiveRecommendationTab(tab);
-                  if (tab === "updates") {
-                    const unreadIds = notifications
-                      .filter((item) => !item.is_read)
-                      .map((item) => item.id);
-                    void markNotificationsRead(unreadIds, { silent: true });
-                  }
-                }}
-              >
-                {recommendationTabLabels[tab]}
-                {tab === "inbox" && pendingCount > 0 ? (
-                  <span className={styles.badge}>{pendingCount}</span>
+          <div className={styles.recommendationsHeader}>
+            <div className={styles.subTabs}>
+              {(Object.keys(recommendationTabLabels) as RecommendationTabKey[]).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  className={`${styles.subTabButton} ${
+                    activeRecommendationTab === tab ? styles.subTabActive : ""
+                  }`}
+                  onClick={() => {
+                    setActiveRecommendationTab(tab);
+                  }}
+                >
+                  {recommendationTabLabels[tab]}
+                  {tab === "inbox" && pendingCount > 0 ? (
+                    <span className={styles.badge}>{pendingCount}</span>
+                  ) : null}
+                  {tab === "updates" && unreadNotificationCount > 0 ? (
+                    <span className={styles.badge}>{unreadNotificationCount}</span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+            {activeRecommendationTab === "inbox" ? (
+              <div className={styles.inlineActions}>
+                <ArchiveToggle
+                  checked={showArchivedInboxItems}
+                  onChange={setShowArchivedInboxItems}
+                />
+                {pendingCount > 0 ? (
+                  <button
+                    type="button"
+                    className="btnBase btnSecondary"
+                    onClick={() => void handleArchiveAllRecommendations()}
+                  >
+                    Перемістити всі в архів
+                  </button>
                 ) : null}
-                {tab === "updates" && unreadNotificationCount > 0 ? (
-                  <span className={styles.badge}>{unreadNotificationCount}</span>
+              </div>
+            ) : null}
+            {activeRecommendationTab === "updates" ? (
+              <div className={styles.inlineActions}>
+                <ArchiveToggle
+                  checked={showArchivedNotifications}
+                  onChange={setShowArchivedNotifications}
+                />
+                {unreadNotificationCount > 0 ? (
+                  <button
+                    type="button"
+                    className="btnBase btnSecondary"
+                    onClick={() => void handleArchiveAllNotifications()}
+                  >
+                    Перемістити всі в архів
+                  </button>
                 ) : null}
-              </button>
-            ))}
+              </div>
+            ) : null}
           </div>
 
           <div className={styles.recommendationContent}>
             {activeRecommendationTab === "inbox" ? (
               <div className={styles.list}>
-                {inboxItems.map((item) => (
-                  <div key={item.id} className={styles.card}>
+                {visibleInboxItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`${styles.card} ${item.status === "pending" ? styles.cardUnread : ""}`}
+                  >
+                    {(() => {
+                      const isOwnItemAdded = isOwnCollectionItem(item.items.id);
+
+                      return (
+                        <>
                     {item.items.poster_url ? (
                       <Image
                         className={styles.poster}
@@ -614,67 +976,101 @@ export default function FriendsManager() {
                     ) : (
                       <div className={styles.posterPlaceholder}>No image</div>
                     )}
-                    <div className={styles.cardBody}>
-                      <div className={styles.cardHeader}>
-                        <h3>{item.items.title}</h3>
-                        <span className={styles.meta}>{formatDate(item.created_at)}</span>
-                      </div>
-                      <p className={styles.meta}>
-                        Рекомендує:{" "}
-                        {getDisplayName(item.fromProfile?.username, item.from_user_id)}
-                      </p>
-                      {item.comment ? <p className={styles.comment}>{item.comment}</p> : null}
-                      {item.status === "saved" ? (
-                        <p className={styles.meta}>Статус: Прочитано (відкладено)</p>
+                    <FriendsFeedCardText
+                      title={item.items.title}
+                      dateText={formatDate(item.created_at)}
+                      typeLabel="Рекомендація друга"
+                      byline={`Від: ${getDisplayName(item.fromProfile?.username, item.from_user_id)}`}
+                      comment={null}
+                    >
+                      {typeof item.recommenderViewDetails?.rating === "number" ? (
+                        <p className={styles.meta}>
+                          Рейтинг: {item.recommenderViewDetails.rating.toFixed(1)}
+                        </p>
+                      ) : null}
+                      {item.recommenderViewDetails ? (
+                        <p className={styles.meta}>
+                          Переглянуто: {item.recommenderViewDetails.isViewed ? "так" : "ні"} (
+                          {item.recommenderViewDetails.viewPercent}%)
+                        </p>
+                      ) : null}
+                      {item.recommenderViewDetails?.isViewed &&
+                      item.recommenderViewDetails.viewedAt ? (
+                        <p className={styles.meta}>
+                          Дата перегляду: {formatDate(item.recommenderViewDetails.viewedAt)}
+                        </p>
+                      ) : null}
+                      {item.recommenderViewDetails?.comment?.trim() ? (
+                        <>
+                          <p className={styles.meta}>Коментар:</p>
+                          <p className={styles.comment}>
+                            {item.recommenderViewDetails.comment.trim()}
+                          </p>
+                        </>
+                      ) : null}
+                      {item.comment?.trim() ? (
+                        <>
+                          <p className={styles.meta}>Повідомлення:</p>
+                          <p className={styles.comment}>{item.comment.trim()}</p>
+                        </>
+                      ) : null}
+                      {item.status === "accepted" ? (
+                        <p className={styles.meta}>Додано до твоєї колекції</p>
+                      ) : isArchivedRecommendation(item) ? (
+                        <p className={styles.meta}>В архіві</p>
                       ) : null}
                       <div className={styles.actionsRow}>
                         <button
                           type="button"
-                          className="btnBase btnPrimary"
-                          onClick={async () => {
-                            const added = await handleAddToCollection(item.items.id);
-                            if (added) {
-                              await updateRecommendationStatus(item.id, "accepted");
-                            }
-                          }}
+                          className={`btnBase ${isOwnItemAdded ? "btnSecondary" : "btnPrimary"}`}
+                          onClick={() => handleOpenRecommendationAddFlow(item)}
                         >
-                          Додати до колекції
+                          {isOwnItemAdded ? "Редагувати" : "Додати собі у колекцію"}
                         </button>
                         <button
                           type="button"
                           className="btnBase btnSecondary"
-                          onClick={() => updateRecommendationStatus(item.id, "saved")}
+                          onClick={() => handleOpenRecommendationFriendCollection(item)}
                         >
-                          Відкласти
+                          Відкрити колекцію друга
                         </button>
-                        <button
-                          type="button"
-                          className="btnBase btnSecondary"
-                          onClick={() => updateRecommendationStatus(item.id, "dismissed")}
-                        >
-                          Не цікаво
-                        </button>
+                        {item.status === "pending" ? (
+                          <button
+                            type="button"
+                            className="btnBase btnSecondary"
+                            onClick={() => updateRecommendationStatus(item.id, "saved")}
+                          >
+                            Перемістити в архів
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btnBase btnSecondary"
+                            onClick={() => updateRecommendationStatus(item.id, "pending")}
+                          >
+                            Повернути з архіву
+                          </button>
+                        )}
                       </div>
-                    </div>
+                    </FriendsFeedCardText>
+                        </>
+                      );
+                    })()}
                   </div>
                 ))}
+                {visibleInboxItems.length === 0 ? (
+                  <p className={styles.message}>
+                    {inboxItems.length > 0
+                      ? "Активних вхідних рекомендацій немає. Увімкни `Відображати архівні`, щоб побачити архівні та вже додані."
+                      : "Вхідних рекомендацій поки немає."}
+                  </p>
+                ) : null}
               </div>
             ) : null}
 
             {activeRecommendationTab === "updates" ? (
               <div className={styles.list}>
-                {unreadNotificationCount > 0 ? (
-                  <div className={styles.inlineActions}>
-                    <button
-                      type="button"
-                      className="btnBase btnSecondary"
-                      onClick={() => void handleMarkAllNotificationsRead()}
-                    >
-                      Позначити всі прочитаними
-                    </button>
-                  </div>
-                ) : null}
-                {notifications.map((item) => (
+                {visibleNotifications.map((item) => (
                   <div
                     key={item.id}
                     className={`${styles.card} ${!item.is_read ? styles.cardUnread : ""}`}
@@ -691,95 +1087,87 @@ export default function FriendsManager() {
                     ) : (
                       <div className={styles.posterPlaceholder}>No image</div>
                     )}
-                    <div className={styles.cardBody}>
-                      <div className={styles.cardHeader}>
-                        <h3>{item.payload.title ?? "Без назви"}</h3>
-                        <span className={styles.meta}>
-                          {formatDate(item.payload.occurredAt ?? item.created_at)}
-                        </span>
-                      </div>
-                      <p className={styles.meta}>
-                        {getDisplayName(item.actorProfile?.username, item.actor_user_id)}
-                      </p>
-                      <p className={styles.comment}>{getNotificationText(item)}</p>
-                      <p className={styles.meta}>
-                        {item.is_read ? "Прочитано" : "Нове оновлення"}
-                      </p>
-                      <div className={styles.actionsRow}>
-                        <button
-                          type="button"
-                          className="btnBase btnSecondary"
-                          onClick={() =>
-                            router.push(
-                              `/friends/${item.actor_user_id}/${item.media_kind === "film" ? "films" : "games"}`,
-                            )
-                          }
+                    {(() => {
+                      const rating = getNotificationDisplayRating(item);
+                      const comment = getNotificationDisplayComment(item);
+                      const ownItemId = item.viewDetails?.itemId ?? item.payload.itemId ?? null;
+                      const isOwnItemAdded = isOwnCollectionItem(ownItemId);
+
+                      return (
+                        <FriendsFeedCardText
+                          title={item.payload.title ?? "Без назви"}
+                          dateText={formatDate(getNotificationDisplayDate(item))}
+                          typeLabel={getNotificationText(item)}
+                          byline={`Від: ${getDisplayName(item.actorProfile?.username, item.actor_user_id)}`}
+                          comment={null}
                         >
-                          Відкрити бібліотеку
-                        </button>
-                        {item.payload.itemId ? (
-                          <button
-                            type="button"
-                            className="btnBase btnSecondary"
-                            onClick={() => void handleAddToCollection(item.payload.itemId ?? "")}
-                          >
-                            Додати собі
-                          </button>
-                        ) : null}
-                        {!item.is_read ? (
-                          <button
-                            type="button"
-                            className="btnBase btnPrimary"
-                            onClick={() => void handleMarkNotificationRead(item.id)}
-                          >
-                            Позначити прочитаним
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
+                          {typeof rating === "number" ? (
+                            <p className={styles.meta}>Рейтинг: {rating.toFixed(1)}</p>
+                          ) : null}
+                          {item.viewDetails ? (
+                            <p className={styles.meta}>
+                              Переглянуто: {item.viewDetails.isViewed ? "так" : "ні"} (
+                              {item.viewDetails.viewPercent}%)
+                            </p>
+                          ) : null}
+                          {item.viewDetails?.isViewed && item.viewDetails.viewedAt ? (
+                            <p className={styles.meta}>
+                              Дата перегляду: {formatDate(item.viewDetails.viewedAt)}
+                            </p>
+                          ) : null}
+                          {comment ? (
+                            <>
+                              <p className={styles.meta}>Коментар:</p>
+                              <p className={styles.comment}>{comment}</p>
+                            </>
+                          ) : null}
+                          <div className={styles.actionsRow}>
+                            {ownItemId ? (
+                              <button
+                                type="button"
+                                className={`btnBase ${isOwnItemAdded ? "btnSecondary" : "btnPrimary"}`}
+                                onClick={() => handleOpenOwnAddFlow(item)}
+                              >
+                                {isOwnItemAdded ? "Редагувати" : "Додати собі у колекцію"}
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="btnBase btnSecondary"
+                              onClick={() => handleOpenFriendCollection(item)}
+                            >
+                              Відкрити колекцію друга
+                            </button>
+                            {!item.is_read ? (
+                              <button
+                                type="button"
+                                className="btnBase btnSecondary"
+                                onClick={() => void handleArchiveNotification(item.id)}
+                              >
+                                Перемістити в архів
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btnBase btnSecondary"
+                                onClick={() => void handleRestoreNotification(item.id)}
+                              >
+                                Повернути з архіву
+                              </button>
+                            )}
+                          </div>
+                        </FriendsFeedCardText>
+                      );
+                    })()}
                   </div>
                 ))}
-                {notifications.length === 0 ? (
+                {visibleNotifications.length === 0 ? (
                   <p className={styles.message}>
-                    Оновлень від друзів поки немає. Увімкни потрібні типи сповіщень у вкладці
-                    &quot;Контакти&quot;.
+                    {notifications.length > 0
+                      ? "Активних оновлень від друзів немає. Увімкни `Відображати архівні`, щоб побачити архівні."
+                      : "Оновлень від друзів поки немає. Увімкни потрібні типи сповіщень у вкладці \"Контакти\"."}
                   </p>
                 ) : null}
-              </div>
-            ) : null}
-
-            {activeRecommendationTab === "archive" ? (
-              <div className={styles.list}>
-                {archiveItems.map((item) => (
-                  <div key={item.id} className={styles.card}>
-                    {item.items.poster_url ? (
-                      <Image
-                        className={styles.poster}
-                        src={item.items.poster_url}
-                        alt={`Постер ${item.items.title}`}
-                        width={96}
-                        height={140}
-                        unoptimized
-                      />
-                    ) : (
-                      <div className={styles.posterPlaceholder}>No image</div>
-                    )}
-                    <div className={styles.cardBody}>
-                      <div className={styles.cardHeader}>
-                        <h3>{item.items.title}</h3>
-                        <span className={styles.meta}>{formatDate(item.created_at)}</span>
-                      </div>
-                      <p className={styles.meta}>
-                        Рекомендує:{" "}
-                        {getDisplayName(item.fromProfile?.username, item.from_user_id)}
-                      </p>
-                      <p className={styles.meta}>
-                        Статус: {item.status === "accepted" ? "Додано до колекції" : "Не цікаво"}
-                      </p>
-                      {item.comment ? <p className={styles.comment}>{item.comment}</p> : null}
-                    </div>
-                  </div>
-                ))}
               </div>
             ) : null}
 

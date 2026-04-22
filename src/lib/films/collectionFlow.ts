@@ -1,5 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  updateCollectionItemRecordWithRetry,
+  updateCollectionViewRecord,
+} from "@/lib/collection/viewUpdateMutation";
+import {
   syncFilmNormalizedMetadata,
   type FilmNormalizedGenre,
   type FilmNormalizedPerson,
@@ -329,27 +333,12 @@ export const updateFilmView = async ({
   itemDraft: FilmItemDraftInput | null;
   payload: FilmCollectionFormPayload;
 }) => {
-  const { error } = await supabase
-    .from("user_views")
-    .update({
-      rating: payload.rating,
-      comment: payload.comment,
-      viewed_at: payload.viewedAt,
-      is_viewed: payload.isViewed,
-      view_percent: payload.viewPercent,
-      recommend_similar: payload.recommendSimilar,
-      availability: payload.availability,
-      shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
-      shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
-      shishka_fit_profile_analyzed_at:
-        payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
-      shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
-    })
-    .eq("id", viewId);
-
-  if (error) {
-    throw new Error("Не вдалося оновити запис.");
-  }
+  await updateCollectionViewRecord({
+    supabase,
+    viewId,
+    payload,
+    errorMessage: "Не вдалося оновити запис.",
+  });
 
   if (!itemDraft) {
     return;
@@ -372,39 +361,27 @@ export const updateFilmView = async ({
     trailers: itemDraft.trailers,
   };
 
-  const { error: updateItemError } = await supabase
-    .from("items")
-    .update(itemUpdatePayload)
-    .eq("id", itemId);
-
-  if (updateItemError) {
-    if (updateItemError.code === "23505") {
-      const { error: retryError } = await supabase
-        .from("items")
-        .update({
-          title: itemDraft.title,
-          title_uk: itemDraft.title_uk,
-          title_en: itemDraft.title_en,
-          title_original: itemDraft.title_original,
-          poster_url: itemDraft.poster_url,
-          year: itemDraft.year,
-          imdb_rating: itemDraft.imdb_rating,
-          description: itemDraft.description,
-          genres: itemDraft.genres,
-          director: itemDraft.director,
-          actors: itemDraft.actors,
-          film_media_type: itemDraft.film_media_type,
-          trailers: itemDraft.trailers,
-        })
-        .eq("id", itemId);
-
-      if (retryError) {
-        throw new Error("Не вдалося оновити дані фільму.");
-      }
-    } else {
-      throw new Error("Не вдалося оновити дані фільму.");
-    }
-  }
+  await updateCollectionItemRecordWithRetry({
+    supabase,
+    itemId,
+    primaryPayload: itemUpdatePayload,
+    retryPayload: {
+      title: itemDraft.title,
+      title_uk: itemDraft.title_uk,
+      title_en: itemDraft.title_en,
+      title_original: itemDraft.title_original,
+      poster_url: itemDraft.poster_url,
+      year: itemDraft.year,
+      imdb_rating: itemDraft.imdb_rating,
+      description: itemDraft.description,
+      genres: itemDraft.genres,
+      director: itemDraft.director,
+      actors: itemDraft.actors,
+      film_media_type: itemDraft.film_media_type,
+      trailers: itemDraft.trailers,
+    },
+    errorMessage: "Не вдалося оновити дані фільму.",
+  });
 
   await syncFilmNormalizedMetadata(supabase, itemId, {
     people: itemDraft.normalizedPeople ?? null,

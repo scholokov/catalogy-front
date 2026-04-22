@@ -33,6 +33,8 @@ const toEmbedUrl = (url: string) => {
   return url;
 };
 
+const isDirectVideoUrl = (url: string) => url.toLowerCase().includes(".mp4");
+
 export default function TrailerViewerModal({
   trailers,
   initialIndex,
@@ -57,13 +59,22 @@ export default function TrailerViewerModal({
           <CloseIconButton className={styles.trailerCloseButton} onClick={onClose} />
         </div>
         <div className={styles.trailerBody}>
-          <iframe
-            className={styles.trailerFrame}
-            src={`${toEmbedUrl(currentTrailer.url)}?autoplay=1`}
-            title={currentTrailer.name?.trim() ? currentTrailer.name : baseTitle}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-          />
+          {isDirectVideoUrl(currentTrailer.url) ? (
+            <video
+              className={styles.trailerFrame}
+              src={currentTrailer.url}
+              controls
+              autoPlay
+            />
+          ) : (
+            <iframe
+              className={styles.trailerFrame}
+              src={`${toEmbedUrl(currentTrailer.url)}?autoplay=1`}
+              title={currentTrailer.name?.trim() ? currentTrailer.name : baseTitle}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
+          )}
           {trailers.length > 1 ? (
             <>
               <button

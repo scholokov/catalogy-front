@@ -11,6 +11,71 @@ export type FriendNotificationPayload = {
   occurredAt?: string;
 };
 
+export const buildFriendActivityPath = ({
+  actorUserId,
+  mediaKind,
+  userViewId,
+  itemId,
+}: {
+  actorUserId?: string | null;
+  mediaKind?: "film" | "game" | null;
+  userViewId?: string | null;
+  itemId?: string | null;
+}) => {
+  const normalizedActorUserId = actorUserId?.trim();
+  const normalizedUserViewId = userViewId?.trim();
+  const normalizedItemId = itemId?.trim();
+
+  if (!normalizedActorUserId || (!normalizedUserViewId && !normalizedItemId) || !mediaKind) {
+    return null;
+  }
+
+  const librarySegment = mediaKind === "game" ? "games" : "films";
+  const params = new URLSearchParams(
+    normalizedUserViewId
+      ? {
+          view: normalizedUserViewId,
+        }
+      : {
+          item: normalizedItemId ?? "",
+        },
+  );
+
+  return `/friends/${normalizedActorUserId}/${librarySegment}?${params.toString()}`;
+};
+
+export const buildFriendActivityUrl = ({
+  actorUserId,
+  mediaKind,
+  userViewId,
+  itemId,
+  baseUrl,
+}: {
+  actorUserId?: string | null;
+  mediaKind?: "film" | "game" | null;
+  userViewId?: string | null;
+  itemId?: string | null;
+  baseUrl?: string | null;
+}) => {
+  const path = buildFriendActivityPath({
+    actorUserId,
+    mediaKind,
+    userViewId,
+    itemId,
+  });
+
+  if (!path) {
+    return null;
+  }
+
+  const normalizedBaseUrl = baseUrl?.trim().replace(/\/+$/, "");
+  if (!normalizedBaseUrl) {
+    return path;
+  }
+
+  return `${normalizedBaseUrl}${path}`;
+};
+
 export type FriendNotificationRow = {
   id: string;
   recipient_user_id: string;

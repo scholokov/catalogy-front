@@ -11,31 +11,57 @@ import {
 } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Range, getTrackBackground } from "react-range";
+import ExistingCollectionEntryModal from "@/components/catalog/ExistingCollectionEntryModal";
 import CatalogSearchModal, {
   type CatalogSearchRequest,
 } from "@/components/catalog/CatalogSearchModal";
-import CatalogModal from "@/components/catalog/CatalogModal";
+import TrailerViewerModal from "@/components/films/TrailerViewerModal";
 import RecommendModal from "@/components/recommendations/RecommendModal";
 import RecommendationRequestModal, {
   type RecommendationRequestOption,
 } from "@/components/recommendations/RecommendationRequestModal";
 import CloseIconButton from "@/components/ui/CloseIconButton";
+import {
+  applyExistingCollectionEntryViewSave,
+  deleteCollectionView,
+  formatCollectionEntryPersonalRating as formatPersonalRating,
+  getStoredCollectionEntryFitAssessment as getStoredShishkaFitAssessment,
+  patchCollectionEntryTrailersByItemId,
+  persistCollectionEntryAssessment,
+} from "@/lib/collection/existingEntryState";
+import {
+  evaluateGameCollectionFit,
+} from "@/lib/collection/fitEvaluation";
+import {
+  readCollectionEntrySearchParams,
+  replaceSelectedCollectionAddItemSearchParam,
+  replaceSelectedCollectionViewSearchParam,
+  useRequestedCollectionViewSync,
+} from "@/lib/collection/entryRouting";
+import {
+  COLLECTION_ENTRY_SAVED_EVENT,
+  type CollectionEntrySavedEventDetail,
+} from "@/lib/collection/events";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
+import {
+  fetchGameTrailers,
+  openTrailerViewerModal,
+  type TrailerModalState,
+  watchExistingEntryTrailer,
+} from "@/lib/collection/trailers";
+import { useCollectionEntryLauncher } from "@/lib/collection/entryLauncher";
 import { supabase } from "@/lib/supabase/client";
-import { addExistingItemToCollection } from "@/lib/collection/viewMutations";
 import { buildGenreHref } from "@/lib/genres/routes";
 import {
   type GameCollectionFormPayload,
-  type GameCollectionSource,
   type GameCollectionTrailer,
   type GameItemDraftInput,
-  addGameToCollection,
   normalizeGameTrailers,
   updateGameView as updateGameViewMutation,
 } from "@/lib/games/collectionFlow";
-import { type GameNormalizedGenre, trySyncGameNormalizedGenres } from "@/lib/games/normalizedMetadata";
-import { normalizeGamePlatforms } from "@/lib/games/platforms";
+import { type GameNormalizedGenre } from "@/lib/games/normalizedMetadata";
 import { loadStoredGameGenresForItem } from "@/lib/games/storedGenres";
 import {
   DEFAULT_GAME_PLATFORM_OPTIONS,
@@ -47,11 +73,6 @@ import type { GameLlmExportRow } from "@/app/statistics/gameLlmContext";
 import { deriveScopeMaturityStatus } from "@/app/statistics/lib/scopeReadiness";
 import type { GameProfileSystemLayer, GameProfileUserLayer } from "@/lib/profile-analysis/types";
 import {
-  fetchLatestGameFitProfileAnalysis,
-  requestGameFitEvaluation,
-} from "@/lib/shishka/fitEvaluationClient";
-import {
-  mergeShishkaAssessmentIntoComment,
   type ShishkaFitAssessment,
 } from "@/lib/shishka/fitAssessment";
 import styles from "@/components/catalog/CatalogSearch.module.css";
@@ -60,6 +81,7 @@ type Trailer = GameCollectionTrailer;
 
 type GameResult = {
   id: string;
+  itemId?: string;
   title: string;
   rating: number | null;
   ratingSource?: "igdb" | "rawg";
@@ -115,31 +137,8 @@ type AiRecommendation = {
   raw: string;
 };
 
-const getStoredShishkaFitAssessment = (
-  item: Pick<
-    GameCollectionItem,
-    | "shishka_fit_label"
-    | "shishka_fit_reason"
-    | "shishka_fit_profile_analyzed_at"
-    | "shishka_fit_scope_value"
-  >,
-): ShishkaFitAssessment | null => {
-  if (
-    !item.shishka_fit_label ||
-    !item.shishka_fit_reason?.trim() ||
-    !item.shishka_fit_profile_analyzed_at ||
-    !item.shishka_fit_scope_value
-  ) {
-    return null;
-  }
-
-  return {
-    label: item.shishka_fit_label,
-    reason: item.shishka_fit_reason.trim(),
-    profileAnalyzedAt: item.shishka_fit_profile_analyzed_at,
-    scopeValue: item.shishka_fit_scope_value,
-  };
-};
+const GAME_VIEW_SELECT =
+  "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, shishka_fit_label, shishka_fit_reason, shishka_fit_profile_analyzed_at, shishka_fit_scope_value, items:items!inner (id, title, description, genres, poster_url, external_id, imdb_rating, trailers, year, type)";
 
 type ContactOption = {
   id: string;
@@ -261,11 +260,6 @@ const reconcileRangeWithNewBounds = (
   return clampRange([from, to], nextBounds);
 };
 
-const formatPersonalRating = (value: number | null) => {
-  if (value === null) return "—";
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
-};
-
 const getExternalRatingLabel = (
   source?: "igdb" | "rawg",
   value?: number | string | null,
@@ -287,11 +281,6 @@ const normalizeComparableTitle = (value: string) =>
     .replace(/[^a-zа-яіїєґ0-9]+/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
-
-const getPrimaryGameScopeValue = (platforms: string[] | null | undefined) => {
-  const normalizedPlatforms = normalizeGamePlatforms(platforms);
-  return normalizedPlatforms[0] ?? "Усі платформи";
-};
 
 const getDefaultSortDirection = (sortBy: SortBy): SortDirection => {
   if (sortBy === "title") return "asc";
@@ -395,6 +384,12 @@ export default function GamesManager({
   readOnly = false,
 }: GamesManagerProps) {
   const { showSnackbar } = useSnackbar();
+  const { openCreateOwnEntry, openDraftEntry } = useCollectionEntryLauncher();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { requestedViewId, requestedItemId, requestedAddItemId } =
+    readCollectionEntrySearchParams(searchParams);
   const [lazyDebug, setLazyDebug] = useState<string[]>([]);
   const [lazyDebugEnabled, setLazyDebugEnabled] = useState(false);
   const logLazy = useCallback(
@@ -424,12 +419,6 @@ export default function GamesManager({
   ]);
   const [message, setMessage] = useState("");
   const [, setRecommendationMessage] = useState("");
-  const [aiRecommendationComment, setAiRecommendationComment] = useState("");
-  const [aiRecommendationScopeValue, setAiRecommendationScopeValue] = useState<string | null>(
-    null,
-  );
-  const [aiRecommendationFitAssessment, setAiRecommendationFitAssessment] =
-    useState<ShishkaFitAssessment | null>(null);
   const [recommendationPromptPreview, setRecommendationPromptPreview] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
@@ -452,7 +441,6 @@ export default function GamesManager({
     sortDirectionSecondary: DEFAULT_FILTERS.sortDirectionSecondary,
   });
   const [viewMode, setViewMode] = useState<GamesViewMode>("cards");
-  const [selectedGame, setSelectedGame] = useState<GameResult | null>(null);
   const [selectedView, setSelectedView] = useState<GameCollectionItem | null>(
     null,
   );
@@ -460,11 +448,7 @@ export default function GamesManager({
     null,
   );
   const [selectedViewGenres, setSelectedViewGenres] = useState<GameNormalizedGenre[]>([]);
-  const [trailerModal, setTrailerModal] = useState<{
-    trailers: Trailer[];
-    index: number;
-    baseTitle: string;
-  } | null>(null);
+  const [trailerModal, setTrailerModal] = useState<TrailerModalState<Trailer>>(null);
   const [isTrailerLoading, setIsTrailerLoading] = useState(false);
   const [isRefreshPickerOpen, setIsRefreshPickerOpen] = useState(false);
   const [refreshSearchQuery, setRefreshSearchQuery] = useState("");
@@ -500,6 +484,7 @@ export default function GamesManager({
   const yearBoundsRef = useRef<[number, number]>([MIN_YEAR, MAX_YEAR]);
   const viewModeStorageKeyRef = useRef("games:view-mode:v2:guest");
   const isViewModeStorageReadyRef = useRef(false);
+  const pendingViewParamSyncRef = useRef<string | null | false>(false);
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
     title: string;
@@ -522,15 +507,6 @@ export default function GamesManager({
   const [showAvailability, setShowAvailability] = useState(true);
   const [isRecommendationPromptDebugEnabled, setIsRecommendationPromptDebugEnabled] =
     useState(false);
-  const [defaultGamePlatform, setDefaultGamePlatform] = useState<string | null>(
-    null,
-  );
-  const [defaultGameAvailability, setDefaultGameAvailability] = useState<string | null>(
-    null,
-  );
-  const [defaultGameIsViewed, setDefaultGameIsViewed] = useState<boolean | null>(
-    null,
-  );
   const [visiblePlatforms, setVisiblePlatforms] = useState<string[]>([
     ...GAME_PLATFORM_OPTIONS,
   ]);
@@ -540,9 +516,6 @@ export default function GamesManager({
       const prefs = readDisplayPreferences();
       setShowAvailability(prefs.showGameAvailability);
       setVisiblePlatforms(prefs.visibleGamePlatforms);
-      setDefaultGamePlatform(prefs.defaultGamePlatform);
-      setDefaultGameAvailability(prefs.defaultGameAvailability);
-      setDefaultGameIsViewed(prefs.defaultGameIsViewed);
     };
     applyPreferences();
     return undefined;
@@ -569,9 +542,6 @@ export default function GamesManager({
         const prefs = readDisplayPreferences();
         setShowAvailability(prefs.showGameAvailability);
         setVisiblePlatforms(prefs.visibleGamePlatforms);
-        setDefaultGamePlatform(prefs.defaultGamePlatform);
-        setDefaultGameAvailability(prefs.defaultGameAvailability);
-        setDefaultGameIsViewed(prefs.defaultGameIsViewed);
       }
       if (event.key === viewModeStorageKeyRef.current) {
         const rawValue = event.newValue;
@@ -626,10 +596,266 @@ export default function GamesManager({
   }, [selectedView?.items.id]);
 
   useEffect(() => {
-    if (selectedGame || selectedView) {
+    if (selectedView) {
       setTrailerMessage("");
     }
-  }, [selectedGame, selectedView]);
+  }, [selectedView]);
+
+  const replaceSelectedItemSearchParam = useCallback(
+    (viewId: string | null) => {
+      replaceSelectedCollectionViewSearchParam({
+        pathname,
+        router,
+        searchParams,
+        viewId,
+      });
+    },
+    [pathname, router, searchParams],
+  );
+
+  const replaceAddItemSearchParam = useCallback(
+    (itemId: string | null) => {
+      replaceSelectedCollectionAddItemSearchParam({
+        pathname,
+        router,
+        searchParams,
+        itemId,
+      });
+    },
+    [pathname, router, searchParams],
+  );
+
+  const clearSelectedView = useCallback(() => {
+    setSelectedView(null);
+    setTrailerMessage("");
+  }, []);
+
+  const loadSelectedViewById = useCallback(
+    async (viewId: string) => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        return null;
+      }
+
+      if (readOnly && ownerUserId && friendAccessState !== "allowed") {
+        return null;
+      }
+
+      const effectiveOwnerId = ownerUserId ?? user.id;
+      const { data } = await supabase
+        .from("user_views")
+        .select(GAME_VIEW_SELECT)
+        .eq("id", viewId)
+        .eq("user_id", effectiveOwnerId)
+        .eq("items.type", "game")
+        .maybeSingle();
+
+      return (data as GameCollectionItem | null) ?? null;
+    },
+    [friendAccessState, ownerUserId, readOnly],
+  );
+
+  const loadSelectedViewByItemId = useCallback(
+    async (itemId: string) => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        return null;
+      }
+
+      if (readOnly && ownerUserId && friendAccessState !== "allowed") {
+        return null;
+      }
+
+      const effectiveOwnerId = ownerUserId ?? user.id;
+      const { data } = await supabase
+        .from("user_views")
+        .select(GAME_VIEW_SELECT)
+        .eq("item_id", itemId)
+        .eq("user_id", effectiveOwnerId)
+        .eq("items.type", "game")
+        .order("updated_at", { ascending: false })
+        .limit(1);
+
+      return ((data as GameCollectionItem[] | null) ?? [])[0] ?? null;
+    },
+    [friendAccessState, ownerUserId, readOnly],
+  );
+
+  const loadSelectedGameByItemId = useCallback(async (itemId: string) => {
+    const { data } = await supabase
+      .from("items")
+      .select("id, title, description, genres, poster_url, external_id, imdb_rating, trailers, year")
+      .eq("id", itemId)
+      .eq("type", "game")
+      .maybeSingle();
+
+    if (!data) {
+      return null;
+    }
+
+    const parsedRating =
+      typeof data.imdb_rating === "string" && data.imdb_rating.trim()
+        ? Number.parseFloat(data.imdb_rating)
+        : null;
+
+    return {
+      id: data.external_id?.trim() || data.id,
+      itemId: data.id,
+      title: data.title,
+      rating: Number.isFinite(parsedRating) ? parsedRating : null,
+      released: data.year ? String(data.year) : "",
+      poster: data.poster_url ?? "",
+      genres: data.genres ?? "",
+      trailers: Array.isArray(data.trailers) ? (data.trailers as Trailer[]) : undefined,
+    } satisfies GameResult;
+  }, []);
+
+  const openSelectedView = useCallback(
+    (
+      item: GameCollectionItem,
+      options: {
+        syncUrl?: boolean;
+      } = {},
+    ) => {
+      setSelectedView(item);
+      if (options.syncUrl ?? true) {
+        pendingViewParamSyncRef.current = item.id;
+        replaceSelectedItemSearchParam(item.id);
+      }
+    },
+    [replaceSelectedItemSearchParam],
+  );
+
+  const closeSelectedView = useCallback(() => {
+    pendingViewParamSyncRef.current = null;
+    clearSelectedView();
+    replaceSelectedItemSearchParam(null);
+  }, [clearSelectedView, replaceSelectedItemSearchParam]);
+
+  useRequestedCollectionViewSync({
+    pendingViewParamSyncRef,
+    requestedViewId,
+    requestedItemId,
+    selectedViewId: selectedView?.id ?? null,
+    selectedItemId: selectedView?.items.id ?? null,
+    collection,
+    getViewId: (item) => item.id,
+    getItemId: (item) => item.items.id,
+    clearSelectedView,
+    clearSelectedViewRoute: closeSelectedView,
+    openSelectedView,
+    loadSelectedViewById,
+    loadSelectedViewByItemId,
+  });
+
+  const openSelectedGameDraft = useCallback(
+    (
+      game: GameResult,
+      options?: {
+        recommendationComment?: string;
+        recommendationScopeValue?: string | null;
+        recommendationFitAssessment?: ShishkaFitAssessment | null;
+        closeSearch?: boolean;
+      },
+    ) => {
+      openDraftEntry({
+        mediaKind: "game",
+        draft: {
+          id: game.id,
+          itemId: game.itemId,
+          title: game.title,
+          rating: game.rating,
+          ratingSource: game.ratingSource,
+          released: game.released,
+          poster: game.poster,
+          genres: game.genres,
+          genreItems: game.genreItems,
+          description: searchDescriptions[game.id] ?? null,
+          trailers: game.trailers,
+        },
+        recommendationComment: options?.recommendationComment ?? "",
+        recommendationScopeValue: options?.recommendationScopeValue ?? null,
+        recommendationFitAssessment: options?.recommendationFitAssessment ?? null,
+      });
+      if (options?.closeSearch ?? true) {
+        setIsAddOpen(false);
+      }
+    },
+    [openDraftEntry, searchDescriptions],
+  );
+
+  const resolveAndOpenGameDraft = useCallback(
+    (game: GameResult) => {
+      if (game.existingViewId) {
+        const gameExternalId = game.id.trim();
+        const existingView =
+          collection.find((item) => item.id === game.existingViewId) ??
+          collection.find(
+            (item) =>
+              item.items.external_id?.trim() === gameExternalId,
+          );
+        if (existingView) {
+          openSelectedView(existingView);
+          setIsAddOpen(false);
+          return true;
+        }
+      }
+
+      openSelectedGameDraft(game);
+      return true;
+    },
+    [collection, openSelectedGameDraft, openSelectedView],
+  );
+
+  useEffect(() => {
+    if (readOnly || !requestedAddItemId) {
+      return;
+    }
+
+    if (selectedView?.items.id === requestedAddItemId) {
+      return;
+    }
+
+    const existingView = collection.find((item) => item.items.id === requestedAddItemId);
+    if (existingView) {
+      openSelectedView(existingView);
+      return;
+    }
+
+    let isCancelled = false;
+
+    void (async () => {
+      const game = await loadSelectedGameByItemId(requestedAddItemId);
+      if (isCancelled) {
+        return;
+      }
+      if (!game) {
+        replaceAddItemSearchParam(null);
+        return;
+      }
+      openSelectedGameDraft(game);
+      replaceAddItemSearchParam(null);
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    collection,
+    loadSelectedGameByItemId,
+    openSelectedGameDraft,
+    openSelectedView,
+    readOnly,
+    replaceAddItemSearchParam,
+    requestedAddItemId,
+    selectedView?.items.id,
+  ]);
 
   const loadRecommendations = useCallback(
     async (itemIds: string[], shouldReset: boolean) => {
@@ -835,9 +1061,7 @@ export default function GamesManager({
 
     let query = supabase
       .from("user_views")
-      .select(
-        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, shishka_fit_label, shishka_fit_reason, shishka_fit_profile_analyzed_at, shishka_fit_scope_value, items:items!inner (id, title, description, genres, poster_url, external_id, imdb_rating, trailers, year, type)",
-      )
+      .select(GAME_VIEW_SELECT)
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "game");
 
@@ -1135,6 +1359,26 @@ export default function GamesManager({
   }, [appliedFilters, fetchPage, friendAccessState, hasApplied, ownerUserId, readOnly]);
 
   useEffect(() => {
+    if (readOnly || ownerUserId || !hasApplied) {
+      return;
+    }
+
+    const handleCollectionEntrySaved = (event: Event) => {
+      const detail = (event as CustomEvent<CollectionEntrySavedEventDetail>).detail;
+      if (detail?.mediaKind !== "game") {
+        return;
+      }
+
+      void fetchPage(0, appliedFilters);
+    };
+
+    window.addEventListener(COLLECTION_ENTRY_SAVED_EVENT, handleCollectionEntrySaved);
+    return () => {
+      window.removeEventListener(COLLECTION_ENTRY_SAVED_EVENT, handleCollectionEntrySaved);
+    };
+  }, [appliedFilters, fetchPage, hasApplied, ownerUserId, readOnly]);
+
+  useEffect(() => {
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (initialLoadRunRef.current) return;
     if (hasApplied) return;
@@ -1381,7 +1625,7 @@ export default function GamesManager({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isFiltersOpen]);
 
-  const existingViewsByExternalId = useMemo(() => {
+  const gameViewsByExternalId = useMemo(() => {
     const map = new Map<string, GameCollectionItem>();
     collection.forEach((item) => {
       if (item.items.external_id) {
@@ -1556,90 +1800,14 @@ export default function GamesManager({
         platforms?: string[] | null;
       },
       previousAssessment?: ShishkaFitAssessment | null,
-    ) => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        throw new Error("Не вдалося визначити користувача.");
-      }
-
-      const scopeValue = getPrimaryGameScopeValue(game.platforms);
-      const profileAnalysis = await fetchLatestGameFitProfileAnalysis(
+    ) =>
+      evaluateGameCollectionFit({
         supabase,
-        user.id,
-        scopeValue,
-      );
-
-      if (!profileAnalysis) {
-        throw new Error("Спершу онови профіль для цієї платформи.");
-      }
-
-      if (
-        previousAssessment?.profileAnalyzedAt &&
-        previousAssessment.profileAnalyzedAt === profileAnalysis.analyzedAt
-      ) {
-        throw new Error("Спершу онови профіль, а потім запускай переоцінку.");
-      }
-
-      return requestGameFitEvaluation({
-        scopeLabel: scopeValue,
-        profileAnalysis,
-        item: {
-          title: game.title,
-          year: game.year ?? null,
-          genres: game.genres ?? null,
-          description: game.description ?? null,
-          platforms: game.platforms ?? null,
-        },
-      });
-    },
+        game,
+        previousAssessment,
+      }),
     [],
   );
-
-  useEffect(() => {
-    if (!selectedGame || !aiRecommendationScopeValue || aiRecommendationFitAssessment) {
-      return;
-    }
-
-    let isCancelled = false;
-
-    void (async () => {
-      try {
-        const assessment = await evaluateGameWithProfile(
-          {
-            title: selectedGame.title,
-            year: selectedGame.released,
-            genres: selectedGame.genres,
-            description: null,
-            platforms: aiRecommendationScopeValue ? [aiRecommendationScopeValue] : null,
-          },
-          null,
-        );
-
-        if (!isCancelled) {
-          setAiRecommendationFitAssessment(assessment);
-          setAiRecommendationComment((prev) =>
-            mergeShishkaAssessmentIntoComment(prev, assessment),
-          );
-        }
-      } catch {
-        if (!isCancelled) {
-          setAiRecommendationFitAssessment(null);
-        }
-      }
-    })();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [
-    aiRecommendationFitAssessment,
-    aiRecommendationScopeValue,
-    evaluateGameWithProfile,
-    selectedGame,
-  ]);
 
   const getGameRecommendationOptions = (rows: GameLlmExportRow[]): RecommendationRequestOption[] => {
     const platformBuckets = new Map<string, GameLlmExportRow[]>();
@@ -1755,7 +1923,7 @@ export default function GamesManager({
         if (
           item.inCollection ||
           item.existingViewId ||
-          existingViewsByExternalId.get(item.id) ||
+          gameViewsByExternalId.get(item.id) ||
           recommendationExistingExternalKeys.has(item.id)
         ) {
           return false;
@@ -2000,37 +2168,6 @@ export default function GamesManager({
   const normalizeTrailers = (trailers?: Trailer[] | null) =>
     normalizeGameTrailers(trailers);
 
-  const selectPreferredTrailer = (trailers?: Trailer[] | null) => {
-    if (!trailers || trailers.length === 0) return null;
-    const officialTrailer = trailers.find(
-      (trailer) => trailer.type === "Trailer" && trailer.official && trailer.url,
-    );
-    const trailer = trailers.find(
-      (candidate) => candidate.type === "Trailer" && candidate.url,
-    );
-    const teaser = trailers.find(
-      (candidate) => candidate.type === "Teaser" && candidate.url,
-    );
-    return officialTrailer ?? trailer ?? teaser ?? trailers.find((candidate) => candidate.url);
-  };
-
-  const toEmbedUrl = (url: string) => {
-    try {
-      const parsed = new URL(url);
-      if (parsed.hostname.includes("youtube.com")) {
-        const videoId = parsed.searchParams.get("v");
-        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
-      }
-      if (parsed.hostname === "youtu.be") {
-        const videoId = parsed.pathname.replace("/", "").trim();
-        if (videoId) return `https://www.youtube.com/embed/${videoId}`;
-      }
-    } catch {
-      return url;
-    }
-    return url;
-  };
-
   const playIcon = (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -2073,119 +2210,44 @@ export default function GamesManager({
   );
 
   const openTrailerModal = (title: string, trailers?: Trailer[] | null) => {
-    const picked = selectPreferredTrailer(trailers);
-    if (!picked) {
-      setTrailerMessage("Трейлер недоступний.");
-      return false;
-    }
-    const safeTrailers = trailers ?? [];
-    const pickedIndex = safeTrailers.indexOf(picked);
-    setTrailerModal({
-      trailers: safeTrailers,
-      index: pickedIndex >= 0 ? pickedIndex : 0,
-      baseTitle: title,
+    return openTrailerViewerModal({
+      title,
+      trailers,
+      setTrailerMessage,
+      setTrailerModal,
     });
-    return true;
-  };
-
-  const fetchGameTrailers = async (gameId: string): Promise<Trailer[] | null> => {
-    const response = await fetch(`/api/rawg/${gameId}`);
-    if (!response.ok) return null;
-    const detail = (await response.json()) as { trailers?: Trailer[] | null };
-    return normalizeTrailers(detail.trailers ?? null);
-  };
-
-  const updateTrailersLocally = (itemId: string, trailers: Trailer[] | null) => {
-    setCollection((prev) =>
-      prev.map((item) =>
-        item.items.id === itemId
-          ? {
-              ...item,
-              items: {
-                ...item.items,
-                trailers,
-              },
-            }
-          : item,
-      ),
-    );
-    setSelectedView((prev) => {
-      if (!prev || prev.items.id !== itemId) return prev;
-      return {
-        ...prev,
-        items: {
-          ...prev.items,
-          trailers,
-        },
-      };
-    });
-  };
-
-  const handleWatchSelectedGameTrailer = async () => {
-    if (!selectedGame) return;
-    setTrailerMessage("");
-    const existing = normalizeTrailers(selectedGame.trailers ?? null);
-    if (existing) {
-      openTrailerModal(selectedGame.title, existing);
-      return;
-    }
-    setIsTrailerLoading(true);
-    try {
-      const trailers = await fetchGameTrailers(selectedGame.id);
-      if (!trailers) {
-        setTrailerMessage("Трейлер недоступний.");
-        return;
-      }
-      setSelectedGame((prev) => (prev ? { ...prev, trailers } : prev));
-      openTrailerModal(selectedGame.title, trailers);
-    } finally {
-      setIsTrailerLoading(false);
-    }
   };
 
   const handleWatchSelectedViewTrailer = async () => {
     if (!selectedView) return;
-    setTrailerMessage("");
-    const currentTrailers =
+    await watchExistingEntryTrailer({
+      title: selectedView.items.title,
+      currentTrailers:
       normalizeTrailers(selectedViewItemDraft?.trailers ?? null) ??
-      normalizeTrailers(selectedView.items.trailers ?? null);
-    if (currentTrailers) {
-      openTrailerModal(selectedView.items.title, currentTrailers);
-      return;
-    }
-    const externalId =
-      selectedViewItemDraft?.external_id ?? selectedView.items.external_id ?? "";
-    if (!externalId) {
-      setTrailerMessage("Трейлер недоступний.");
-      return;
-    }
-    setIsTrailerLoading(true);
-    try {
-      const trailers = await fetchGameTrailers(externalId);
-      if (!trailers) {
-        setTrailerMessage("Трейлер недоступний.");
-        return;
-      }
-      setSelectedViewItemDraft((prev) => (prev ? { ...prev, trailers } : prev));
-      updateTrailersLocally(selectedView.items.id, trailers);
-      const { error } = await supabase
-        .from("items")
-        .update({ trailers })
-        .eq("id", selectedView.items.id);
-      if (error) {
-        setTrailerMessage("Не вдалося зберегти трейлер.");
-        return;
-      }
-      openTrailerModal(selectedView.items.title, trailers);
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : "Не вдалося отримати трейлер.";
-      setTrailerMessage(message);
-    } finally {
-      setIsTrailerLoading(false);
-    }
+        normalizeTrailers(selectedView.items.trailers ?? null),
+      externalId:
+        selectedViewItemDraft?.external_id ?? selectedView.items.external_id ?? "",
+      fetchTrailers: fetchGameTrailers,
+      openTrailerModal,
+      onTrailersLoaded: async (trailers) => {
+        setSelectedViewItemDraft((prev) => (prev ? { ...prev, trailers } : prev));
+        patchCollectionEntryTrailersByItemId({
+          itemId: selectedView.items.id,
+          trailers,
+          setCollection,
+          setSelectedView,
+        });
+        const { error } = await supabase
+          .from("items")
+          .update({ trailers })
+          .eq("id", selectedView.items.id);
+        if (error) {
+          throw new Error("Не вдалося зберегти трейлер.");
+        }
+      },
+      setTrailerMessage,
+      setIsTrailerLoading,
+    });
   };
 
   const handleSendRecommendation = async (
@@ -2213,55 +2275,6 @@ export default function GamesManager({
     return (data as number) ?? 0;
   };
 
-  const handleAddGame = async (
-    game: GameResult,
-    payload: GameCollectionFormPayload,
-  ) => {
-    const descriptionFromSearch = searchDescriptions[game.id] ?? "";
-    const { itemId } = await addGameToCollection({
-      supabase,
-      game: {
-        ...game,
-        description: descriptionFromSearch,
-      } satisfies GameCollectionSource,
-      payload,
-      allowUpdateExistingView: false,
-    });
-
-    if (!descriptionFromSearch) {
-      void fetch(`/api/rawg/${game.id}`)
-        .then(async (response) => {
-          if (!response.ok) return null;
-          return (await response.json()) as {
-            description?: string;
-            genres?: string;
-            genreItems?: GameNormalizedGenre[];
-          };
-        })
-        .then((detailData) => {
-          if (!detailData) return;
-          if (detailData.description || detailData.genres) {
-            void supabase
-              .from("items")
-              .update({
-                description: detailData.description ?? null,
-                genres: detailData.genres ?? game.genres ?? null,
-              })
-              .eq("id", itemId);
-          }
-          if (detailData.genreItems) {
-            void trySyncGameNormalizedGenres(supabase, itemId, detailData.genreItems);
-          }
-        });
-    }
-
-    setHasApplied(true);
-    void (async () => {
-      await loadYearBounds();
-      await fetchPage(0, appliedFilters);
-    })();
-  };
-
   const handleUpdateView = async (
     viewId: string,
     itemId: string,
@@ -2275,59 +2288,19 @@ export default function GamesManager({
       itemDraft,
       payload,
     });
-    setCollection((prev) =>
-      prev.map((item) => {
-        if (item.id !== viewId) return item;
-        return {
-          ...item,
-          viewed_at: payload.viewedAt,
-          rating: payload.rating,
-          comment: payload.comment,
-          recommend_similar: payload.recommendSimilar,
-          is_viewed: payload.isViewed,
-          view_percent: payload.viewPercent,
-          platforms: normalizedPlatforms,
-          availability: payload.availability,
-          shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
-          shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
-          shishka_fit_profile_analyzed_at:
-            payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
-          shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
-          items: itemDraft
-            ? {
-                ...item.items,
-                poster_url: itemDraft.poster_url,
-                year: itemDraft.year,
-                imdb_rating: itemDraft.imdb_rating,
-                genres: itemDraft.genres,
-                description: itemDraft.description,
-                external_id: itemDraft.external_id,
-                trailers: itemDraft.trailers,
-              }
-            : item.items,
-        };
-      }),
-    );
-    setSelectedView((prev) => {
-      if (!prev || prev.id !== viewId) return prev;
-      return {
-        ...prev,
-        viewed_at: payload.viewedAt,
-        rating: payload.rating,
-        comment: payload.comment,
-        recommend_similar: payload.recommendSimilar,
-        is_viewed: payload.isViewed,
-        view_percent: payload.viewPercent,
+    applyExistingCollectionEntryViewSave({
+      viewId,
+      payload,
+      setCollection,
+      setSelectedView,
+      extraViewPatch: {
         platforms: normalizedPlatforms,
-        availability: payload.availability,
-        shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
-        shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
-        shishka_fit_profile_analyzed_at:
-          payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
-        shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
+      },
+      applyPatch: (item) => ({
+        ...item,
         items: itemDraft
           ? {
-              ...prev.items,
+              ...item.items,
               poster_url: itemDraft.poster_url,
               year: itemDraft.year,
               imdb_rating: itemDraft.imdb_rating,
@@ -2336,8 +2309,8 @@ export default function GamesManager({
               external_id: itemDraft.external_id,
               trailers: itemDraft.trailers,
             }
-          : prev.items,
-      };
+          : item.items,
+      }),
     });
     setSelectedViewItemDraft(null);
   };
@@ -2346,41 +2319,13 @@ export default function GamesManager({
     viewId: string,
     assessment: ShishkaFitAssessment,
   ) => {
-    const updatePayload = {
-      shishka_fit_label: assessment.label,
-      shishka_fit_reason: assessment.reason,
-      shishka_fit_profile_analyzed_at: assessment.profileAnalyzedAt,
-      shishka_fit_scope_value: assessment.scopeValue,
-    };
-
-    const { error } = await supabase
-      .from("user_views")
-      .update(updatePayload)
-      .eq("id", viewId);
-
-    if (error) {
-      throw new Error("Не вдалося зберегти оцінку.");
-    }
-
-    setCollection((prev) =>
-      prev.map((item) =>
-        item.id === viewId
-          ? {
-              ...item,
-              ...updatePayload,
-            }
-          : item,
-      ),
-    );
-
-    setSelectedView((prev) =>
-      prev && prev.id === viewId
-        ? {
-            ...prev,
-            ...updatePayload,
-          }
-        : prev,
-    );
+    await persistCollectionEntryAssessment({
+      supabase,
+      viewId,
+      assessment,
+      setCollection,
+      setSelectedView,
+    });
   };
 
   const applyRefreshedGameMetadata = async (game: GameResult) => {
@@ -2457,19 +2402,16 @@ export default function GamesManager({
   };
 
   const handleDeleteView = async (viewId: string) => {
-    const { error } = await supabase.from("user_views").delete().eq("id", viewId);
-
-    if (error) {
-      throw new Error("Не вдалося видалити запис.");
-    }
-
+    await deleteCollectionView({ supabase, viewId });
     setHasApplied(true);
     void fetchPage(0, appliedFilters);
   };
 
   const handleAddToOwnCollection = async (itemId: string) => {
-    await addExistingItemToCollection({ supabase, itemId });
-    setMessage("Додано до твоєї колекції.");
+    openCreateOwnEntry({
+      mediaKind: "game",
+      itemId,
+    });
   };
 
   const handleGameSearch = useCallback(
@@ -2487,7 +2429,7 @@ export default function GamesManager({
       const results = data.results ?? [];
       return results
         .map((item) => {
-          const existingView = existingViewsByExternalId.get(item.id);
+          const existingView = gameViewsByExternalId.get(item.id);
           return {
             ...item,
             inCollection: Boolean(existingView),
@@ -2502,7 +2444,7 @@ export default function GamesManager({
           return safeRightYear - safeLeftYear;
         });
     },
-    [existingViewsByExternalId],
+    [gameViewsByExternalId],
   );
 
   const handleRecommend = async (platform: string, wishes: string) => {
@@ -2553,10 +2495,12 @@ export default function GamesManager({
           continue;
         }
 
-        setAiRecommendationComment(recommendation.why);
-        setAiRecommendationScopeValue(platform);
-        setAiRecommendationFitAssessment(null);
-        setSelectedGame(recommendedGame);
+        openSelectedGameDraft(recommendedGame, {
+          recommendationComment: recommendation.why,
+          recommendationScopeValue: platform,
+          recommendationFitAssessment: null,
+          closeSearch: false,
+        });
         setRecommendationScopeState(null);
         showSnackbar("Рекомендацію відкрито");
         return;
@@ -3136,7 +3080,7 @@ export default function GamesManager({
               key={item.id}
               type="button"
               className={`${styles.resultItem} ${styles.resultButton} ${styles.collectionItem} ${styles.gameCollectionItem}`}
-              onClick={() => setSelectedView(item)}
+              onClick={() => openSelectedView(item)}
             >
               <div className={styles.resultHeader}>
                 <div className={styles.titleRow}>
@@ -3247,7 +3191,7 @@ export default function GamesManager({
               key={item.id}
               type="button"
               className={`${styles.resultButton} ${styles.filmCardViewItem}`}
-              onClick={() => setSelectedView(item)}
+              onClick={() => openSelectedView(item)}
             >
               <div className={styles.filmCardPosterWrapper}>
                 {item.items.poster_url ? (
@@ -3855,21 +3799,7 @@ export default function GamesManager({
           }
           initialQuery={appliedFilters.query}
           onSelect={(game) => {
-            if (game.existingViewId) {
-              const existingView =
-                collection.find((item) => item.id === game.existingViewId) ??
-                existingViewsByExternalId.get(game.id);
-              if (existingView) {
-                setSelectedView(existingView);
-                setIsAddOpen(false);
-                return;
-              }
-            }
-            setAiRecommendationComment("");
-            setAiRecommendationScopeValue(null);
-            setAiRecommendationFitAssessment(null);
-            setSelectedGame(game);
-            setIsAddOpen(false);
+            resolveAndOpenGameDraft(game);
           }}
           onClose={() => setIsAddOpen(false)}
           renderItem={(game) => <GameSearchItem game={game} />}
@@ -3895,87 +3825,19 @@ export default function GamesManager({
         />
       ) : null}
 
-      {selectedGame ? (
-        <CatalogModal
-          title={selectedGame.title}
-          posterUrl={selectedGame.poster}
-          size="wide"
-          fitTargetText="ця гра"
-          showRecommendSimilar={false}
-          platformOptions={visiblePlatforms}
-          availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
-          initialValues={
-            {
-              comment: aiRecommendationComment || null,
-              platforms: defaultGamePlatform ? [defaultGamePlatform] : [],
-              availability: showAvailability ? defaultGameAvailability : null,
-              isViewed: defaultGameIsViewed ?? undefined,
-              shishkaFitAssessment: aiRecommendationFitAssessment,
-            }
-          }
-          onClose={() => {
-            setSelectedGame(null);
-            setAiRecommendationComment("");
-            setAiRecommendationScopeValue(null);
-            setAiRecommendationFitAssessment(null);
-            setTrailerMessage("");
-          }}
-          onAdd={(payload) => handleAddGame(selectedGame, payload)}
-          previewAction={{
-            label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
-            onClick: handleWatchSelectedGameTrailer,
-            disabled: isTrailerLoading,
-            icon: playIcon,
-          }}
-        >
-          {({ fitBadge }) => (
-            <div className={styles.resultContent}>
-              <div className={styles.titleRow}>
-                <span className={styles.resultRating}>
-                  {getExternalRatingLabel(selectedGame.ratingSource, selectedGame.rating)}:{" "}
-                  {selectedGame.rating ?? "—"}
-                </span>
-                {fitBadge}
-                <span className={styles.resultRating}>Мій: —</span>
-              </div>
-              {selectedGame.released ? (
-                <p className={styles.resultMeta}>
-                  Рік: {selectedGame.released.slice(0, 4)}
-                </p>
-              ) : null}
-              {selectedGame.genreItems?.length || selectedGame.genres ? (
-                <p className={styles.resultMeta}>
-                  Жанри: {renderGenreLinks(selectedGame.genreItems) ?? selectedGame.genres}
-                </p>
-              ) : null}
-              {searchDescriptions[selectedGame.id] ? (
-                <ModalDescription text={searchDescriptions[selectedGame.id]} />
-              ) : null}
-              {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
-            </div>
-          )}
-        </CatalogModal>
-      ) : null}
-
       {selectedView ? (
-        <CatalogModal
+        <ExistingCollectionEntryModal
           key={selectedView.id}
           title={selectedView.items.title}
           posterUrl={
             (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined
           }
-          size="wide"
           fitTargetText="ця гра"
-          showRecommendSimilar={false}
           platformOptions={visiblePlatforms}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
-          onClose={() => {
-            setSelectedView(null);
-            setTrailerMessage("");
-          }}
+          onClose={closeSelectedView}
           readOnly={readOnly}
-          submitLabel={readOnly ? "Додати собі у колекцію" : "Зберегти"}
-          onReadOnlyPrimaryAction={() => handleAddToOwnCollection(selectedView.items.id)}
+          onAddToOwnCollection={() => handleAddToOwnCollection(selectedView.items.id)}
           previewAction={{
             label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
             onClick: handleWatchSelectedViewTrailer,
@@ -4006,40 +3868,32 @@ export default function GamesManager({
             availability: selectedView.availability,
             shishkaFitAssessment: getStoredShishkaFitAssessment(selectedView),
           }}
-          onRefresh={readOnly ? undefined : handleRefreshSelectedGameMetadata}
-          onEvaluate={
-            readOnly
-              ? undefined
-              : (payload) =>
-                  evaluateGameWithProfile(
-                    {
-                      title: selectedView.items.title,
-                      year: selectedViewItemDraft?.year ?? selectedView.items.year,
-                      genres: selectedViewItemDraft?.genres ?? selectedView.items.genres,
-                      description:
-                        selectedViewItemDraft?.description ?? selectedView.items.description,
-                      platforms: payload.platforms,
-                    },
-                    payload.shishkaFitAssessment,
-                  )
+          onRefresh={handleRefreshSelectedGameMetadata}
+          onEvaluate={(payload) =>
+            evaluateGameWithProfile(
+              {
+                title: selectedView.items.title,
+                year: selectedViewItemDraft?.year ?? selectedView.items.year,
+                genres: selectedViewItemDraft?.genres ?? selectedView.items.genres,
+                description:
+                  selectedViewItemDraft?.description ?? selectedView.items.description,
+                platforms: payload.platforms,
+              },
+              payload.shishkaFitAssessment,
+            )
           }
-          onPersistEvaluatedAssessment={
-            readOnly
-              ? undefined
-              : async (assessment) => persistViewAssessment(selectedView.id, assessment)
+          onPersistEvaluatedAssessment={async (assessment) =>
+            persistViewAssessment(selectedView.id, assessment)
           }
-          onAdd={
-            readOnly
-              ? undefined
-              : (payload) =>
-                  handleUpdateView(
-                    selectedView.id,
-                    selectedView.items.id,
-                    selectedViewItemDraft,
-                    payload,
-                  )
+          onAdd={(payload) =>
+            handleUpdateView(
+              selectedView.id,
+              selectedView.items.id,
+              selectedViewItemDraft,
+              payload,
+            )
           }
-          onDelete={readOnly ? undefined : () => handleDeleteView(selectedView.id)}
+          onDelete={() => handleDeleteView(selectedView.id)}
         >
           {({ fitBadge }) => (
             <div className={styles.resultContent}>
@@ -4087,106 +3941,17 @@ export default function GamesManager({
               {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
             </div>
           )}
-        </CatalogModal>
+        </ExistingCollectionEntryModal>
       ) : null}
 
       {trailerModal ? (
-        <div
-          className={styles.trailerOverlay}
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setTrailerModal(null)}
-        >
-          <div
-            className={styles.trailerModal}
-            onClick={(event) => event.stopPropagation()}
-          >
-            {trailerModal.trailers[trailerModal.index] ? (
-              <>
-                <div className={styles.trailerHeader}>
-                  <h3 className={styles.trailerTitle}>
-                    {trailerModal.trailers[trailerModal.index]?.name?.trim()
-                      ? trailerModal.trailers[trailerModal.index]?.name
-                      : trailerModal.baseTitle}
-                  </h3>
-                  <CloseIconButton
-                    className={styles.trailerCloseButton}
-                    onClick={() => setTrailerModal(null)}
-                  />
-                </div>
-                <div className={styles.trailerBody}>
-                  {trailerModal.trailers[trailerModal.index]?.url
-                    .toLowerCase()
-                    .includes(".mp4") ? (
-                    <video
-                      className={styles.trailerFrame}
-                      src={trailerModal.trailers[trailerModal.index]?.url ?? ""}
-                      controls
-                      autoPlay
-                    />
-                  ) : (
-                    <iframe
-                      className={styles.trailerFrame}
-                      src={`${toEmbedUrl(
-                        trailerModal.trailers[trailerModal.index]?.url ?? "",
-                      )}?autoplay=1`}
-                      title={
-                        trailerModal.trailers[trailerModal.index]?.name?.trim()
-                          ? trailerModal.trailers[trailerModal.index]?.name
-                          : trailerModal.baseTitle
-                      }
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                    />
-                  )}
-                  {trailerModal.trailers.length > 1 ? (
-                    <>
-                      <button
-                        type="button"
-                        className={`${styles.trailerNavButton} ${styles.trailerNavLeft}`}
-                        onClick={() =>
-                          setTrailerModal((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  index:
-                                    (prev.index - 1 + prev.trailers.length) %
-                                    prev.trailers.length,
-                                }
-                              : prev,
-                          )
-                        }
-                        aria-label="Попередній трейлер"
-                      >
-                        ←
-                      </button>
-                      <button
-                        type="button"
-                        className={`${styles.trailerNavButton} ${styles.trailerNavRight}`}
-                        onClick={() =>
-                          setTrailerModal((prev) =>
-                            prev
-                              ? {
-                                  ...prev,
-                                  index: (prev.index + 1) % prev.trailers.length,
-                                }
-                              : prev,
-                          )
-                        }
-                        aria-label="Наступний трейлер"
-                      >
-                        →
-                      </button>
-                      <div className={styles.trailerCounter}>
-                        {trailerModal.index + 1} / {trailerModal.trailers.length}
-                      </div>
-                    </>
-                  ) : null}
-                </div>
-              </>
-            ) : null}
-          </div>
-        </div>
+        <TrailerViewerModal
+          key={`${trailerModal.baseTitle}:${trailerModal.index}:${trailerModal.trailers.length}`}
+          trailers={trailerModal.trailers}
+          initialIndex={trailerModal.index}
+          baseTitle={trailerModal.baseTitle}
+          onClose={() => setTrailerModal(null)}
+        />
       ) : null}
 
       {recommendItem ? (

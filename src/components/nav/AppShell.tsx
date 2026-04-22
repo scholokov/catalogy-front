@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase/client";
 import AuthMobileHeaderLogo from "@/components/nav/AuthMobileHeaderLogo";
 import LogoutButton from "@/components/nav/LogoutButton";
 import HomeUnauthPage from "@/app/HomeUnauthPage";
+import { CollectionEntryLauncherProvider } from "@/lib/collection/entryLauncher";
 import { loadFriendsBadgeCount as loadFriendsBadgeCountValue } from "@/lib/friends/notifications";
 
 import { syncDisplayPreferences } from "@/lib/settings/syncSettings";
@@ -168,8 +169,9 @@ export default function AppShell({ children }: AppShellProps) {
   }
 
   return (
-    <div className="appShell">
-      <nav className="appSidebar">
+    <CollectionEntryLauncherProvider>
+      <div className="appShell">
+        <nav className="appSidebar">
         <div className="navHeader">
           <Link className="navLogo" href="/" aria-label="Catalogy">
             <Image
@@ -324,18 +326,19 @@ export default function AppShell({ children }: AppShellProps) {
           </Link>
           <LogoutButton showLabel={isNavOpen} />
         </div>
-      </nav>
-      <main className="appMain">
-        <div className="appContainer">{children}</div>
-      </main>
-      <button
-        type="button"
-        className={`scrollTopButton ${showScrollTop ? "scrollTopVisible" : ""}`}
-        onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-        aria-label="Прокрутити вгору"
-      >
-        ↑
-      </button>
-    </div>
+        </nav>
+        <main className="appMain">
+          <div className="appContainer">{children}</div>
+        </main>
+        <button
+          type="button"
+          className={`scrollTopButton ${showScrollTop ? "scrollTopVisible" : ""}`}
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Прокрутити вгору"
+        >
+          ↑
+        </button>
+      </div>
+    </CollectionEntryLauncherProvider>
   );
 }

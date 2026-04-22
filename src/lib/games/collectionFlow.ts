@@ -1,4 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import {
+  updateCollectionItemRecordWithRetry,
+  updateCollectionViewRecord,
+} from "@/lib/collection/viewUpdateMutation";
 import type { GameNormalizedGenre } from "@/lib/games/normalizedMetadata";
 import { trySyncGameNormalizedGenres } from "@/lib/games/normalizedMetadata";
 import { normalizeGamePlatforms } from "@/lib/games/platforms";
@@ -236,28 +240,15 @@ export const updateGameView = async ({
   payload: GameCollectionFormPayload;
 }) => {
   const normalizedPlatforms = normalizeGamePlatforms(payload.platforms);
-  const { error } = await supabase
-    .from("user_views")
-    .update({
-      rating: payload.rating,
-      comment: payload.comment,
-      viewed_at: payload.viewedAt,
-      is_viewed: payload.isViewed,
-      view_percent: payload.viewPercent,
-      recommend_similar: payload.recommendSimilar,
+  await updateCollectionViewRecord({
+    supabase,
+    viewId,
+    payload,
+    extra: {
       platforms: normalizedPlatforms,
-      availability: payload.availability,
-      shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
-      shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
-      shishka_fit_profile_analyzed_at:
-        payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
-      shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
-    })
-    .eq("id", viewId);
-
-  if (error) {
-    throw new Error("Не вдалося оновити запис.");
-  }
+    },
+    errorMessage: "Не вдалося оновити запис.",
+  });
 
   if (!itemDraft) {
     return { normalizedPlatforms };
@@ -272,31 +263,20 @@ export const updateGameView = async ({
     external_id: itemDraft.external_id,
     trailers: itemDraft.trailers,
   };
-  const { error: updateItemError } = await supabase
-    .from("items")
-    .update(itemUpdatePayload)
-    .eq("id", itemId);
-
-  if (updateItemError) {
-    if (updateItemError.code === "23505") {
-      const { error: retryError } = await supabase
-        .from("items")
-        .update({
-          poster_url: itemDraft.poster_url,
-          year: itemDraft.year,
-          imdb_rating: itemDraft.imdb_rating,
-          description: itemDraft.description,
-          genres: itemDraft.genres,
-          trailers: itemDraft.trailers,
-        })
-        .eq("id", itemId);
-      if (retryError) {
-        throw new Error("Не вдалося оновити дані гри.");
-      }
-    } else {
-      throw new Error("Не вдалося оновити дані гри.");
-    }
-  }
+  await updateCollectionItemRecordWithRetry({
+    supabase,
+    itemId,
+    primaryPayload: itemUpdatePayload,
+    retryPayload: {
+      poster_url: itemDraft.poster_url,
+      year: itemDraft.year,
+      imdb_rating: itemDraft.imdb_rating,
+      description: itemDraft.description,
+      genres: itemDraft.genres,
+      trailers: itemDraft.trailers,
+    },
+    errorMessage: "Не вдалося оновити дані гри.",
+  });
 
   await trySyncGameNormalizedGenres(supabase, itemId, itemDraft.normalizedGenres ?? null);
 

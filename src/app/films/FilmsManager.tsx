@@ -11,8 +11,9 @@ import {
 } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Range, getTrackBackground } from "react-range";
-import CatalogModal from "@/components/catalog/CatalogModal";
+import ExistingCollectionEntryModal from "@/components/catalog/ExistingCollectionEntryModal";
 import CatalogSearchModal, {
   type CatalogSearchRequest,
 } from "@/components/catalog/CatalogSearchModal";
@@ -24,16 +25,39 @@ import RecommendationRequestModal, {
   type RecommendationRequestOption,
 } from "@/components/recommendations/RecommendationRequestModal";
 import CloseIconButton from "@/components/ui/CloseIconButton";
+import {
+  applyExistingCollectionEntryViewSave,
+  deleteCollectionView,
+  formatCollectionEntryPersonalRating as formatPersonalRating,
+  getStoredCollectionEntryFitAssessment as getStoredShishkaFitAssessment,
+  patchCollectionEntryTrailersByItemId,
+  persistCollectionEntryAssessment,
+} from "@/lib/collection/existingEntryState";
+import {
+  readCollectionEntrySearchParams,
+  replaceSelectedCollectionAddItemSearchParam,
+  replaceSelectedCollectionViewSearchParam,
+  useRequestedCollectionViewSync,
+} from "@/lib/collection/entryRouting";
+import {
+  COLLECTION_ENTRY_SAVED_EVENT,
+  type CollectionEntrySavedEventDetail,
+} from "@/lib/collection/events";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
+import {
+  fetchFilmTrailers,
+  openTrailerViewerModal,
+  type TrailerModalState,
+  watchExistingEntryTrailer,
+} from "@/lib/collection/trailers";
+import { useCollectionEntryLauncher } from "@/lib/collection/entryLauncher";
 import { supabase } from "@/lib/supabase/client";
-import { addExistingItemToCollection } from "@/lib/collection/viewMutations";
 import {
   readDisplayPreferences,
   DISPLAY_PREFERENCES_STORAGE_KEY,
 } from "@/lib/settings/displayPreferences";
 import { getDisplayName } from "@/lib/users/displayName";
 import {
-  addFilmToCollection,
   type FilmCollectionFormPayload,
   summarizeFilmPeople,
   updateFilmView as updateFilmViewMutation,
@@ -45,11 +69,6 @@ import type { FilmLlmExportRow } from "@/app/statistics/filmLlmCsv";
 import { deriveScopeMaturityStatus } from "@/app/statistics/lib/scopeReadiness";
 import type { FilmProfileSystemLayer, FilmProfileUserLayer } from "@/lib/profile-analysis/types";
 import {
-  fetchLatestFilmFitProfileAnalysis,
-  requestFilmFitEvaluation,
-} from "@/lib/shishka/fitEvaluationClient";
-import {
-  mergeShishkaAssessmentIntoComment,
   type ShishkaFitAssessment,
 } from "@/lib/shishka/fitAssessment";
 import styles from "@/components/catalog/CatalogSearch.module.css";
@@ -68,6 +87,7 @@ type Trailer = {
 
 type FilmResult = {
   id: string;
+  itemId?: string;
   title: string;
   englishTitle?: string;
   originalTitle?: string;
@@ -131,31 +151,8 @@ type AiRecommendation = {
   raw: string;
 };
 
-const getStoredShishkaFitAssessment = (
-  item: Pick<
-    FilmCollectionItem,
-    | "shishka_fit_label"
-    | "shishka_fit_reason"
-    | "shishka_fit_profile_analyzed_at"
-    | "shishka_fit_scope_value"
-  >,
-): ShishkaFitAssessment | null => {
-  if (
-    !item.shishka_fit_label ||
-    !item.shishka_fit_reason?.trim() ||
-    !item.shishka_fit_profile_analyzed_at ||
-    !item.shishka_fit_scope_value
-  ) {
-    return null;
-  }
-
-  return {
-    label: item.shishka_fit_label,
-    reason: item.shishka_fit_reason.trim(),
-    profileAnalyzedAt: item.shishka_fit_profile_analyzed_at,
-    scopeValue: item.shishka_fit_scope_value,
-  };
-};
+const FILM_VIEW_SELECT =
+  "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, shishka_fit_label, shishka_fit_reason, shishka_fit_profile_analyzed_at, shishka_fit_scope_value, items:items!inner (id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, film_media_type, imdb_rating, trailers, year, type)";
 
 type FilmItemDraft = {
   title: string;
@@ -307,11 +304,6 @@ const reconcileRangeWithNewBounds = (
   return clampRange([from, to], nextBounds);
 };
 
-const formatPersonalRating = (value: number | null) => {
-  if (value === null) return "—";
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
-};
-
 const normalizeSearchValue = (value?: string | null) =>
   value
     ?.toLocaleLowerCase("uk-UA")
@@ -446,6 +438,12 @@ export default function FilmsManager({
   readOnly = false,
 }: FilmsManagerProps) {
   const { showSnackbar } = useSnackbar();
+  const { openCreateOwnEntry, openDraftEntry } = useCollectionEntryLauncher();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const { requestedViewId, requestedItemId, requestedAddItemId } =
+    readCollectionEntrySearchParams(searchParams);
   const [lazyDebug, setLazyDebug] = useState<string[]>([]);
   const [lazyDebugEnabled, setLazyDebugEnabled] = useState(false);
   const logLazy = useCallback(
@@ -475,12 +473,6 @@ export default function FilmsManager({
   ]);
   const [message, setMessage] = useState("");
   const [, setRecommendationMessage] = useState("");
-  const [aiRecommendationComment, setAiRecommendationComment] = useState("");
-  const [aiRecommendationScopeValue, setAiRecommendationScopeValue] = useState<string | null>(
-    null,
-  );
-  const [aiRecommendationFitAssessment, setAiRecommendationFitAssessment] =
-    useState<ShishkaFitAssessment | null>(null);
   const [recommendationPromptPreview, setRecommendationPromptPreview] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
@@ -504,7 +496,6 @@ export default function FilmsManager({
   });
   const [viewMode, setViewMode] = useState<FilmsViewMode>("cards");
   const [isDirectorsHydrating, setIsDirectorsHydrating] = useState(false);
-  const [selectedFilm, setSelectedFilm] = useState<FilmResult | null>(null);
   const [selectedView, setSelectedView] = useState<FilmCollectionItem | null>(
     null,
   );
@@ -518,11 +509,7 @@ export default function FilmsManager({
     itemId: string;
     people: FilmNormalizedPerson[];
   } | null>(null);
-  const [trailerModal, setTrailerModal] = useState<{
-    trailers: Trailer[];
-    index: number;
-    baseTitle: string;
-  } | null>(null);
+  const [trailerModal, setTrailerModal] = useState<TrailerModalState<Trailer>>(null);
   const [isTrailerLoading, setIsTrailerLoading] = useState(false);
   const [isRefreshPickerOpen, setIsRefreshPickerOpen] = useState(false);
   const [refreshSearchQuery, setRefreshSearchQuery] = useState("");
@@ -557,6 +544,7 @@ export default function FilmsManager({
   const viewModeStorageKeyRef = useRef("films:view-mode:v2:guest");
   const isViewModeStorageReadyRef = useRef(false);
   const directorsHydrationRunRef = useRef(0);
+  const pendingViewParamSyncRef = useRef<string | null | false>(false);
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
     title: string;
@@ -579,16 +567,10 @@ export default function FilmsManager({
   const [showAvailability, setShowAvailability] = useState(true);
   const [isRecommendationPromptDebugEnabled, setIsRecommendationPromptDebugEnabled] =
     useState(false);
-  const [defaultFilmAvailability, setDefaultFilmAvailability] = useState<string | null>(
-    null,
-  );
-  const [defaultFilmIsViewed, setDefaultFilmIsViewed] = useState<boolean | null>(null);
   useEffect(() => {
     const applyPreferences = () => {
       const prefs = readDisplayPreferences();
       setShowAvailability(prefs.showFilmAvailability);
-      setDefaultFilmAvailability(prefs.defaultFilmAvailability);
-      setDefaultFilmIsViewed(prefs.defaultFilmIsViewed);
     };
     applyPreferences();
     return undefined;
@@ -614,8 +596,6 @@ export default function FilmsManager({
       if (event.key === DISPLAY_PREFERENCES_STORAGE_KEY) {
         const prefs = readDisplayPreferences();
         setShowAvailability(prefs.showFilmAvailability);
-        setDefaultFilmAvailability(prefs.defaultFilmAvailability);
-        setDefaultFilmIsViewed(prefs.defaultFilmIsViewed);
       }
       if (event.key === viewModeStorageKeyRef.current) {
         const rawValue = event.newValue;
@@ -662,10 +642,10 @@ export default function FilmsManager({
   }, [selectedView?.id, selectedViewItemDraft?.imageUrls]);
 
   useEffect(() => {
-    if (selectedFilm || selectedView) {
+    if (selectedView) {
       setTrailerMessage("");
     }
-  }, [selectedFilm, selectedView]);
+  }, [selectedView]);
 
   useEffect(() => {
     const selectedItemId = selectedView?.items.id;
@@ -694,17 +674,304 @@ export default function FilmsManager({
     };
   }, [selectedView?.items.id]);
 
+  const replaceSelectedItemSearchParam = useCallback(
+    (viewId: string | null) => {
+      replaceSelectedCollectionViewSearchParam({
+        pathname,
+        router,
+        searchParams,
+        viewId,
+      });
+    },
+    [pathname, router, searchParams],
+  );
+
+  const replaceAddItemSearchParam = useCallback(
+    (itemId: string | null) => {
+      replaceSelectedCollectionAddItemSearchParam({
+        pathname,
+        router,
+        searchParams,
+        itemId,
+      });
+    },
+    [pathname, router, searchParams],
+  );
+
+  const clearSelectedView = useCallback(() => {
+    setSelectedView(null);
+    setSelectedViewPreloadedPeople(null);
+    setTrailerMessage("");
+  }, []);
+
+  const loadSelectedViewById = useCallback(
+    async (viewId: string) => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        return null;
+      }
+
+      if (readOnly && ownerUserId && friendAccessState !== "allowed") {
+        return null;
+      }
+
+      const effectiveOwnerId = ownerUserId ?? user.id;
+      const { data } = await supabase
+        .from("user_views")
+        .select(FILM_VIEW_SELECT)
+        .eq("id", viewId)
+        .eq("user_id", effectiveOwnerId)
+        .eq("items.type", "film")
+        .maybeSingle();
+
+      return (data as FilmCollectionItem | null) ?? null;
+    },
+    [friendAccessState, ownerUserId, readOnly],
+  );
+
+  const loadSelectedViewByItemId = useCallback(
+    async (itemId: string) => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        return null;
+      }
+
+      if (readOnly && ownerUserId && friendAccessState !== "allowed") {
+        return null;
+      }
+
+      const effectiveOwnerId = ownerUserId ?? user.id;
+      const { data } = await supabase
+        .from("user_views")
+        .select(FILM_VIEW_SELECT)
+        .eq("item_id", itemId)
+        .eq("user_id", effectiveOwnerId)
+        .eq("items.type", "film")
+        .order("updated_at", { ascending: false })
+        .limit(1);
+
+      return ((data as FilmCollectionItem[] | null) ?? [])[0] ?? null;
+    },
+    [friendAccessState, ownerUserId, readOnly],
+  );
+
+  const loadSelectedFilmByItemId = useCallback(async (itemId: string) => {
+    const { data } = await supabase
+      .from("items")
+      .select(
+        "id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, film_media_type, imdb_rating, trailers, year",
+      )
+      .eq("id", itemId)
+      .eq("type", "film")
+      .maybeSingle();
+
+    if (!data) {
+      return null;
+    }
+
+    return {
+      id: data.external_id?.trim() || data.id,
+      itemId: data.id,
+      title: data.title,
+      englishTitle: data.title_en ?? undefined,
+      originalTitle: data.title_original ?? undefined,
+      year: data.year ? String(data.year) : "",
+      poster: data.poster_url ?? "",
+      plot: data.description ?? "",
+      genres: data.genres ?? "",
+      director: data.director ?? "",
+      actors: data.actors ?? "",
+      imdbRating: data.imdb_rating ?? "",
+      trailers: Array.isArray(data.trailers) ? (data.trailers as Trailer[]) : undefined,
+      mediaType: data.film_media_type ?? "movie",
+      source: "tmdb" as const,
+    } satisfies FilmResult;
+  }, []);
+
   const openSelectedView = useCallback(
-    async (item: FilmCollectionItem) => {
+    async (
+      item: FilmCollectionItem,
+      options: {
+        syncUrl?: boolean;
+      } = {},
+    ) => {
       const people = await loadStoredPeopleForItem(supabase, item.items.id);
       setSelectedViewPreloadedPeople({
         itemId: item.items.id,
         people,
       });
       setSelectedView(item);
+      if (options.syncUrl ?? true) {
+        pendingViewParamSyncRef.current = item.id;
+        replaceSelectedItemSearchParam(item.id);
+      }
     },
-    [],
+    [replaceSelectedItemSearchParam],
   );
+
+  const closeSelectedView = useCallback(() => {
+    pendingViewParamSyncRef.current = null;
+    clearSelectedView();
+    replaceSelectedItemSearchParam(null);
+  }, [clearSelectedView, replaceSelectedItemSearchParam]);
+
+  useRequestedCollectionViewSync({
+    pendingViewParamSyncRef,
+    requestedViewId,
+    requestedItemId,
+    selectedViewId: selectedView?.id ?? null,
+    selectedItemId: selectedView?.items.id ?? null,
+    collection,
+    getViewId: (item) => item.id,
+    getItemId: (item) => item.items.id,
+    clearSelectedView,
+    clearSelectedViewRoute: closeSelectedView,
+    openSelectedView,
+    loadSelectedViewById,
+    loadSelectedViewByItemId,
+  });
+
+  const openSelectedFilmDraft = useCallback(
+    (
+      film: FilmResult,
+      options?: {
+        recommendationComment?: string;
+        recommendationScopeValue?: string | null;
+        recommendationFitAssessment?: ShishkaFitAssessment | null;
+        closeSearch?: boolean;
+      },
+    ) => {
+      openDraftEntry({
+        mediaKind: "film",
+        draft: {
+          id: film.id,
+          itemId: film.itemId,
+          title: film.title,
+          englishTitle: film.englishTitle,
+          originalTitle: film.originalTitle,
+          year: film.year,
+          poster: film.poster,
+          imageUrls: film.imageUrls,
+          plot: film.plot,
+          genres: film.genres,
+          genreItems: film.genreItems,
+          director: film.director,
+          actors: film.actors,
+          people: film.people,
+          imdbRating: film.imdbRating,
+          trailers: film.trailers,
+          mediaType: film.mediaType,
+        },
+        recommendationComment: options?.recommendationComment ?? "",
+        recommendationScopeValue: options?.recommendationScopeValue ?? null,
+        recommendationFitAssessment: options?.recommendationFitAssessment ?? null,
+      });
+      if (options?.closeSearch ?? true) {
+        setIsAddOpen(false);
+      }
+    },
+    [openDraftEntry],
+  );
+
+  const filmViewsByExternalKey = useMemo(() => {
+    const map = new Map<string, FilmCollectionItem>();
+    collection.forEach((item) => {
+      const key = getFilmExternalKey(item.items.external_id, item.items.film_media_type);
+      if (key) {
+        map.set(key, item);
+      }
+    });
+    return map;
+  }, [collection]);
+
+  const resolveAndOpenFilmDraft = useCallback(
+    async (film: FilmResult) => {
+      if (film.existingViewId) {
+        const filmExternalKey = getFilmExternalKey(film.id, film.mediaType);
+        const existingView =
+          collection.find((item) => item.id === film.existingViewId) ??
+          collection.find((item) => {
+            const itemExternalKey = getFilmExternalKey(
+              item.items.external_id,
+              item.items.film_media_type,
+            );
+            return itemExternalKey !== null && itemExternalKey === filmExternalKey;
+          });
+        if (existingView) {
+          await openSelectedView(existingView);
+          setIsAddOpen(false);
+          return true;
+        }
+      }
+
+      try {
+        const detailResponse = await fetch(
+          `/api/tmdb/${film.id}?mediaType=${film.mediaType ?? "movie"}`,
+        );
+        if (detailResponse.ok) {
+          const detail = (await detailResponse.json()) as FilmResult;
+          openSelectedFilmDraft(detail);
+          return true;
+        }
+      } catch {
+        // Fall back to the basic search result when detail fetch fails.
+      }
+
+      openSelectedFilmDraft(film);
+      return true;
+    },
+    [collection, openSelectedFilmDraft, openSelectedView],
+  );
+
+  useEffect(() => {
+    if (readOnly || !requestedAddItemId) {
+      return;
+    }
+
+    if (selectedView?.items.id === requestedAddItemId) {
+      return;
+    }
+
+    const existingView = collection.find((item) => item.items.id === requestedAddItemId);
+    if (existingView) {
+      void openSelectedView(existingView);
+      return;
+    }
+
+    let isCancelled = false;
+
+    void (async () => {
+      const film = await loadSelectedFilmByItemId(requestedAddItemId);
+      if (isCancelled) {
+        return;
+      }
+      if (!film) {
+        replaceAddItemSearchParam(null);
+        return;
+      }
+      openSelectedFilmDraft(film);
+      replaceAddItemSearchParam(null);
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    collection,
+    loadSelectedFilmByItemId,
+    openSelectedFilmDraft,
+    openSelectedView,
+    readOnly,
+    replaceAddItemSearchParam,
+    requestedAddItemId,
+    selectedView?.items.id,
+  ]);
 
   const loadRecommendations = useCallback(
     async (itemIds: string[], shouldReset: boolean) => {
@@ -918,9 +1185,7 @@ export default function FilmsManager({
 
     let query = supabase
       .from("user_views")
-      .select(
-        "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, shishka_fit_label, shishka_fit_reason, shishka_fit_profile_analyzed_at, shishka_fit_scope_value, items:items!inner (id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, film_media_type, imdb_rating, trailers, year, type)",
-      )
+      .select(FILM_VIEW_SELECT)
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "film");
 
@@ -1224,6 +1489,26 @@ export default function FilmsManager({
   }, [appliedFilters, fetchPage, friendAccessState, hasApplied, ownerUserId, readOnly]);
 
   useEffect(() => {
+    if (readOnly || ownerUserId || !hasApplied) {
+      return;
+    }
+
+    const handleCollectionEntrySaved = (event: Event) => {
+      const detail = (event as CustomEvent<CollectionEntrySavedEventDetail>).detail;
+      if (detail?.mediaKind !== "film") {
+        return;
+      }
+
+      void fetchPage(0, appliedFilters);
+    };
+
+    window.addEventListener(COLLECTION_ENTRY_SAVED_EVENT, handleCollectionEntrySaved);
+    return () => {
+      window.removeEventListener(COLLECTION_ENTRY_SAVED_EVENT, handleCollectionEntrySaved);
+    };
+  }, [appliedFilters, fetchPage, hasApplied, ownerUserId, readOnly]);
+
+  useEffect(() => {
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (initialLoadRunRef.current) return;
     if (hasApplied) return;
@@ -1512,107 +1797,6 @@ export default function FilmsManager({
     }, {});
   };
 
-  const evaluateFilmWithProfile = useCallback(
-    async (
-      film: {
-        title: string;
-        year?: string | number | null;
-        mediaType?: "movie" | "tv" | null;
-        genres?: string | null;
-        director?: string | null;
-        actors?: string | null;
-        plot?: string | null;
-      },
-      previousAssessment?: ShishkaFitAssessment | null,
-    ) => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        throw new Error("Не вдалося визначити користувача.");
-      }
-
-      const scopeValue = getFilmScopeValue(film.mediaType);
-      const profileAnalysis = await fetchLatestFilmFitProfileAnalysis(
-        supabase,
-        user.id,
-        scopeValue,
-      );
-
-      if (!profileAnalysis) {
-        throw new Error("Спершу онови профіль для цього формату.");
-      }
-
-      if (
-        previousAssessment?.profileAnalyzedAt &&
-        previousAssessment.profileAnalyzedAt === profileAnalysis.analyzedAt
-      ) {
-        throw new Error("Спершу онови профіль, а потім запускай переоцінку.");
-      }
-
-      return requestFilmFitEvaluation({
-        scopeLabel: scopeValue,
-        profileAnalysis,
-        item: {
-          title: film.title,
-          year: film.year ?? null,
-          mediaType: film.mediaType ?? "movie",
-          genres: film.genres ?? null,
-          director: film.director ?? null,
-          actors: film.actors ?? null,
-          plot: film.plot ?? null,
-        },
-      });
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (!selectedFilm || !aiRecommendationScopeValue || aiRecommendationFitAssessment) {
-      return;
-    }
-
-    let isCancelled = false;
-
-    void (async () => {
-      try {
-        const assessment = await evaluateFilmWithProfile(
-          {
-            title: selectedFilm.title,
-            year: selectedFilm.year,
-            mediaType: selectedFilm.mediaType,
-            genres: selectedFilm.genres,
-            director: selectedFilm.director,
-            actors: selectedFilm.actors,
-            plot: selectedFilm.plot,
-          },
-          null,
-        );
-
-        if (!isCancelled) {
-          setAiRecommendationFitAssessment(assessment);
-          setAiRecommendationComment((prev) =>
-            mergeShishkaAssessmentIntoComment(prev, assessment),
-          );
-        }
-      } catch {
-        if (!isCancelled) {
-          setAiRecommendationFitAssessment(null);
-        }
-      }
-    })();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [
-    aiRecommendationFitAssessment,
-    aiRecommendationScopeValue,
-    evaluateFilmWithProfile,
-    selectedFilm,
-  ]);
-
   const getFilmRecommendationOptions = (rows: FilmLlmExportRow[]): RecommendationRequestOption[] => {
     const mediaTypes: Array<{ value: "movie" | "tv"; label: string }> = [
       { value: "movie", label: "Кіно" },
@@ -1720,7 +1904,7 @@ export default function FilmsManager({
         if (
           item.inCollection ||
           item.existingViewId ||
-          existingViewsByExternalId.get(itemExternalKey ?? "") ||
+          filmViewsByExternalKey.get(itemExternalKey ?? "") ||
           (itemExternalKey && recommendationExistingExternalKeys.has(itemExternalKey))
         ) {
           return false;
@@ -1862,10 +2046,12 @@ export default function FilmsManager({
           continue;
         }
 
-        setAiRecommendationComment(recommendation.why);
-        setAiRecommendationScopeValue(getFilmScopeValue(recommendedFilm.mediaType));
-        setAiRecommendationFitAssessment(null);
-        setSelectedFilm(recommendedFilm);
+        openSelectedFilmDraft(recommendedFilm, {
+          recommendationComment: recommendation.why,
+          recommendationScopeValue: getFilmScopeValue(recommendedFilm.mediaType),
+          recommendationFitAssessment: null,
+          closeSearch: false,
+        });
         setRecommendationScopeState(null);
         setRecommendationMessage(
           `${recommendation.title} (${recommendation.year})\nWhy it fits: ${recommendation.why}`,
@@ -2021,16 +2207,6 @@ export default function FilmsManager({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isFiltersOpen]);
 
-  const existingViewsByExternalId = useMemo(() => {
-    const map = new Map<string, FilmCollectionItem>();
-    collection.forEach((item) => {
-      const key = getFilmExternalKey(item.items.external_id, item.items.film_media_type);
-      if (key) {
-        map.set(key, item);
-      }
-    });
-    return map;
-  }, [collection]);
   const existingFilmKeys = useMemo(() => {
     const keys = new Set<string>();
     collection.forEach((item) => {
@@ -2296,20 +2472,6 @@ export default function FilmsManager({
     );
   };
 
-  const selectPreferredTrailer = (trailers?: Trailer[] | null) => {
-    if (!trailers || trailers.length === 0) return null;
-    const officialTrailer = trailers.find(
-      (trailer) => trailer.type === "Trailer" && trailer.official && trailer.url,
-    );
-    const trailer = trailers.find(
-      (candidate) => candidate.type === "Trailer" && candidate.url,
-    );
-    const teaser = trailers.find(
-      (candidate) => candidate.type === "Teaser" && candidate.url,
-    );
-    return officialTrailer ?? trailer ?? teaser ?? trailers.find((candidate) => candidate.url);
-  };
-
   const playIcon = (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -2352,126 +2514,44 @@ export default function FilmsManager({
   );
 
   const openTrailerModal = (title: string, trailers?: Trailer[] | null) => {
-    const picked = selectPreferredTrailer(trailers);
-    if (!picked) {
-      setTrailerMessage("Трейлер недоступний.");
-      return false;
-    }
-    const safeTrailers = trailers ?? [];
-    const pickedIndex = safeTrailers.indexOf(picked);
-    setTrailerModal({
-      trailers: safeTrailers,
-      index: pickedIndex >= 0 ? pickedIndex : 0,
-      baseTitle: title,
+    return openTrailerViewerModal({
+      title,
+      trailers,
+      setTrailerMessage,
+      setTrailerModal,
     });
-    return true;
-  };
-
-  const fetchFilmTrailers = async (
-    filmId: string,
-    mediaType?: "movie" | "tv",
-  ): Promise<Trailer[] | null> => {
-    const query = mediaType ? `?mediaType=${mediaType}` : "";
-    const response = await fetch(`/api/tmdb/${filmId}${query}`);
-    if (!response.ok) return null;
-    const detail = (await response.json()) as FilmResult;
-    return normalizeTrailers(detail.trailers ?? null);
-  };
-
-  const updateTrailersLocally = (itemId: string, trailers: Trailer[] | null) => {
-    setCollection((prev) =>
-      prev.map((item) =>
-        item.items.id === itemId
-          ? {
-              ...item,
-              items: {
-                ...item.items,
-                trailers,
-              },
-            }
-          : item,
-      ),
-    );
-    setSelectedView((prev) => {
-      if (!prev || prev.items.id !== itemId) return prev;
-      return {
-        ...prev,
-        items: {
-          ...prev.items,
-          trailers,
-        },
-      };
-    });
-  };
-
-  const handleWatchSelectedFilmTrailer = async () => {
-    if (!selectedFilm) return;
-    setTrailerMessage("");
-    const existing = normalizeTrailers(selectedFilm.trailers ?? null);
-    if (existing) {
-      openTrailerModal(selectedFilm.title, existing);
-      return;
-    }
-    setIsTrailerLoading(true);
-    try {
-      const trailers = await fetchFilmTrailers(
-        selectedFilm.id,
-        selectedFilm.mediaType ?? "movie",
-      );
-      if (!trailers) {
-        setTrailerMessage("Трейлер недоступний.");
-        return;
-      }
-      setSelectedFilm((prev) => (prev ? { ...prev, trailers } : prev));
-      openTrailerModal(selectedFilm.title, trailers);
-    } finally {
-      setIsTrailerLoading(false);
-    }
   };
 
   const handleWatchSelectedViewTrailer = async () => {
     if (!selectedView) return;
-    setTrailerMessage("");
-    const currentTrailers =
+    await watchExistingEntryTrailer({
+      title: selectedView.items.title,
+      currentTrailers:
       normalizeTrailers(selectedViewItemDraft?.trailers ?? null) ??
-      normalizeTrailers(selectedView.items.trailers ?? null);
-    if (currentTrailers) {
-      openTrailerModal(selectedView.items.title, currentTrailers);
-      return;
-    }
-    const externalId =
-      selectedViewItemDraft?.external_id ?? selectedView.items.external_id ?? "";
-    if (!externalId) {
-      setTrailerMessage("Трейлер недоступний.");
-      return;
-    }
-    setIsTrailerLoading(true);
-    try {
-      const trailers = await fetchFilmTrailers(externalId);
-      if (!trailers) {
-        setTrailerMessage("Трейлер недоступний.");
-        return;
-      }
-      setSelectedViewItemDraft((prev) => (prev ? { ...prev, trailers } : prev));
-      updateTrailersLocally(selectedView.items.id, trailers);
-      const { error } = await supabase
-        .from("items")
-        .update({ trailers })
-        .eq("id", selectedView.items.id);
-      if (error) {
-        setTrailerMessage("Не вдалося зберегти трейлер.");
-        return;
-      }
-      openTrailerModal(selectedView.items.title, trailers);
-    } catch (error) {
-      const message =
-        error instanceof Error && error.message
-          ? error.message
-          : "Не вдалося отримати трейлер.";
-      setTrailerMessage(message);
-    } finally {
-      setIsTrailerLoading(false);
-    }
+        normalizeTrailers(selectedView.items.trailers ?? null),
+      externalId:
+        selectedViewItemDraft?.external_id ?? selectedView.items.external_id ?? "",
+      fetchTrailers: fetchFilmTrailers,
+      openTrailerModal,
+      onTrailersLoaded: async (trailers) => {
+        setSelectedViewItemDraft((prev) => (prev ? { ...prev, trailers } : prev));
+        patchCollectionEntryTrailersByItemId({
+          itemId: selectedView.items.id,
+          trailers,
+          setCollection,
+          setSelectedView,
+        });
+        const { error } = await supabase
+          .from("items")
+          .update({ trailers })
+          .eq("id", selectedView.items.id);
+        if (error) {
+          throw new Error("Не вдалося зберегти трейлер.");
+        }
+      },
+      setTrailerMessage,
+      setIsTrailerLoading,
+    });
   };
 
   const handleSendRecommendation = async (
@@ -2497,35 +2577,6 @@ export default function FilmsManager({
       return next;
     });
     return (data as number) ?? 0;
-  };
-
-  const handleAddFilm = async (
-    film: FilmResult,
-    payload: FilmCollectionFormPayload,
-  ) => {
-    const detailResponse = await fetch(
-      `/api/tmdb/${film.id}?mediaType=${film.mediaType ?? "movie"}`,
-    );
-    const detail = detailResponse.ok ? ((await detailResponse.json()) as FilmResult) : film;
-
-    await addFilmToCollection({
-      supabase,
-      film: {
-        ...detail,
-        trailers: detail.trailers ?? film.trailers ?? null,
-        mediaType: detail.mediaType ?? film.mediaType ?? "movie",
-        people: detail.people ?? film.people ?? [],
-        genreItems: detail.genreItems ?? film.genreItems ?? [],
-      },
-      payload,
-      allowUpdateExistingView: true,
-    });
-
-    setHasApplied(true);
-    void (async () => {
-      await loadYearBounds();
-      await fetchPage(0, appliedFilters);
-    })();
   };
 
   const handleUpdateView = async (
@@ -2608,64 +2659,16 @@ export default function FilmsManager({
       payload,
     });
 
-    setCollection((prev) =>
-      prev.map((item) => {
-        if (item.id !== viewId) return item;
-        return {
-          ...item,
-          viewed_at: payload.viewedAt,
-          rating: payload.rating,
-          comment: payload.comment,
-          recommend_similar: payload.recommendSimilar,
-          is_viewed: payload.isViewed,
-          view_percent: payload.viewPercent,
-          availability: payload.availability,
-          shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
-          shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
-          shishka_fit_profile_analyzed_at:
-            payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
-          shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
-          items: resolvedItemDraft
-            ? {
-                ...item.items,
-                title: resolvedItemDraft.title,
-                title_uk: resolvedItemDraft.title_uk,
-                title_en: resolvedItemDraft.title_en,
-                title_original: resolvedItemDraft.title_original,
-                poster_url: resolvedItemDraft.poster_url,
-                year: resolvedItemDraft.year,
-                imdb_rating: resolvedItemDraft.imdb_rating,
-                description: resolvedItemDraft.description,
-                genres: resolvedItemDraft.genres,
-                director: resolvedItemDraft.director,
-                actors: resolvedItemDraft.actors,
-                external_id: resolvedItemDraft.external_id,
-                film_media_type: resolvedItemDraft.film_media_type,
-                trailers: resolvedItemDraft.trailers,
-              }
-            : item.items,
-        };
-      }),
-    );
-    setSelectedView((prev) => {
-      if (!prev || prev.id !== viewId) return prev;
-      return {
-        ...prev,
-        viewed_at: payload.viewedAt,
-        rating: payload.rating,
-        comment: payload.comment,
-        recommend_similar: payload.recommendSimilar,
-        is_viewed: payload.isViewed,
-        view_percent: payload.viewPercent,
-        availability: payload.availability,
-        shishka_fit_label: payload.shishkaFitAssessment?.label ?? null,
-        shishka_fit_reason: payload.shishkaFitAssessment?.reason ?? null,
-        shishka_fit_profile_analyzed_at:
-          payload.shishkaFitAssessment?.profileAnalyzedAt ?? null,
-        shishka_fit_scope_value: payload.shishkaFitAssessment?.scopeValue ?? null,
+    applyExistingCollectionEntryViewSave({
+      viewId,
+      payload,
+      setCollection,
+      setSelectedView,
+      applyPatch: (item) => ({
+        ...item,
         items: resolvedItemDraft
           ? {
-              ...prev.items,
+              ...item.items,
               title: resolvedItemDraft.title,
               title_uk: resolvedItemDraft.title_uk,
               title_en: resolvedItemDraft.title_en,
@@ -2681,8 +2684,8 @@ export default function FilmsManager({
               film_media_type: resolvedItemDraft.film_media_type,
               trailers: resolvedItemDraft.trailers,
             }
-          : prev.items,
-      };
+          : item.items,
+      }),
     });
     setSelectedViewItemDraft(null);
   };
@@ -2691,41 +2694,13 @@ export default function FilmsManager({
     viewId: string,
     assessment: ShishkaFitAssessment,
   ) => {
-    const updatePayload = {
-      shishka_fit_label: assessment.label,
-      shishka_fit_reason: assessment.reason,
-      shishka_fit_profile_analyzed_at: assessment.profileAnalyzedAt,
-      shishka_fit_scope_value: assessment.scopeValue,
-    };
-
-    const { error } = await supabase
-      .from("user_views")
-      .update(updatePayload)
-      .eq("id", viewId);
-
-    if (error) {
-      throw new Error("Не вдалося зберегти оцінку.");
-    }
-
-    setCollection((prev) =>
-      prev.map((item) =>
-        item.id === viewId
-          ? {
-              ...item,
-              ...updatePayload,
-            }
-          : item,
-      ),
-    );
-
-    setSelectedView((prev) =>
-      prev && prev.id === viewId
-        ? {
-            ...prev,
-            ...updatePayload,
-          }
-        : prev,
-    );
+    await persistCollectionEntryAssessment({
+      supabase,
+      viewId,
+      assessment,
+      setCollection,
+      setSelectedView,
+    });
   };
 
   const applyRefreshedFilmMetadata = async (film: FilmResult) => {
@@ -2801,19 +2776,16 @@ export default function FilmsManager({
   };
 
   const handleDeleteView = async (viewId: string) => {
-    const { error } = await supabase.from("user_views").delete().eq("id", viewId);
-
-    if (error) {
-      throw new Error("Не вдалося видалити запис.");
-    }
-
+    await deleteCollectionView({ supabase, viewId });
     setHasApplied(true);
     void fetchPage(0, appliedFilters);
   };
 
   const handleAddToOwnCollection = async (itemId: string) => {
-    await addExistingItemToCollection({ supabase, itemId });
-    setMessage("Додано до твоєї колекції.");
+    openCreateOwnEntry({
+      mediaKind: "film",
+      itemId,
+    });
   };
 
   const handleTmdbSearch = async ({ query, year, director }: CatalogSearchRequest) => {
@@ -2877,7 +2849,7 @@ export default function FilmsManager({
     const tmdbResults = await handleTmdbSearch({ query, year, director });
     return tmdbResults
       .map((item) => {
-        const existingView = existingViewsByExternalId.get(
+        const existingView = filmViewsByExternalKey.get(
           getFilmExternalKey(item.id, item.mediaType) ?? "",
         );
         return {
@@ -4104,38 +4076,7 @@ export default function FilmsManager({
           initialQuery={appliedFilters.query}
           showDetailedSearch
           onSelect={async (film) => {
-            if (film.existingViewId) {
-              const existingView =
-                collection.find((item) => item.id === film.existingViewId) ??
-                existingViewsByExternalId.get(film.id);
-              if (existingView) {
-                await openSelectedView(existingView);
-                setIsAddOpen(false);
-                return;
-              }
-            }
-            try {
-              const detailResponse = await fetch(
-                `/api/tmdb/${film.id}?mediaType=${film.mediaType ?? "movie"}`,
-              );
-              if (detailResponse.ok) {
-                const detail = (await detailResponse.json()) as FilmResult;
-                setAiRecommendationComment("");
-                setAiRecommendationScopeValue(null);
-                setAiRecommendationFitAssessment(null);
-                setSelectedFilm(detail);
-                setIsAddOpen(false);
-                return;
-              }
-            } catch {
-              // fallback to search data
-            }
-
-            setAiRecommendationComment("");
-            setAiRecommendationScopeValue(null);
-            setAiRecommendationFitAssessment(null);
-            setSelectedFilm(film);
-            setIsAddOpen(false);
+            await resolveAndOpenFilmDraft(film);
           }}
           onClose={() => setIsAddOpen(false)}
           renderItem={(film) => (
@@ -4244,93 +4185,18 @@ export default function FilmsManager({
         />
       ) : null}
 
-      {selectedFilm ? (
-        <CatalogModal
-          key={selectedFilm.id}
-          title={selectedFilm.title}
-          posterUrl={selectedFilm.poster}
-          imageUrls={selectedFilm.imageUrls}
-          size="wide"
-          fitTargetText="цей фільм"
-          showRecommendSimilar={false}
-          onClose={() => {
-            setSelectedFilm(null);
-            setAiRecommendationComment("");
-            setAiRecommendationScopeValue(null);
-            setAiRecommendationFitAssessment(null);
-            setTrailerMessage("");
-          }}
-          availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
-          initialValues={{
-            availability: showAvailability ? defaultFilmAvailability : null,
-            comment: aiRecommendationComment || null,
-            isViewed: defaultFilmIsViewed ?? undefined,
-            shishkaFitAssessment: aiRecommendationFitAssessment,
-          }}
-          onAdd={(payload) => handleAddFilm(selectedFilm, payload)}
-          onEvaluate={(payload) =>
-            evaluateFilmWithProfile(
-              {
-                title: selectedFilm.title,
-                year: selectedFilm.year,
-                mediaType: selectedFilm.mediaType,
-                genres: selectedFilm.genres,
-                director: selectedFilm.director,
-                actors: selectedFilm.actors,
-                plot: selectedFilm.plot,
-              },
-              payload.shishkaFitAssessment,
-            )
-          }
-          previewAction={{
-            label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
-            onClick: handleWatchSelectedFilmTrailer,
-            disabled: isTrailerLoading,
-            icon: playIcon,
-          }}
-        >
-          {({ fitBadge }) => (
-            <FilmMetadataContent
-              imdbRating={selectedFilm.imdbRating}
-              fitBadge={fitBadge}
-              year={selectedFilm.year}
-              mediaType={selectedFilm.mediaType}
-              originalTitle={renderCopyableFilmTitle(selectedFilm.originalTitle, "оригінальну")}
-              englishTitle={renderCopyableFilmTitle(selectedFilm.englishTitle, "англійську")}
-              showEnglishTitle={
-                Boolean(selectedFilm.englishTitle?.trim()) &&
-                selectedFilm.englishTitle?.trim() !== selectedFilm.originalTitle?.trim()
-              }
-              director={renderDirectorLinks(selectedFilm.people) ?? selectedFilm.director}
-              writers={renderWriterLinks(selectedFilm.people)}
-              producers={renderProducerLinks(selectedFilm.people)}
-              actors={renderActorLinks(selectedFilm.people) ?? selectedFilm.actors}
-              genres={renderGenreLinks(selectedFilm.genreItems) ?? selectedFilm.genres}
-              description={selectedFilm.plot}
-              message={trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
-            />
-          )}
-        </CatalogModal>
-      ) : null}
-
       {selectedView ? (
-        <CatalogModal
+        <ExistingCollectionEntryModal
           key={selectedView.id}
           title={selectedView.items.title}
           posterUrl={
             (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined
           }
           imageUrls={selectedViewItemDraft?.imageUrls ?? selectedViewImageUrls ?? undefined}
-          size="wide"
           fitTargetText="цей фільм"
-          onClose={() => {
-            setSelectedView(null);
-            setSelectedViewPreloadedPeople(null);
-            setTrailerMessage("");
-          }}
+          onClose={closeSelectedView}
           readOnly={readOnly}
-          submitLabel={readOnly ? "Додати собі у колекцію" : "Зберегти"}
-          onReadOnlyPrimaryAction={() => handleAddToOwnCollection(selectedView.items.id)}
+          onAddToOwnCollection={() => handleAddToOwnCollection(selectedView.items.id)}
           previewAction={{
             label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
             onClick: handleWatchSelectedViewTrailer,
@@ -4361,45 +4227,36 @@ export default function FilmsManager({
             shishkaFitAssessment: getStoredShishkaFitAssessment(selectedView),
           }}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
-          onRefresh={readOnly ? undefined : handleRefreshSelectedFilmMetadata}
-          onEvaluate={
-            readOnly
-              ? undefined
-              : (payload) =>
-                  evaluateFilmWithProfile(
-                    {
-                      title: selectedViewItemDraft?.title ?? selectedView.items.title,
-                      year: selectedViewItemDraft?.year ?? selectedView.items.year,
-                      mediaType:
-                        selectedViewItemDraft?.film_media_type ??
-                        selectedView.items.film_media_type,
-                      genres: selectedViewItemDraft?.genres ?? selectedView.items.genres,
-                      director: selectedViewItemDraft?.director ?? selectedView.items.director,
-                      actors: selectedViewItemDraft?.actors ?? selectedView.items.actors,
-                      plot:
-                        selectedViewItemDraft?.description ?? selectedView.items.description,
-                    },
-                    payload.shishkaFitAssessment,
-                  )
+          onRefresh={handleRefreshSelectedFilmMetadata}
+          onEvaluate={(payload) =>
+            evaluateFilmWithProfile(
+              {
+                title: selectedViewItemDraft?.title ?? selectedView.items.title,
+                year: selectedViewItemDraft?.year ?? selectedView.items.year,
+                mediaType:
+                  selectedViewItemDraft?.film_media_type ??
+                  selectedView.items.film_media_type,
+                genres: selectedViewItemDraft?.genres ?? selectedView.items.genres,
+                director: selectedViewItemDraft?.director ?? selectedView.items.director,
+                actors: selectedViewItemDraft?.actors ?? selectedView.items.actors,
+                plot:
+                  selectedViewItemDraft?.description ?? selectedView.items.description,
+              },
+              payload.shishkaFitAssessment,
+            )
           }
-          onPersistEvaluatedAssessment={
-            readOnly
-              ? undefined
-              : async (assessment) => persistViewAssessment(selectedView.id, assessment)
+          onPersistEvaluatedAssessment={async (assessment) =>
+            persistViewAssessment(selectedView.id, assessment)
           }
-          onAdd={
-            readOnly
-              ? undefined
-              : (payload) =>
-                  handleUpdateView(
-                    selectedView.id,
-                    selectedView.items.id,
-                    selectedViewItemDraft,
-                    payload,
-                  )
+          onAdd={(payload) =>
+            handleUpdateView(
+              selectedView.id,
+              selectedView.items.id,
+              selectedViewItemDraft,
+              payload,
+            )
           }
-          onDelete={readOnly ? undefined : () => handleDeleteView(selectedView.id)}
-          showRecommendSimilar={false}
+          onDelete={() => handleDeleteView(selectedView.id)}
         >
           {({ fitBadge }) => (
             <FilmMetadataContent
@@ -4441,7 +4298,7 @@ export default function FilmsManager({
               message={trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
             />
           )}
-        </CatalogModal>
+        </ExistingCollectionEntryModal>
       ) : null}
 
       {trailerModal ? (

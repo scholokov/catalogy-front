@@ -1,13 +1,57 @@
+import { buildFriendActivityUrl } from "@/lib/friends/notifications";
+
 export type TelegramDeliveryPayload = {
   notificationId?: string;
   recipientUserId?: string;
   actorUserId?: string;
   telegramChatId?: string;
+  userViewId?: string;
+  itemId?: string;
   title?: string;
   posterUrl?: string | null;
   rating?: number | null;
+  comment?: string | null;
+  isViewed?: boolean;
+  viewPercent?: number | null;
+  viewedAt?: string | null;
   mediaKind?: "film" | "game";
   eventType?: "added" | "viewed";
+};
+
+const DEFAULT_PRODUCTION_APP_URL = "https://www.catalogy.fans";
+
+const normalizeAppBaseUrl = (value?: string | null) => {
+  const normalizedValue = value?.trim();
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  if (/^https?:\/\//i.test(normalizedValue)) {
+    return normalizedValue.replace(/\/+$/, "");
+  }
+
+  return `https://${normalizedValue.replace(/\/+$/, "")}`;
+};
+
+export const getCatalogyAppUrl = () => {
+  const explicitUrl = normalizeAppBaseUrl(
+    process.env.NEXT_PUBLIC_APP_URL ?? process.env.APP_URL ?? null,
+  );
+  if (explicitUrl) {
+    return explicitUrl;
+  }
+
+  const vercelUrl = normalizeAppBaseUrl(process.env.VERCEL_URL ?? null);
+  if (vercelUrl) {
+    return vercelUrl;
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    return DEFAULT_PRODUCTION_APP_URL;
+  }
+
+  return "http://localhost:3000";
 };
 
 type TelegramApiSuccess<T> = {
@@ -34,9 +78,11 @@ const getActionSentence = (
 export const formatTelegramNotificationText = ({
   actorName,
   payload,
+  appBaseUrl,
 }: {
   actorName: string;
   payload: TelegramDeliveryPayload;
+  appBaseUrl?: string | null;
 }) => {
   const actionSentence = getActionSentence(payload.mediaKind, payload.eventType);
   const title = payload.title?.trim() || "Без назви";
@@ -44,13 +90,41 @@ export const formatTelegramNotificationText = ({
     typeof payload.rating === "number" && Number.isFinite(payload.rating)
       ? payload.rating.toFixed(1)
       : null;
+  const hasViewedState = typeof payload.isViewed === "boolean";
+  const viewPercent =
+    typeof payload.viewPercent === "number" && Number.isFinite(payload.viewPercent)
+      ? Math.max(0, Math.min(100, Math.round(payload.viewPercent)))
+      : payload.isViewed
+        ? 100
+        : 0;
+  const viewedText = hasViewedState
+    ? `Переглянуто: ${payload.isViewed ? "так" : "ні"} (${viewPercent}%)`
+    : null;
+  const viewedAtText =
+    payload.isViewed && payload.viewedAt
+      ? `Дата перегляду: ${new Date(payload.viewedAt).toLocaleDateString("uk-UA")}`
+      : null;
+  const comment = payload.comment?.trim() || null;
+  const directUrl = buildFriendActivityUrl({
+    actorUserId: payload.actorUserId,
+    mediaKind: payload.mediaKind,
+    userViewId: payload.userViewId,
+    itemId: payload.itemId,
+    baseUrl: appBaseUrl,
+  });
 
   return [
     `Оновлення від друга - ${actorName}`,
     "",
     actionSentence,
     `Назва: ${title}`,
+    `Від: ${actorName}`,
     rating ? `Рейтинг: ${rating}` : null,
+    viewedText,
+    viewedAtText,
+    comment ? "Коментар:" : null,
+    comment,
+    directUrl ? `Відкрити: ${directUrl}` : null,
   ]
     .filter(Boolean)
     .join("\n");
