@@ -62,6 +62,7 @@ import {
   summarizeFilmPeople,
   updateFilmView as updateFilmViewMutation,
 } from "@/lib/films/collectionFlow";
+import { evaluateFilmWithProfile } from "@/lib/films/fitAssessmentFlow";
 import { type FilmNormalizedGenre, type FilmNormalizedPerson } from "@/lib/films/normalizedMetadata";
 import { loadStoredGenresForItem } from "@/lib/films/storedGenres";
 import { loadStoredPeopleForItem } from "@/lib/films/storedPeople";
@@ -4230,6 +4231,7 @@ export default function FilmsManager({
           onRefresh={handleRefreshSelectedFilmMetadata}
           onEvaluate={(payload) =>
             evaluateFilmWithProfile(
+              supabase,
               {
                 title: selectedViewItemDraft?.title ?? selectedView.items.title,
                 year: selectedViewItemDraft?.year ?? selectedView.items.year,

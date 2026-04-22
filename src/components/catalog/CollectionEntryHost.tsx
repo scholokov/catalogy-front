@@ -735,7 +735,6 @@ export default function CollectionEntryHost({ request, onClose }: HostProps) {
               itemId: state.itemId,
               title: state.title,
               rating: state.rating,
-              ratingSource: state.ratingSource,
               genres: state.genres ?? "",
               genreItems: state.genreItems,
               released: state.year ?? "",

@@ -5,10 +5,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ShishkaFitAssessment } from "@/lib/shishka/fitAssessment";
 
 type StoredEntryFitFields = {
-  shishka_fit_label: string | null;
-  shishka_fit_reason: string | null;
-  shishka_fit_profile_analyzed_at: string | null;
-  shishka_fit_scope_value: string | null;
+  shishka_fit_label?: ShishkaFitAssessment["label"] | null;
+  shishka_fit_reason?: string | null;
+  shishka_fit_profile_analyzed_at?: string | null;
+  shishka_fit_scope_value?: string | null;
 };
 
 type Identifiable = {

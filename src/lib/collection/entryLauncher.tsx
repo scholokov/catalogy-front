@@ -96,6 +96,15 @@ type CollectionEntryLauncherContextValue = {
 const CollectionEntryLauncherContext =
   createContext<CollectionEntryLauncherContextValue | null>(null);
 
+type DraftFilmRequest = Omit<
+  Extract<CollectionEntryDraftRequest, { mediaKind: "film" }>,
+  "kind"
+>;
+type DraftGameRequest = Omit<
+  Extract<CollectionEntryDraftRequest, { mediaKind: "game" }>,
+  "kind"
+>;
+
 export function CollectionEntryLauncherProvider({
   children,
 }: {
@@ -143,9 +152,29 @@ export function CollectionEntryLauncherProvider({
   }, [replaceFriendsOwnEntrySearchParams]);
 
   const openDraftEntry = useCallback((nextRequest: Omit<CollectionEntryDraftRequest, "kind">) => {
+    if (nextRequest.mediaKind === "film") {
+      const filmRequest = nextRequest as DraftFilmRequest;
+      setRequest({
+        kind: "draft",
+        mediaKind: "film",
+        draft: filmRequest.draft,
+        recommendationComment: filmRequest.recommendationComment,
+        recommendationScopeValue: filmRequest.recommendationScopeValue,
+        recommendationFitAssessment: filmRequest.recommendationFitAssessment,
+        onCompleted: filmRequest.onCompleted,
+      });
+      return;
+    }
+
+    const gameRequest = nextRequest as DraftGameRequest;
     setRequest({
       kind: "draft",
-      ...nextRequest,
+      mediaKind: "game",
+      draft: gameRequest.draft,
+      recommendationComment: gameRequest.recommendationComment,
+      recommendationScopeValue: gameRequest.recommendationScopeValue,
+      recommendationFitAssessment: gameRequest.recommendationFitAssessment,
+      onCompleted: gameRequest.onCompleted,
     });
   }, []);
 
