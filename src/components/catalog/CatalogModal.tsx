@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import Image from "next/image";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import {
@@ -74,12 +82,18 @@ type CatalogModalProps = {
       }) => React.ReactNode);
 };
 
+type FitPopoverPlacement = {
+  horizontal: "left" | "right" | "center";
+  vertical: "above" | "below";
+};
+
 const RATING_MIN = 1;
 const RATING_MAX = 5;
 const RATING_STEP = 0.5;
 const VIEW_PERCENT_MIN = 0;
 const VIEW_PERCENT_MAX = 100;
 const VIEW_PERCENT_STEP = 10;
+const PROFILE_REFRESH_REQUIRED_MESSAGE = "Спершу онови профіль, а потім запускай переоцінку.";
 
 const normalizeRating = (value: number) => {
   const rounded = Math.round(value / RATING_STEP) * RATING_STEP;
@@ -171,10 +185,16 @@ export default function CatalogModal({
   const [isAvailabilityOpen, setIsAvailabilityOpen] = useState(false);
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [isFitPopoverOpen, setIsFitPopoverOpen] = useState(false);
+  const [fitPopoverPlacement, setFitPopoverPlacement] = useState<FitPopoverPlacement>({
+    horizontal: "left",
+    vertical: "below",
+  });
+  const [fitPopoverStyle, setFitPopoverStyle] = useState<CSSProperties>({});
   const platformsRef = useRef<HTMLDivElement | null>(null);
   const availabilityRef = useRef<HTMLDivElement | null>(null);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const fitPopoverRef = useRef<HTMLDivElement | null>(null);
+  const fitPopoverCardRef = useRef<HTMLDivElement | null>(null);
   const handleAddRef = useRef<(() => Promise<void>) | null>(null);
   const copyTooltipTimeoutRef = useRef<number | null>(null);
   const [isTitleTooltipSuppressed, setIsTitleTooltipSuppressed] = useState(false);
@@ -303,6 +323,86 @@ export default function CatalogModal({
   useEffect(() => {
     setActiveImageIndex(0);
   }, [posterUrl, imageUrls]);
+
+  const updateFitPopoverPlacement = useCallback(() => {
+    const triggerNode = fitPopoverRef.current;
+    const popoverNode = fitPopoverCardRef.current;
+
+    if (!triggerNode || !popoverNode) {
+      return;
+    }
+
+    const triggerRect = triggerNode.getBoundingClientRect();
+    const popoverRect = popoverNode.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const horizontalMargin = 16;
+    const verticalMargin = 16;
+    const gap = 8;
+    const canOpenRight =
+      triggerRect.left + popoverRect.width <= viewportWidth - horizontalMargin;
+    const canOpenLeft =
+      triggerRect.right - popoverRect.width >= horizontalMargin;
+    const canOpenBelow =
+      triggerRect.bottom + gap + popoverRect.height <= viewportHeight - verticalMargin;
+    const canOpenAbove =
+      triggerRect.top - gap - popoverRect.height >= verticalMargin;
+    const shouldCenter =
+      viewportWidth <= 640 || (!canOpenRight && !canOpenLeft);
+    const verticalPlacement: FitPopoverPlacement["vertical"] =
+      canOpenBelow || !canOpenAbove ? "below" : "above";
+
+    if (shouldCenter) {
+      const centeredTop =
+        verticalPlacement === "below"
+          ? Math.min(
+              triggerRect.bottom + gap,
+              viewportHeight - popoverRect.height - verticalMargin,
+            )
+          : Math.max(
+              verticalMargin,
+              triggerRect.top - popoverRect.height - gap,
+            );
+
+      setFitPopoverPlacement({
+        horizontal: "center",
+        vertical: verticalPlacement,
+      });
+      setFitPopoverStyle({
+        top: `${Math.max(verticalMargin, centeredTop)}px`,
+      });
+      return;
+    }
+
+    setFitPopoverPlacement({
+      horizontal: canOpenRight || !canOpenLeft ? "left" : "right",
+      vertical: verticalPlacement,
+    });
+    setFitPopoverStyle({});
+  }, []);
+
+  useEffect(() => {
+    if (!isFitPopoverOpen) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      updateFitPopoverPlacement();
+    });
+
+    const handleViewportChange = () => {
+      updateFitPopoverPlacement();
+    };
+
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [isFitPopoverOpen, updateFitPopoverPlacement]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -437,7 +537,11 @@ export default function CatalogModal({
         error instanceof Error && error.message
           ? error.message
           : "Не вдалося отримати оцінку.";
-      setSaveError(message);
+      if (message === PROFILE_REFRESH_REQUIRED_MESSAGE) {
+        showSnackbar(message);
+      } else {
+        setSaveError(message);
+      }
     } finally {
       setIsEvaluating(false);
     }
@@ -548,15 +652,37 @@ export default function CatalogModal({
     <span className={styles.fitPopoverWrap} ref={fitPopoverRef}>
       <button
         type="button"
-        className={styles.fitPopoverTrigger}
-        onClick={() => setIsFitPopoverOpen((prev) => !prev)}
+        className={`${styles.fitPopoverTrigger} ${
+          isFitPopoverOpen ? styles.fitPopoverTriggerActive : ""
+        }`}
+        onClick={() => {
+          setIsFitPopoverOpen((prev) => !prev);
+        }}
         aria-expanded={isFitPopoverOpen}
         aria-label="Пояснення вірогідності сподобатись"
       >
         {renderFitLabel(shishkaFitAssessment.label)}
       </button>
       {isFitPopoverOpen ? (
-        <div className={styles.fitPopover} role="dialog" aria-modal="false">
+        <div
+          ref={fitPopoverCardRef}
+          className={[
+            styles.fitPopover,
+            fitPopoverPlacement.horizontal === "center"
+              ? styles.fitPopoverCentered
+              : fitPopoverPlacement.horizontal === "right"
+              ? styles.fitPopoverAlignRight
+              : styles.fitPopoverAlignLeft,
+            fitPopoverPlacement.horizontal === "center"
+              ? ""
+              : fitPopoverPlacement.vertical === "above"
+              ? styles.fitPopoverAbove
+              : styles.fitPopoverBelow,
+          ].join(" ")}
+          style={fitPopoverStyle}
+          role="dialog"
+          aria-modal="false"
+        >
           <p className={styles.fitPopoverTitle}>
             Вірогідність того, що {fitTargetText} сподобається
           </p>
@@ -1122,28 +1248,30 @@ export default function CatalogModal({
           </div>
         </div>
 
-        {saveError ? <p className={styles.error}>{saveError}</p> : null}
-        <div className={styles.actions}>
-          {extraActions ? (
-            <div className={styles.actionsGroup}>{extraActions}</div>
-          ) : null}
-          <div className={styles.actionsPrimary}>
-            <button
-              type="button"
-              className="btnBase btnSecondary"
-              onClick={onClose}
-              disabled={isSaving || isDeleting}
-            >
-              Закрити
-            </button>
-            <button
-              type="button"
-              className="btnBase btnPrimary"
-              onClick={handleAdd}
-              disabled={isSaving || isDeleting}
-            >
-              {isSaving ? "Збереження..." : submitLabel}
-            </button>
+        <div className={styles.footer}>
+          {saveError ? <p className={styles.error}>{saveError}</p> : null}
+          <div className={styles.actions}>
+            {extraActions ? (
+              <div className={styles.actionsGroup}>{extraActions}</div>
+            ) : null}
+            <div className={styles.actionsPrimary}>
+              <button
+                type="button"
+                className="btnBase btnSecondary"
+                onClick={onClose}
+                disabled={isSaving || isRefreshing}
+              >
+                Закрити
+              </button>
+              <button
+                type="button"
+                className="btnBase btnPrimary"
+                onClick={() => void handleAdd()}
+                disabled={isSaving || isRefreshing}
+              >
+                {isSaving ? "Збереження..." : submitLabel}
+              </button>
+            </div>
           </div>
         </div>
         {isConfirmOpen ? (

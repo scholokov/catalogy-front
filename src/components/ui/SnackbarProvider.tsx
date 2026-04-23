@@ -26,7 +26,7 @@ export function SnackbarProvider({ children }: SnackbarProviderProps) {
   const [message, setMessage] = useState("");
   const [isVisible, setIsVisible] = useState(false);
 
-  const showSnackbar = useCallback((nextMessage: string, durationMs = 1600) => {
+  const showSnackbar = useCallback((nextMessage: string, durationMs = 3000) => {
     if (timeoutRef.current !== null) {
       window.clearTimeout(timeoutRef.current);
       timeoutRef.current = null;

@@ -543,12 +543,17 @@ export default function CollectionEntryHost({ request, onClose }: HostProps) {
   };
 
   const handlePreview = async () => {
-    if (!state || state.entryMode !== "draft") {
+    if (!state) {
       return;
     }
 
     setTrailerMessage("");
     if (openTrailerModal(state.title, state.trailers ?? null)) {
+      return;
+    }
+
+    if (!state.externalId?.trim()) {
+      setTrailerMessage("Трейлер недоступний.");
       return;
     }
 
@@ -590,6 +595,9 @@ export default function CollectionEntryHost({ request, onClose }: HostProps) {
       ) : null,
     [state, trailerMessage],
   );
+  const canPreviewTrailer = Boolean(
+    state && ((state.trailers?.length ?? 0) > 0 || state.externalId?.trim()),
+  );
 
   if (!request || !state) {
     return null;
@@ -627,7 +635,7 @@ export default function CollectionEntryHost({ request, onClose }: HostProps) {
           initialValues={state.initialValues}
           submitLabel={state.existingView ? "Зберегти" : "Додати"}
           previewAction={
-            state.entryMode === "draft"
+            canPreviewTrailer
               ? {
                   label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
                   onClick: handlePreview,
@@ -719,7 +727,7 @@ export default function CollectionEntryHost({ request, onClose }: HostProps) {
         submitLabel={state.existingView ? "Зберегти" : "Додати"}
         onClose={onClose}
         previewAction={
-          state.entryMode === "draft"
+          canPreviewTrailer
             ? {
                 label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
                 onClick: handlePreview,

@@ -30,6 +30,12 @@
   overscroll-behavior: contain;
 }
 
+@supports (height: 100svh) {
+  .modal {
+    max-height: calc(100svh - 48px - var(--safe-area-top) - var(--safe-area-bottom));
+  }
+}
+
 .modalWide {
   max-width: 1280px;
 }
@@ -261,6 +267,7 @@
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 24px;
+  padding-bottom: 104px;
 }
 
 .posterBlock {
@@ -432,6 +439,11 @@
   align-items: center;
 }
 
+.fitPopoverTriggerActive {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+
 .fitLabelContent {
   display: inline-flex;
   align-items: center;
@@ -460,9 +472,8 @@
 
 .fitPopover {
   position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  width: min(320px, 80vw);
+  width: min(320px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
   padding: 12px;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
@@ -471,6 +482,36 @@
   display: grid;
   gap: 8px;
   z-index: 8;
+}
+
+.fitPopoverAlignLeft {
+  left: 0;
+  right: auto;
+}
+
+.fitPopoverAlignRight {
+  right: 0;
+  left: auto;
+}
+
+.fitPopoverCentered {
+  position: fixed;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  width: min(320px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  z-index: 70;
+}
+
+.fitPopoverBelow {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
+.fitPopoverAbove {
+  bottom: calc(100% + 8px);
+  top: auto;
 }
 
 .fitPopoverTitle,
@@ -561,7 +602,8 @@
 
 .textarea {
   min-height: 96px;
-  resize: vertical;
+  resize: none;
+  overflow-y: auto;
 }
 
 .multiSelect {
@@ -727,6 +769,31 @@
   align-items: center;
 }
 
+.footer {
+  position: sticky;
+  bottom: -24px;
+  z-index: 2;
+  margin-right: -24px;
+  margin-left: -24px;
+  padding: 16px 24px 24px;
+  background: var(--color-surface-elevated);
+}
+
+.footer::before {
+  content: "";
+  position: absolute;
+  top: -22px;
+  right: 0;
+  left: 0;
+  height: 22px;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(16, 26, 51, 0) 0%,
+    var(--color-surface-elevated) 100%
+  );
+}
+
 .actionsGroup {
   display: flex;
   gap: 12px;
@@ -802,8 +869,16 @@
     padding-left: calc(24px + var(--safe-area-left));
   }
 
+  @supports (height: 100svh) {
+    .modal {
+      max-height: 100svh;
+      height: 100svh;
+    }
+  }
+
   .content {
     grid-template-columns: 1fr;
+    padding-bottom: 96px;
   }
 
   .posterBlock {
