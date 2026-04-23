@@ -1119,7 +1119,11 @@ export default function CatalogModal({
                 </label>
               </div>
 
-              <div className={styles.checkboxRow}>
+              <div
+                className={`${styles.checkboxRow} ${
+                  !isViewed ? styles.labelDisabled : ""
+                }`}
+              >
                 <label className={styles.checkboxLabel}>
                   <input
                     className={styles.checkbox}
@@ -1140,37 +1144,39 @@ export default function CatalogModal({
                   />
                   Переглянуто
                 </label>
-                <div className={styles.ratingControl}>
-                  <button
-                    type="button"
-                    className={styles.ratingStepButton}
-                    onClick={decreaseViewPercent}
-                    disabled={isViewPercentDisabled}
-                    aria-label="Зменшити відсоток перегляду на 10"
-                  >
-                    -
-                  </button>
-                  <input
-                    className={`${styles.input} ${styles.percentValueInput}`}
-                    type="text"
-                    inputMode="numeric"
-                    value={viewPercentInput}
-                    onChange={(event) => handleViewPercentInputChange(event.target.value)}
-                    onBlur={handleViewPercentInputBlur}
-                    disabled={isViewPercentDisabled}
-                    aria-label="Відсоток перегляду від 0 до 100 з кроком 10"
-                  />
-                  <button
-                    type="button"
-                    className={styles.ratingStepButton}
-                    onClick={increaseViewPercent}
-                    disabled={isViewPercentDisabled}
-                    aria-label="Збільшити відсоток перегляду на 10"
-                  >
-                    +
-                  </button>
+                <div className={styles.checkboxRowTrailing}>
+                  <div className={styles.ratingControl}>
+                    <button
+                      type="button"
+                      className={styles.ratingStepButton}
+                      onClick={decreaseViewPercent}
+                      disabled={isViewPercentDisabled}
+                      aria-label="Зменшити відсоток перегляду на 10"
+                    >
+                      -
+                    </button>
+                    <input
+                      className={`${styles.input} ${styles.percentValueInput}`}
+                      type="text"
+                      inputMode="numeric"
+                      value={viewPercentInput}
+                      onChange={(event) => handleViewPercentInputChange(event.target.value)}
+                      onBlur={handleViewPercentInputBlur}
+                      disabled={isViewPercentDisabled}
+                      aria-label="Відсоток перегляду від 0 до 100 з кроком 10"
+                    />
+                    <button
+                      type="button"
+                      className={styles.ratingStepButton}
+                      onClick={increaseViewPercent}
+                      disabled={isViewPercentDisabled}
+                      aria-label="Збільшити відсоток перегляду на 10"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <span className={styles.percentLabel}>%</span>
                 </div>
-                <span className={styles.percentLabel}>%</span>
               </div>
 
               <label

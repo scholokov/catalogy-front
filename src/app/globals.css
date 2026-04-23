@@ -30,6 +30,19 @@
   --color-accent-warm-hover: #FFCF57;
   --color-accent-warm-contrast: #111827;
 
+  /* ===== Scrollbars ===== */
+  --scrollbar-thumb: color-mix(in srgb, var(--color-accent) 55%, var(--color-border) 45%);
+  --scrollbar-thumb-hover: color-mix(
+    in srgb,
+    var(--color-accent) 72%,
+    var(--color-border-strong) 28%
+  );
+  --scrollbar-track: color-mix(
+    in srgb,
+    var(--color-surface-subtle) 82%,
+    var(--color-surface-elevated) 18%
+  );
+
   /* ===== Focus ring ===== */
   --color-focus: #7AA5FF;
 
@@ -133,6 +146,40 @@ body {
   font-weight: var(--font-weight-regular);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
 }
 
 .appShell {

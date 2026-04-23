@@ -267,7 +267,6 @@
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 24px;
-  padding-bottom: 104px;
 }
 
 .posterBlock {
@@ -604,6 +603,7 @@
   min-height: 96px;
   resize: none;
   overflow-y: auto;
+  font-size: var(--font-size-sm);
 }
 
 .multiSelect {
@@ -720,6 +720,13 @@
   gap: 8px;
 }
 
+.checkboxRowTrailing {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .checkbox {
   appearance: none;
   width: 22px;
@@ -767,19 +774,16 @@
   justify-content: flex-end;
   flex-wrap: wrap;
   align-items: center;
-}
-
-.footer {
   position: sticky;
-  bottom: -24px;
+  bottom: calc(-24px - var(--safe-area-bottom));
   z-index: 2;
   margin-right: -24px;
   margin-left: -24px;
-  padding: 16px 24px 24px;
+  padding: 16px 24px calc(24px + var(--safe-area-bottom));
   background: var(--color-surface-elevated);
 }
 
-.footer::before {
+.actions::before {
   content: "";
   position: absolute;
   top: -22px;
@@ -792,6 +796,11 @@
     rgba(16, 26, 51, 0) 0%,
     var(--color-surface-elevated) 100%
   );
+}
+
+.footer {
+  display: grid;
+  gap: 12px;
 }
 
 .actionsGroup {
@@ -878,7 +887,6 @@
 
   .content {
     grid-template-columns: 1fr;
-    padding-bottom: 96px;
   }
 
   .posterBlock {
