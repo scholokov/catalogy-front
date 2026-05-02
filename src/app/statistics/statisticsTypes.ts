@@ -89,3 +89,84 @@ export type GlobalSummary = {
   recommendationReadiness: RecommendationReadiness;
   defaultScope: string | null;
 };
+
+export type FilmMediaType = "movie" | "tv";
+
+export type FilmScopeStats = {
+  mediaType: FilmMediaType;
+  label: string;
+  totalTitles: number;
+  ratedTitles: number;
+  engagedTitles: number;
+  watchedTitles: number;
+  completedTitles: number;
+  partialTitles: number;
+  plannedTitles: number;
+  addedLast30Days: number;
+  maturityStatus: ScopeMaturityStatus;
+  recommendationEligible: boolean;
+  averageRating: number | null;
+  topLikedGenres: RankedEntry[];
+  topDislikedGenres: RankedEntry[];
+  topDroppedGenres: RankedEntry[];
+  topLikedDirectors: RankedEntry[];
+  topDislikedDirectors: RankedEntry[];
+  topDroppedDirectors: RankedEntry[];
+  topLikedWriters: RankedEntry[];
+  topDislikedWriters: RankedEntry[];
+  topDroppedWriters: RankedEntry[];
+  topLikedActors: RankedEntry[];
+  topDislikedActors: RankedEntry[];
+  topDroppedActors: RankedEntry[];
+  monthlyEntries: MonthlyEntry[];
+};
+
+export type FilmSummary = {
+  totalTitles: number;
+  watchedTitles: number;
+  completedTitles: number;
+  partialTitles: number;
+  plannedTitles: number;
+  addedLast30Days: number;
+  averageRating: number | null;
+};
+
+export type FilmStatisticsExportRow = {
+  title: string;
+  director: string | null;
+  viewPercent: number;
+  rating: number | null;
+  viewedAt: string | null;
+};
+
+export type FilmStatisticsPayload = {
+  exportRows: FilmStatisticsExportRow[];
+  summary: FilmSummary;
+  scopeEntries: FilmScopeStats[];
+};
+
+export type GameStatisticsExportRow = {
+  title: string;
+  platforms: string[];
+  viewPercent: number;
+  rating: number | null;
+  viewedAt: string | null;
+};
+
+export type GameStatisticsPayload = {
+  exportRows: GameStatisticsExportRow[];
+  summary: GlobalSummary;
+  scopeEntries: ScopeBreakdownEntry[];
+  interpretation: ProfileInterpretation;
+};
+
+export type StatisticsSnapshotState = {
+  isStale: boolean;
+  builtAt: string | null;
+  invalidatedAt: string | null;
+};
+
+export type StatisticsSnapshotResponse<T> = {
+  data: T;
+  snapshot: StatisticsSnapshotState;
+};
