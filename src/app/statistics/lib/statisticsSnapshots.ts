@@ -180,7 +180,7 @@ export async function refreshStatisticsSnapshotIfNeeded(
   const supabaseAdmin = getSupabaseAdmin();
   const { data, error } = await supabaseAdmin
     .from("statistics_snapshots")
-    .select("is_stale, last_rebuild_started_at")
+    .select("is_stale, last_rebuild_started_at, last_invalidated_at")
     .eq("user_id", userId)
     .eq("media_kind", mediaKind)
     .maybeSingle();

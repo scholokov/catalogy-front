@@ -124,6 +124,9 @@ execute function public.mark_statistics_snapshots_dirty_on_user_views_change();
 
 alter table public.statistics_snapshots enable row level security;
 
+drop policy if exists "Users can read own statistics snapshots"
+on public.statistics_snapshots;
+
 create policy "Users can read own statistics snapshots"
 on public.statistics_snapshots
 for select
