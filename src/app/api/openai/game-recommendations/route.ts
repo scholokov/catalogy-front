@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { getOpenAiRecommendationModel } from "@/lib/openai/models";
 import { buildGameRecommendationProfileContext } from "@/lib/recommendations/profileAnalysisContext";
 import {
+  buildRecommendationFailureMessage,
+  filterRecommendationsWithStats,
+  type RecommendationAttemptDiagnostics,
+} from "@/lib/recommendations/diagnostics";
+import {
   buildGameLlmRecoContextText,
   buildKnownTitlesForGamesLlm,
   type GameLlmExportRow,
@@ -39,6 +44,24 @@ type GameRecommendationProfileAnalysis = {
 };
 
 const OPENAI_MODEL = getOpenAiRecommendationModel();
+const DEFAULT_REQUESTED_COUNT = 6;
+const DEFAULT_OUTPUT_COUNT = 6;
+const DEFAULT_MINIMUM_RECOMMENDATION_COUNT = 4;
+
+const normalizePositiveInt = (
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const normalized = Math.trunc(value);
+  if (normalized < min) return min;
+  if (normalized > max) return max;
+  return normalized;
+};
 
 const buildPrompt = (
   context: string,
@@ -196,6 +219,7 @@ const parseRecommendations = (text: string): ParsedRecommendation[] => {
               return collected.join(" ").replace(/^Why it fits:\s*/i, "").trim();
             })()
           : "";
+      if (!whyText) return null;
 
       return {
         title: stripMarkdown(titleMatch[1].trim()),
@@ -206,25 +230,6 @@ const parseRecommendations = (text: string): ParsedRecommendation[] => {
       };
     })
     .filter((entry): entry is ParsedRecommendation => Boolean(entry));
-};
-
-const filterRecommendations = (
-  recommendations: ParsedRecommendation[],
-  knownTitles: Set<string>,
-) => {
-  const seen = new Set<string>();
-  return recommendations.filter((entry) => {
-    const normalizedTitle = normalizeTitle(entry.title);
-    const normalizedWithYear = normalizeTitle(`${entry.title} (${entry.year})`);
-    if (knownTitles.has(normalizedTitle) || knownTitles.has(normalizedWithYear)) {
-      return false;
-    }
-    if (seen.has(normalizedTitle)) {
-      return false;
-    }
-    seen.add(normalizedTitle);
-    return true;
-  });
 };
 
 const callOpenAi = async (
@@ -269,10 +274,14 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       rows?: GameLlmExportRow[];
       knownTitleRows?: GameLlmExportRow[];
+      additionalKnownTitles?: string[];
       scopeLabel?: string;
       userWishes?: string;
       profileAnalysis?: GameRecommendationProfileAnalysis;
       debugPreview?: boolean;
+      requestedCount?: number;
+      outputCount?: number;
+      minimumRecommendationCount?: number;
     };
     const rows = Array.isArray(body.rows) ? body.rows : [];
     const knownTitleRows =
@@ -292,7 +301,26 @@ export async function POST(request: Request) {
       .filter(Boolean)
       .join("\n\n");
     const knownTitles = buildKnownTitleSet(knownTitleRows);
-    const prompt = buildPrompt(context, 4, body.scopeLabel, body.userWishes);
+    (Array.isArray(body.additionalKnownTitles) ? body.additionalKnownTitles : [])
+      .filter((value) => value.trim().length > 0)
+      .forEach((title) => {
+        knownTitles.add(normalizeTitle(title));
+      });
+    const requestedCount = normalizePositiveInt(body.requestedCount, DEFAULT_REQUESTED_COUNT, 1, 20);
+    const outputCount = normalizePositiveInt(
+      body.outputCount,
+      Math.min(DEFAULT_OUTPUT_COUNT, requestedCount),
+      1,
+      requestedCount,
+    );
+    const minimumRecommendationCount = normalizePositiveInt(
+      body.minimumRecommendationCount,
+      Math.min(DEFAULT_MINIMUM_RECOMMENDATION_COUNT, outputCount),
+      1,
+      outputCount,
+    );
+    const prompt = buildPrompt(context, requestedCount, body.scopeLabel, body.userWishes);
+    const diagnostics: RecommendationAttemptDiagnostics[] = [];
 
     if (body.debugPreview && process.env.NODE_ENV !== "production") {
       return NextResponse.json({
@@ -300,18 +328,31 @@ export async function POST(request: Request) {
       });
     }
 
-    const firstResponse = await callOpenAi(context, 4, () => prompt);
-    const firstFiltered = filterRecommendations(parseRecommendations(firstResponse), knownTitles);
+    const firstResponse = await callOpenAi(context, requestedCount, () => prompt);
+    const firstParsed = parseRecommendations(firstResponse);
+    const firstResult = filterRecommendationsWithStats(firstParsed, knownTitles, normalizeTitle);
+    diagnostics.push({
+      label: "Спроба 1 (базовий prompt)",
+      requestedCount,
+      ...firstResult.stats,
+    });
 
-    let finalRecommendations = firstFiltered;
+    let finalRecommendations = firstResult.recommendations;
 
-    if (finalRecommendations.length < 3) {
-      const secondResponse = await callOpenAi(context, 6, (nextContext, requestedCount) =>
+    if (finalRecommendations.length < minimumRecommendationCount) {
+      const secondRequestedCount = Math.min(requestedCount + 4, 20);
+      const secondResponse = await callOpenAi(context, secondRequestedCount, (nextContext, requestedCount) =>
         buildRetryPrompt(nextContext, requestedCount, body.scopeLabel, body.userWishes),
       );
-      const secondFiltered = filterRecommendations(parseRecommendations(secondResponse), knownTitles);
-      const merged = [...firstFiltered];
-      secondFiltered.forEach((entry) => {
+      const secondParsed = parseRecommendations(secondResponse);
+      const secondResult = filterRecommendationsWithStats(secondParsed, knownTitles, normalizeTitle);
+      diagnostics.push({
+        label: "Спроба 2 (retry prompt)",
+        requestedCount: secondRequestedCount,
+        ...secondResult.stats,
+      });
+      const merged = [...firstResult.recommendations];
+      secondResult.recommendations.forEach((entry) => {
         if (!merged.some((existing) => normalizeTitle(existing.title) === normalizeTitle(entry.title))) {
           merged.push(entry);
         }
@@ -319,13 +360,20 @@ export async function POST(request: Request) {
       finalRecommendations = merged;
     }
 
-    if (finalRecommendations.length < 3) {
-      const thirdResponse = await callOpenAi(context, 8, (nextContext, requestedCount) =>
+    if (finalRecommendations.length < minimumRecommendationCount) {
+      const thirdRequestedCount = Math.min(requestedCount + 8, 24);
+      const thirdResponse = await callOpenAi(context, thirdRequestedCount, (nextContext, requestedCount) =>
         buildRetryPrompt(nextContext, requestedCount, body.scopeLabel, body.userWishes),
       );
-      const thirdFiltered = filterRecommendations(parseRecommendations(thirdResponse), knownTitles);
+      const thirdParsed = parseRecommendations(thirdResponse);
+      const thirdResult = filterRecommendationsWithStats(thirdParsed, knownTitles, normalizeTitle);
+      diagnostics.push({
+        label: "Спроба 3 (retry prompt, розширена вибірка)",
+        requestedCount: thirdRequestedCount,
+        ...thirdResult.stats,
+      });
       const merged = [...finalRecommendations];
-      thirdFiltered.forEach((entry) => {
+      thirdResult.recommendations.forEach((entry) => {
         if (!merged.some((existing) => normalizeTitle(existing.title) === normalizeTitle(entry.title))) {
           merged.push(entry);
         }
@@ -333,7 +381,7 @@ export async function POST(request: Request) {
       finalRecommendations = merged;
     }
 
-    const outputRecommendations = finalRecommendations.slice(0, 3);
+    const outputRecommendations = finalRecommendations.slice(0, outputCount);
     const message =
       outputRecommendations.length > 0
         ? outputRecommendations
@@ -342,7 +390,7 @@ export async function POST(request: Request) {
                 `${index + 1}. ${entry.title} (${entry.year}) — type: ${entry.type}\nWhy it fits: ${entry.why}`,
             )
             .join("\n\n")
-        : "Не вдалося підібрати рекомендації. Спробуйте ще раз — модель повернула або вже відомі тайтли, або нестабільний формат відповіді.";
+        : buildRecommendationFailureMessage(diagnostics);
 
     return NextResponse.json({
       message,

@@ -16,6 +16,8 @@ type RecommendationRequestModalProps = {
   emptyMessage: string;
   isLoading: boolean;
   isSubmitting: boolean;
+  statusMessage?: string;
+  statusTone?: "info" | "error";
   canPreviewPrompt?: boolean;
   isPreviewingPrompt?: boolean;
   promptPreview?: string;
@@ -34,6 +36,8 @@ export default function RecommendationRequestModal({
   emptyMessage,
   isLoading,
   isSubmitting,
+  statusMessage,
+  statusTone = "info",
   canPreviewPrompt = false,
   isPreviewingPrompt = false,
   promptPreview,
@@ -139,6 +143,14 @@ export default function RecommendationRequestModal({
         </div>
 
         {error ? <p className={styles.error}>{error}</p> : null}
+        {statusMessage ? (
+          <p
+            className={statusTone === "error" ? styles.statusError : styles.status}
+            aria-live="polite"
+          >
+            {statusMessage}
+          </p>
+        ) : null}
         {promptPreview ? (
           <div className={styles.previewPanel}>
             <span className={styles.previewLabel}>Prompt preview</span>

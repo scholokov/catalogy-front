@@ -1,10 +1,11 @@
-const CACHE_NAME = "catalogy-pwa-v4";
+const CACHE_NAME = "catalogy-pwa-v5";
 const CORE_ASSETS = ["/", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS)),
   );
+  self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
@@ -15,6 +16,7 @@ self.addEventListener("activate", (event) => {
       ),
     ),
   );
+  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {

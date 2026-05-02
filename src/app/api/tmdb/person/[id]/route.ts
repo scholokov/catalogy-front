@@ -62,10 +62,24 @@ export async function GET(
   }
 
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
-  const [response, englishResponse] = await Promise.all([
-    fetch(detailUrl.toString(), { headers }),
-    fetch(englishDetailUrl.toString(), { headers }),
-  ]);
+  let response: Response;
+
+  try {
+    response = await fetch(detailUrl.toString(), { headers });
+  } catch (error) {
+    console.error("[api/tmdb/person] primary fetch failed", {
+      id,
+      error:
+        error instanceof Error
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack,
+            }
+          : error,
+    });
+    return NextResponse.json({ error: "TMDB fetch failed." }, { status: 502 });
+  }
 
   const data = (await response.json()) as
     | TmdbPersonDetail
@@ -84,9 +98,19 @@ export async function GET(
   }
 
   const detail = data as TmdbPersonDetail;
-  const englishData = englishResponse.ok
-    ? ((await englishResponse.json()) as TmdbPersonDetail)
-    : null;
+  let englishData: TmdbPersonDetail | null = null;
+  try {
+    const englishResponse = await fetch(englishDetailUrl.toString(), { headers });
+    if (englishResponse.ok) {
+      englishData = (await englishResponse.json()) as TmdbPersonDetail;
+    }
+  } catch (error) {
+    console.warn("[api/tmdb/person] english fallback fetch failed", {
+      id,
+      error: error instanceof Error ? error.message : error,
+    });
+  }
+
   const imageUrls = (detail.images?.profiles ?? [])
     .map((image) =>
       image.file_path ? `https://image.tmdb.org/t/p/w780${image.file_path}` : "",

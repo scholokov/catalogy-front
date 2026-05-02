@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "import:games:csv:dry": "node scripts/import-games-csv.js --mode dry-run",
     "import:games:csv:apply": "node scripts/import-games-csv.js --mode apply"
   },
@@ -14,7 +16,7 @@
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.94.1",
     "@tanstack/react-virtual": "^3.13.18",
-    "next": "16.1.6",
+    "next": "^16.2.3",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-range": "^1.10.0"
@@ -24,7 +26,8 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.1.6",
-    "typescript": "^5"
+    "eslint-config-next": "^16.2.3",
+    "typescript": "^5",
+    "vitest": "^4.1.5"
   }
 }

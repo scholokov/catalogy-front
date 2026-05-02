@@ -114,6 +114,21 @@
   color: var(--color-danger);
 }
 
+.status,
+.statusError {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  white-space: pre-line;
+}
+
+.status {
+  color: var(--color-text-secondary);
+}
+
+.statusError {
+  color: var(--color-danger);
+}
+
 .previewPanel {
   display: grid;
   gap: 8px;

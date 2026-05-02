@@ -152,6 +152,52 @@ type AiRecommendation = {
   raw: string;
 };
 
+type FilmRecommendationResolutionResult =
+  | {
+      status: "resolved";
+      item: FilmResult;
+    }
+  | {
+      status: "search_no_results";
+    }
+  | {
+      status: "all_matches_already_known";
+    };
+
+const buildFilmRecommendationOpenFailureMessage = (
+  routeMessage: string | undefined,
+  counts: {
+    searchNoResults: number;
+    alreadyKnownOrDuplicate: number;
+  },
+) => {
+  if (counts.alreadyKnownOrDuplicate > 0 && counts.searchNoResults === 0) {
+    return "Всі запропоновані рекомендації вже наявні у колекції.";
+  }
+
+  const details = [
+    counts.searchNoResults > 0
+      ? `TMDB не знайшов збігів для ${counts.searchNoResults} кандидат(ів)`
+      : null,
+    counts.alreadyKnownOrDuplicate > 0
+      ? `${counts.alreadyKnownOrDuplicate} кандидат(ів) відсіяно локально, бо вони вже є в колекції або дублюють наявні записи`
+      : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return [
+    routeMessage || "Модель запропонувала кандидати, але не вдалося відкрити жодну картку.",
+    details.length > 0 ? `Проблеми на етапі відкриття: ${details.join("; ")}.` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+type FilmRecommendationApiResponse = {
+  message?: string;
+  error?: string;
+  recommendations?: AiRecommendation[];
+};
+
 const FILM_VIEW_SELECT =
   "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, shishka_fit_label, shishka_fit_reason, shishka_fit_profile_analyzed_at, shishka_fit_scope_value, items:items!inner (id, title, title_uk, title_en, title_original, description, genres, director, actors, poster_url, external_id, film_media_type, imdb_rating, trailers, year, type)";
 
@@ -473,7 +519,7 @@ export default function FilmsManager({
     MAX_YEAR,
   ]);
   const [message, setMessage] = useState("");
-  const [, setRecommendationMessage] = useState("");
+  const [recommendationMessage, setRecommendationMessage] = useState("");
   const [recommendationPromptPreview, setRecommendationPromptPreview] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
@@ -1869,10 +1915,10 @@ export default function FilmsManager({
   const resolveRecommendedFilm = async (
     recommendation: AiRecommendation,
     requestedMediaType: "movie" | "tv",
-  ) => {
+  ): Promise<FilmRecommendationResolutionResult> => {
     const searchResults = await handleTmdbSearch({ query: recommendation.title });
     if (searchResults.length === 0) {
-      return null;
+      return { status: "search_no_results" };
     }
 
     const normalizedTitle = normalizeComparableTitle(recommendation.title);
@@ -1931,7 +1977,7 @@ export default function FilmsManager({
       },
     );
     if (!bestMatch) {
-      return null;
+      return { status: "all_matches_already_known" };
     }
 
     try {
@@ -1939,19 +1985,26 @@ export default function FilmsManager({
         `/api/tmdb/${bestMatch.id}?mediaType=${bestMatch.mediaType ?? preferredMediaType}`,
       );
       if (detailResponse.ok) {
-        return (await detailResponse.json()) as FilmResult;
+        return {
+          status: "resolved",
+          item: (await detailResponse.json()) as FilmResult,
+        };
       }
     } catch {
       // fallback to search result
     }
 
-    return bestMatch;
+    return {
+      status: "resolved",
+      item: bestMatch,
+    };
   };
   const handlePreviewRecommendationPrompt = async (
     mediaType: "movie" | "tv",
     wishes: string,
   ) => {
     setMessage("");
+    setRecommendationMessage("");
     setRecommendationPromptPreview("");
     setIsPreviewingRecommendationPrompt(true);
     try {
@@ -2009,66 +2062,160 @@ export default function FilmsManager({
         setMessage("Немає достатньо даних для цього формату.");
         return;
       }
-      const response = await fetch("/api/openai/film-recommendations", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          rows: scopedRows,
-          knownTitleRows: recommendationScopeState?.rows ?? scopedRows,
-          scopeLabel: mediaType === "tv" ? "Серіали" : "Кіно",
-          userWishes: wishes,
-          profileAnalysis:
-            recommendationScopeState?.profileAnalysisByScope[
-              mediaType === "tv" ? "Серіали" : "Кіно"
-            ],
-        }),
-      });
-      const data = (await response.json()) as {
-        message?: string;
-        error?: string;
-        recommendations?: AiRecommendation[];
+      const requestRecommendations = async (
+        requestedCount: number,
+        additionalKnownTitles: string[] = [],
+      ) => {
+        const response = await fetch("/api/openai/film-recommendations", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rows: scopedRows,
+            knownTitleRows: recommendationScopeState?.rows ?? scopedRows,
+            additionalKnownTitles,
+            requestedCount,
+            outputCount: requestedCount,
+            minimumRecommendationCount: Math.min(4, requestedCount),
+            scopeLabel: mediaType === "tv" ? "Серіали" : "Кіно",
+            userWishes: wishes,
+            profileAnalysis:
+              recommendationScopeState?.profileAnalysisByScope[
+                mediaType === "tv" ? "Серіали" : "Кіно"
+              ],
+          }),
+        });
+        const data = (await response.json()) as FilmRecommendationApiResponse;
+        return { response, data };
       };
-      if (!response.ok) {
-        setMessage(data.error || "Не вдалося згенерувати рекомендації.");
-        return;
-      }
 
-      const recommendations = data.recommendations ?? [];
-      if (recommendations.length === 0) {
-        setRecommendationMessage(data.message || "Не вдалося згенерувати рекомендації.");
-        return;
-      }
+      const tryOpenBatch = async (
+        recommendations: AiRecommendation[],
+      ): Promise<
+        | {
+            opened: true;
+          }
+        | {
+            opened: false;
+            counts: {
+              searchNoResults: number;
+              alreadyKnownOrDuplicate: number;
+            };
+          }
+      > => {
+        const resolutionCounts = {
+          searchNoResults: 0,
+          alreadyKnownOrDuplicate: 0,
+        };
 
-      for (const recommendation of recommendations) {
-        const recommendedFilm = await resolveRecommendedFilm(recommendation, mediaType);
-        if (!recommendedFilm) {
-          continue;
+        for (const recommendation of recommendations) {
+          const resolution = await resolveRecommendedFilm(recommendation, mediaType);
+          if (resolution.status === "search_no_results") {
+            resolutionCounts.searchNoResults += 1;
+            continue;
+          }
+          if (resolution.status === "all_matches_already_known") {
+            resolutionCounts.alreadyKnownOrDuplicate += 1;
+            continue;
+          }
+          const recommendedFilm = resolution.item;
+
+          openSelectedFilmDraft(recommendedFilm, {
+            recommendationComment: recommendation.why,
+            recommendationScopeValue: getFilmScopeValue(recommendedFilm.mediaType),
+            recommendationFitAssessment: null,
+            closeSearch: false,
+          });
+          setRecommendationScopeState(null);
+          setRecommendationMessage(
+            `${recommendation.title} (${recommendation.year})\nWhy it fits: ${recommendation.why}`,
+          );
+          showSnackbar("Рекомендацію відкрито");
+          return { opened: true };
         }
 
-        openSelectedFilmDraft(recommendedFilm, {
-          recommendationComment: recommendation.why,
-          recommendationScopeValue: getFilmScopeValue(recommendedFilm.mediaType),
-          recommendationFitAssessment: null,
-          closeSearch: false,
-        });
-        setRecommendationScopeState(null);
-        setRecommendationMessage(
-          `${recommendation.title} (${recommendation.year})\nWhy it fits: ${recommendation.why}`,
-        );
-        showSnackbar("Рекомендацію відкрито");
+        return {
+          opened: false,
+          counts: resolutionCounts,
+        };
+      };
+
+      const firstBatch = await requestRecommendations(6);
+      if (!firstBatch.response.ok) {
+        const nextMessage = firstBatch.data.error || "Не вдалося згенерувати рекомендації.";
+        setRecommendationMessage(nextMessage);
+        showSnackbar("Не вдалося згенерувати рекомендації");
         return;
+      }
+
+      const firstRecommendations = firstBatch.data.recommendations ?? [];
+      if (firstRecommendations.length === 0) {
+        setRecommendationMessage(
+          firstBatch.data.message || "Не вдалося згенерувати рекомендації для цього формату.",
+        );
+        showSnackbar("Рекомендацій не знайдено");
+        return;
+      }
+
+      const firstOpenResult = await tryOpenBatch(firstRecommendations);
+      if (firstOpenResult.opened) {
+        return;
+      }
+
+      const shouldRequestWiderBatch =
+        firstOpenResult.counts.alreadyKnownOrDuplicate === firstRecommendations.length
+        && firstOpenResult.counts.searchNoResults === 0;
+
+      if (shouldRequestWiderBatch) {
+        const secondBatch = await requestRecommendations(
+          10,
+          firstRecommendations.map((recommendation) => recommendation.title),
+        );
+        if (secondBatch.response.ok) {
+          const secondRecommendations = secondBatch.data.recommendations ?? [];
+          if (secondRecommendations.length > 0) {
+            const secondOpenResult = await tryOpenBatch(secondRecommendations);
+            if (secondOpenResult.opened) {
+              return;
+            }
+
+            if (
+              secondOpenResult.counts.alreadyKnownOrDuplicate === secondRecommendations.length
+              && secondOpenResult.counts.searchNoResults === 0
+            ) {
+              setRecommendationMessage("Всі запропоновані рекомендації вже наявні у колекції.");
+              showSnackbar("Нових рекомендацій не знайдено");
+              return;
+            }
+
+            setRecommendationMessage(
+              buildFilmRecommendationOpenFailureMessage(
+                secondBatch.data.message,
+                secondOpenResult.counts,
+              ),
+            );
+            showSnackbar("Не вдалося відкрити жодну рекомендацію");
+            return;
+          }
+
+          setRecommendationMessage(
+            secondBatch.data.message || "Всі запропоновані рекомендації вже наявні у колекції.",
+          );
+          showSnackbar("Нових рекомендацій не знайдено");
+          return;
+        }
       }
 
       setRecommendationMessage(
-        data.message || "Не вдалося відкрити картку рекомендації після перевірки на дублікати.",
+        buildFilmRecommendationOpenFailureMessage(firstBatch.data.message, firstOpenResult.counts),
       );
-      showSnackbar("Рекомендації готові");
+      showSnackbar("Не вдалося відкрити жодну рекомендацію");
     } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Не вдалося згенерувати рекомендації.",
-      );
+      const nextMessage =
+        error instanceof Error ? error.message : "Не вдалося згенерувати рекомендації.";
+      setRecommendationMessage(nextMessage);
+      showSnackbar("Не вдалося згенерувати рекомендації");
     } finally {
       setIsGeneratingRecommendations(false);
     }
@@ -4330,12 +4477,15 @@ export default function FilmsManager({
           emptyMessage={recommendationScopeState.emptyMessage}
           isLoading={isPreparingRecommendationRequest}
           isSubmitting={isGeneratingRecommendations}
+          statusMessage={recommendationMessage}
+          statusTone="error"
           canPreviewPrompt={isRecommendationPromptDebugEnabled && !readOnly}
           isPreviewingPrompt={isPreviewingRecommendationPrompt}
           promptPreview={recommendationPromptPreview}
           placeholder="щось легше, без жахів, не дуже довге"
           onClose={() => {
             setRecommendationScopeState(null);
+            setRecommendationMessage("");
             setRecommendationPromptPreview("");
           }}
           onPreviewPrompt={async (scopeValue, wishes) => {

@@ -1,3 +1,13 @@
+import {
+  buildProfileAnalysisPrompt,
+  COMMON_IMPORTANT_RULES_EXTRA,
+  buildCommonClusterSeparationRules,
+  buildCommonHigherLevelPatternRules,
+  buildCommonPracticalGuidance,
+  buildCommonTasteAxisValueRules,
+  type PromptBullet,
+} from "@/lib/profile-analysis/promptBuilder";
+import { FILM_PROFILE_ANALYSIS_JSON_SCHEMA } from "@/lib/profile-analysis/promptSchemas";
 import type { FilmProfilePromptRow } from "@/lib/profile-analysis/types";
 
 export type FilmPromptMediaType = "movie" | "tv";
@@ -64,127 +74,110 @@ export const buildFilmScopeProfilePrompt = (
     mediaType === "tv"
       ? "explicit user signal that the series was abandoned intentionally; treat this as a strong negative signal"
       : "explicit user signal that the movie was abandoned intentionally; treat this as a strong negative signal";
-
-  return `You are analyzing a user's ACTUAL taste profile for ${mediaLabel} based only on factual viewing data.
-
-Your task is to build a reliable taste-profile snapshot from the provided CSV dataset.
-
-Important rules:
-
-1. Use ONLY factual signals from the CSV.
-2. Do NOT infer preferences from planned, generated, suggested, or hypothetical titles.
-3. Do NOT invent psychological traits, emotional narratives, or poetic interpretations.
-4. Every important conclusion must be grounded in patterns visible in the data.
-5. If the data is insufficient, mixed, or contradictory, say so explicitly.
-6. Do NOT overclaim certainty.
-7. Focus only on patterns that are useful later for recommendation quality.
-8. Do NOT infer a stable preference or aversion from a single title unless the signal is extremely strong and clearly supported by rating or dropped status.
-
-Interpretation rules for fields:
-
-- "title" = ${titleLabel}
-- "year" = release year
-- "creator" = ${creatorLabel}
-- "genres" = genre labels
-- "actors_top" = main cast; this is a weak supporting signal, weaker than genres, dropped status, and rating
-- "dropped" = ${droppedLabel}
-- "rating" = user's personal rating on a 1 to 5 scale, where 5 is highest and 1 is lowest; half-points are allowed
-
-Interpretation priorities:
-
-- rating is the strongest direct preference signal
-- dropped=true is a strong negative signal
-- genres help identify repeated affinity and aversion patterns
-- creator is usually a secondary signal, but repeated creator-level matches across multiple titles may indicate a meaningful authorship preference
-- actors_top is a weak supporting signal only
-- absence of a value in any field is NOT a signal by itself
-
-Important behavioral rules:
-
-- Do not treat a title as liked only because it was not dropped
-- Do not treat a title as disliked only because rating is moderate
-- Ratings around 3.0-3.5 should usually be treated as mixed, moderate, or context-dependent signals unless reinforced by broader patterns
-- Distinguish strong likes, moderate likes, neutral or mixed cases, and strong dislikes
-- Pay attention to repeated patterns across highly rated titles and separately across dropped or low-rated titles
-- If the dataset contains conflicting signals, reflect that in the output
-- Do not merely restate genres; infer meaningful but grounded viewing preferences
-- Avoid niche, handcrafted, or overly personalized labels unless they are strongly supported by multiple titles
-- Only include actor-related observations if repeated actor-related evidence is clearly present across multiple titles
-- Identify repeated positive and negative creator-level signals when they are supported by multiple titles
-- If a creator-level pattern is strong and clearly supported by the data, reflect it explicitly in both the user-facing and system-facing output
-- Do not mention creator-level affinity if it is based on only one title or weak evidence
-- Do not produce fake precision
-
-Return ONLY valid JSON with exactly this structure:
-
-{
-  "user_profile_uk": {
-    "summary": "Short user-facing Ukrainian summary of the taste profile. 3-5 sentences. Clear, natural, not poetic.",
-    "likes": [
-      "3 to 6 concise Ukrainian bullets about what usually works well for the user"
+  const higherLevelPatternRules: PromptBullet[] = buildCommonHigherLevelPatternRules({
+    splitExamples: [
+      "authored vs generic",
+      "grounded vs franchise-heavy",
+      "tense/practical vs glossy/spectacle-first",
+      "concept-led vs formulaic",
+      "classic/older vs modern weaker equivalents",
+      "specific sub-type inside a broad genre",
     ],
-    "dislikes": [
-      "3 to 6 concise Ukrainian bullets about what usually works worse for the user"
+    latentClusterExamples: [
+      "franchise-like or sequel-like behavior when obvious from titles",
+      "adaptation-like groups when clearly visible from titles",
+      "local, regional, or national film clusters when clearly visible from titles or creators",
+      "era or decade tendencies",
+      "narrower tone, style, or content-mode clusters that cut across broad genres",
     ],
-    "watching_patterns": [
-      "2 to 5 concise Ukrainian bullets about observable viewing patterns"
-    ],
-    "strong_author_signals": [
-      "2 to 5 concise Ukrainian bullets about strong creator or director matches, only if clearly supported"
-    ],
-    "confidence_label_uk": "Низька | Середня | Висока",
-    "confidence_reason_uk": "Short Ukrainian explanation of profile reliability based on data volume and consistency"
-  },
-  "system_profile_en": {
-    "profile_summary": "Compact English summary suitable for reuse in future recommendation prompts",
-    "core_preferences": [
-      "Short English points"
-    ],
-    "negative_patterns": [
-      "Short English points"
-    ],
-    "taste_axes": [
-      {
-        "axis": "Name of preference axis in English",
-        "value": "low | medium | high",
-        "evidence": ["Title A", "Title B"]
-      }
-    ],
-    "strong_creator_affinities": [
-      "Creator or director name with a short English note, only if clearly supported by multiple titles"
-    ],
-    "creator_signals": [
-      "Short English observations only if supported by data"
-    ],
-    "actor_signals": [
-      "Short English observations only if clearly supported by repeated evidence across multiple titles"
-    ],
-    "representative_likes": ["Title A", "Title B", "Title C"],
-    "representative_dislikes": ["Title X", "Title Y", "Title Z"],
-    "contradictions": [
-      "Short English notes about mixed or conflicting signals"
-    ],
-    "confidence": {
-      "label": "low | medium | high",
-      "reason": "Short English explanation"
-    },
-    "evidence": {
-      "positive_titles": ["Title A", "Title B"],
-      "negative_titles": ["Title X", "Title Y"],
-      "mixed_titles": ["Title M", "Title N"]
-    }
-  }
-}
+    uncertainGroupingRule:
+      "Do not force franchise membership or adaptation grouping when title evidence is uncertain",
+  });
 
-Additional output constraints:
+  const clusterSeparationRules: PromptBullet[] = buildCommonClusterSeparationRules({
+    exampleClusters:
+      "superhero films, video-game adaptations, franchise sci-fi, legacy sequels, monster or creature films, and IP-driven adventure films",
+    adaptationMergeTargets:
+      "superhero, sci-fi, or franchise-blockbuster patterns",
+  });
 
-- The Ukrainian layer is for direct UI display.
-- The English layer is for system reuse in later recommendation prompts.
-- Keep the English layer compact and reusable.
-- Do not add any fields outside the required JSON.
-- Do not wrap the JSON in markdown.
-- Do not output any commentary before or after the JSON.
+  const tasteAxisValueRules: PromptBullet[] = buildCommonTasteAxisValueRules({
+    preferredAxisNames: [
+      "Horror selectivity",
+      "Franchise/IP selectivity",
+      "Comedy polarity",
+      "Action selectivity",
+      "Creator-mode selectivity",
+    ],
+    avoidAxisNames: [
+      "Franchise/IP affinity",
+      "Franchise/IP tolerance",
+      "Comedy affinity",
+      "Action preference",
+    ],
+    explanationTargets: '"contradictions", "negative_patterns", or "core_preferences"',
+  });
 
-CSV data:
-${csvData}`;
+  const practicalGuidance: PromptBullet[] = buildCommonPracticalGuidance({
+    selectiveGenreLine:
+      'If a broad genre is selective, explain the selectivity instead of stopping at "the user is selective in this genre"',
+    mixedSignalLine:
+      "If a creator signal is mixed, try to identify whether the user responds to a specific mode of that creator's work rather than to the creator in general",
+  });
+
+  return buildProfileAnalysisPrompt({
+    introduction: `You are analyzing a user's ACTUAL taste profile for ${mediaLabel} based only on factual viewing data.`,
+    importantRulesExtra: [
+      "Your job is not only to summarize explicit fields such as genres and creators, but also to detect repeated latent taste patterns that emerge across multiple titles with similar rating or dropped behavior.",
+      ...COMMON_IMPORTANT_RULES_EXTRA.slice(1),
+    ],
+    interpretationRules: [
+      `"title" = ${titleLabel}`,
+      '"year" = release year',
+      `"creator" = ${creatorLabel}`,
+      '"genres" = genre labels',
+      '"actors_top" = main cast; this is a weak supporting signal, weaker than genres, dropped status, and rating',
+      `"dropped" = ${droppedLabel}`,
+      '"rating" = user\'s personal rating on a 1 to 5 scale, where 5 is highest and 1 is lowest; half-points are allowed',
+    ],
+    interpretationPriorities: [
+      "rating is the strongest direct preference signal",
+      "dropped=true is a strong negative signal",
+      "genres help identify repeated affinity and aversion patterns, but broad genres are often too coarse to explain taste on their own",
+      "creator is usually a secondary signal, but repeated creator-level matches across multiple titles may indicate a meaningful authorship preference",
+      "actors_top is a weak supporting signal only",
+      "absence of a value in any field is NOT a signal by itself",
+    ],
+    behavioralRulesExtra: [
+      "Only include actor-related observations if repeated actor-related evidence is clearly present across multiple titles AND is genuinely useful for recommendation quality",
+      "Identify repeated positive and negative creator-level signals when they are supported by multiple titles",
+      "If a creator-level pattern is strong and clearly supported by the data, reflect it explicitly in both the user-facing and system-facing output",
+      "Do not mention creator-level affinity if it is based on only one title or weak evidence",
+      "If a creator is not a stable overall affinity but shows a clear positive mode, include this as a selective creator-mode signal rather than omitting it",
+      "A creator may work in one recurring mode but fail in another",
+      "Do not flatten mixed creators into a simple positive or negative signal",
+      "If a creator works only in a specific mode, describe that mode clearly",
+      "Example pattern: a director may be positive for grounded professional or revenge action but not for all action titles",
+      "Do not let selective creator-mode or actor-in-context signals displace stronger stable creator or cluster signals",
+      "If a creator has many strong positive ratings and no or very few negative exceptions, keep them as a primary strong signal",
+      "Selective creator-mode signals should supplement the core profile, not replace it",
+      "Do not label a creator as negative if they have several strong positive titles and several weak or dropped titles",
+      "In that case, describe the creator as mixed or selective and identify which mode works and which mode fails",
+      "Actor signals must remain secondary",
+      "Do not describe actor presence as a standalone preference unless the evidence is extremely strong and repeated across different contexts",
+      "If an actor repeatedly works inside a specific successful content mode, mention this as an actor-in-context pattern",
+      "Actor-in-context patterns should explain the context, not just the actor name",
+      "Example pattern: an actor may be a positive supporting signal in crime or action thrillers, but not a general reason to recommend unrelated titles",
+      "Actor signals must not override genre, cluster, creator-mode, rating, or dropped evidence",
+    ],
+    higherLevelPatternRules,
+    clusterSeparationRules,
+    tasteAxisValueRules,
+    practicalGuidance,
+    jsonStructure: FILM_PROFILE_ANALYSIS_JSON_SCHEMA,
+    additionalOutputConstraints: [
+      "If a higher-level pattern is important, express it through summary, likes, dislikes, watching_patterns, taste_axes, contradictions, or creator_signals as appropriate",
+    ],
+    csvData,
+  });
 };

@@ -46,6 +46,16 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    console.error("[api/statistics/games] GET failed", {
+      error:
+        error instanceof Error
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack,
+            }
+          : error,
+    });
     return NextResponse.json(
       {
         error:

@@ -137,6 +137,62 @@ type AiRecommendation = {
   raw: string;
 };
 
+type GameRecommendationResolutionResult =
+  | {
+      status: "resolved";
+      item: GameResult;
+    }
+  | {
+      status: "already_known_before_search";
+    }
+  | {
+      status: "search_no_results";
+    }
+  | {
+      status: "all_matches_already_known";
+    };
+
+const buildGameRecommendationOpenFailureMessage = (
+  routeMessage: string | undefined,
+  counts: {
+    alreadyKnownBeforeSearch: number;
+    searchNoResults: number;
+    allMatchesAlreadyKnown: number;
+  },
+) => {
+  if (
+    counts.searchNoResults === 0
+    && counts.alreadyKnownBeforeSearch + counts.allMatchesAlreadyKnown > 0
+  ) {
+    return "Всі запропоновані рекомендації вже наявні у колекції.";
+  }
+
+  const details = [
+    counts.alreadyKnownBeforeSearch > 0
+      ? `${counts.alreadyKnownBeforeSearch} кандидат(ів) відсіяно ще до пошуку, бо такі тайтли вже є в колекції`
+      : null,
+    counts.searchNoResults > 0
+      ? `RAWG/пошук не знайшов збігів для ${counts.searchNoResults} кандидат(ів)`
+      : null,
+    counts.allMatchesAlreadyKnown > 0
+      ? `${counts.allMatchesAlreadyKnown} кандидат(ів) відсіяно після пошуку, бо знайдені збіги вже є в колекції або дублюють наявні записи`
+      : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return [
+    routeMessage || "Модель запропонувала кандидати, але не вдалося відкрити жодну картку.",
+    details.length > 0 ? `Проблеми на етапі відкриття: ${details.join("; ")}.` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+type GameRecommendationApiResponse = {
+  message?: string;
+  error?: string;
+  recommendations?: AiRecommendation[];
+};
+
 const GAME_VIEW_SELECT =
   "id, created_at, updated_at, viewed_at, rating, comment, view_percent, recommend_similar, is_viewed, availability, platforms, shishka_fit_label, shishka_fit_reason, shishka_fit_profile_analyzed_at, shishka_fit_scope_value, items:items!inner (id, title, description, genres, poster_url, external_id, imdb_rating, trailers, year, type)";
 
@@ -418,7 +474,7 @@ export default function GamesManager({
     MAX_YEAR,
   ]);
   const [message, setMessage] = useState("");
-  const [, setRecommendationMessage] = useState("");
+  const [recommendationMessage, setRecommendationMessage] = useState("");
   const [recommendationPromptPreview, setRecommendationPromptPreview] = useState("");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [totalCount, setTotalCount] = useState(0);
@@ -1884,7 +1940,9 @@ export default function GamesManager({
     }
   };
 
-  const resolveRecommendedGame = async (recommendation: AiRecommendation) => {
+  const resolveRecommendedGame = async (
+    recommendation: AiRecommendation,
+  ): Promise<GameRecommendationResolutionResult> => {
     const normalizedRecommendationTitle = normalizeComparableTitle(recommendation.title);
     const normalizedRecommendationKey = recommendation.year
       ? `${normalizedRecommendationTitle}__${recommendation.year}`
@@ -1895,12 +1953,12 @@ export default function GamesManager({
       existingGameKeys.has(normalizedRecommendationKey) ||
       recommendationExistingGameKeys.has(normalizedRecommendationKey)
     ) {
-      return null;
+      return { status: "already_known_before_search" };
     }
 
     const searchResults = await handleGameSearch({ query: recommendation.title });
     if (searchResults.length === 0) {
-      return null;
+      return { status: "search_no_results" };
     }
 
     const normalizedTitle = normalizedRecommendationTitle;
@@ -1940,7 +1998,7 @@ export default function GamesManager({
       },
     );
     if (!bestMatch) {
-      return null;
+      return { status: "all_matches_already_known" };
     }
 
     try {
@@ -1965,21 +2023,27 @@ export default function GamesManager({
         }
 
         return {
-          ...bestMatch,
-          rating: typeof detail.rating === "number" ? detail.rating : bestMatch.rating,
-          ratingSource: detail.source ?? bestMatch.ratingSource,
-          released: detail.released?.trim() ? detail.released : bestMatch.released,
-          poster: detail.poster?.trim() ? detail.poster : bestMatch.poster,
-          genres: detail.genres?.trim() ? detail.genres : bestMatch.genres,
-          genreItems: detail.genreItems ?? bestMatch.genreItems,
-          trailers: detail.trailers ?? bestMatch.trailers,
-        } satisfies GameResult;
+          status: "resolved",
+          item: {
+            ...bestMatch,
+            rating: typeof detail.rating === "number" ? detail.rating : bestMatch.rating,
+            ratingSource: detail.source ?? bestMatch.ratingSource,
+            released: detail.released?.trim() ? detail.released : bestMatch.released,
+            poster: detail.poster?.trim() ? detail.poster : bestMatch.poster,
+            genres: detail.genres?.trim() ? detail.genres : bestMatch.genres,
+            genreItems: detail.genreItems ?? bestMatch.genreItems,
+            trailers: detail.trailers ?? bestMatch.trailers,
+          } satisfies GameResult,
+        };
       }
     } catch {
       // fallback to search result
     }
 
-    return bestMatch;
+    return {
+      status: "resolved",
+      item: bestMatch,
+    };
   };
 
   const handlePreviewRecommendationPrompt = async (
@@ -1987,6 +2051,7 @@ export default function GamesManager({
     wishes: string,
   ) => {
     setMessage("");
+    setRecommendationMessage("");
     setRecommendationPromptPreview("");
     setIsPreviewingRecommendationPrompt(true);
     try {
@@ -2460,57 +2525,160 @@ export default function GamesManager({
         return;
       }
 
-      const response = await fetch("/api/openai/game-recommendations", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          rows: scopedRows,
-          knownTitleRows: recommendationScopeState?.rows ?? scopedRows,
-          scopeLabel: platform,
-          userWishes: wishes,
-          profileAnalysis: recommendationScopeState?.profileAnalysisByScope[platform],
-        }),
-      });
-      const data = (await response.json()) as {
-        message?: string;
-        error?: string;
-        recommendations?: AiRecommendation[];
+      const requestRecommendations = async (
+        requestedCount: number,
+        additionalKnownTitles: string[] = [],
+      ) => {
+        const response = await fetch("/api/openai/game-recommendations", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rows: scopedRows,
+            knownTitleRows: recommendationScopeState?.rows ?? scopedRows,
+            additionalKnownTitles,
+            requestedCount,
+            outputCount: requestedCount,
+            minimumRecommendationCount: Math.min(4, requestedCount),
+            scopeLabel: platform,
+            userWishes: wishes,
+            profileAnalysis: recommendationScopeState?.profileAnalysisByScope[platform],
+          }),
+        });
+        const data = (await response.json()) as GameRecommendationApiResponse;
+        return { response, data };
       };
-      if (!response.ok) {
-        setMessage(data.error || "Не вдалося згенерувати рекомендації.");
-        return;
-      }
 
-      const recommendations = data.recommendations ?? [];
-      if (recommendations.length === 0) {
-        setMessage(data.message || "Не вдалося згенерувати рекомендації.");
-        return;
-      }
+      const tryOpenBatch = async (
+        recommendations: AiRecommendation[],
+      ): Promise<
+        | { opened: true }
+        | {
+            opened: false;
+            counts: {
+              alreadyKnownBeforeSearch: number;
+              searchNoResults: number;
+              allMatchesAlreadyKnown: number;
+            };
+          }
+      > => {
+        const resolutionCounts = {
+          alreadyKnownBeforeSearch: 0,
+          searchNoResults: 0,
+          allMatchesAlreadyKnown: 0,
+        };
 
-      for (const recommendation of recommendations) {
-        const recommendedGame = await resolveRecommendedGame(recommendation);
-        if (!recommendedGame) {
-          continue;
+        for (const recommendation of recommendations) {
+          const resolution = await resolveRecommendedGame(recommendation);
+          if (resolution.status === "already_known_before_search") {
+            resolutionCounts.alreadyKnownBeforeSearch += 1;
+            continue;
+          }
+          if (resolution.status === "search_no_results") {
+            resolutionCounts.searchNoResults += 1;
+            continue;
+          }
+          if (resolution.status === "all_matches_already_known") {
+            resolutionCounts.allMatchesAlreadyKnown += 1;
+            continue;
+          }
+          const recommendedGame = resolution.item;
+
+          openSelectedGameDraft(recommendedGame, {
+            recommendationComment: recommendation.why,
+            recommendationScopeValue: platform,
+            recommendationFitAssessment: null,
+            closeSearch: false,
+          });
+          setRecommendationScopeState(null);
+          showSnackbar("Рекомендацію відкрито");
+          return { opened: true };
         }
 
-        openSelectedGameDraft(recommendedGame, {
-          recommendationComment: recommendation.why,
-          recommendationScopeValue: platform,
-          recommendationFitAssessment: null,
-          closeSearch: false,
-        });
-        setRecommendationScopeState(null);
-        showSnackbar("Рекомендацію відкрито");
+        return {
+          opened: false,
+          counts: resolutionCounts,
+        };
+      };
+
+      const firstBatch = await requestRecommendations(6);
+      if (!firstBatch.response.ok) {
+        const nextMessage = firstBatch.data.error || "Не вдалося згенерувати рекомендації.";
+        setRecommendationMessage(nextMessage);
+        showSnackbar("Не вдалося згенерувати рекомендації");
         return;
       }
 
-      setMessage(
-        data.message || "Не вдалося відкрити картку рекомендації після перевірки на дублікати.",
+      const firstRecommendations = firstBatch.data.recommendations ?? [];
+      if (firstRecommendations.length === 0) {
+        setRecommendationMessage(firstBatch.data.message || "Не вдалося згенерувати рекомендації.");
+        showSnackbar("Рекомендацій не знайдено");
+        return;
+      }
+
+      const firstOpenResult = await tryOpenBatch(firstRecommendations);
+      if (firstOpenResult.opened) {
+        return;
+      }
+
+      const firstKnownOnlyCount =
+        firstOpenResult.counts.alreadyKnownBeforeSearch + firstOpenResult.counts.allMatchesAlreadyKnown;
+      const shouldRequestWiderBatch =
+        firstKnownOnlyCount === firstRecommendations.length && firstOpenResult.counts.searchNoResults === 0;
+
+      if (shouldRequestWiderBatch) {
+        const secondBatch = await requestRecommendations(
+          10,
+          firstRecommendations.map((recommendation) => recommendation.title),
+        );
+        if (secondBatch.response.ok) {
+          const secondRecommendations = secondBatch.data.recommendations ?? [];
+          if (secondRecommendations.length > 0) {
+            const secondOpenResult = await tryOpenBatch(secondRecommendations);
+            if (secondOpenResult.opened) {
+              return;
+            }
+
+            const secondKnownOnlyCount =
+              secondOpenResult.counts.alreadyKnownBeforeSearch
+              + secondOpenResult.counts.allMatchesAlreadyKnown;
+            if (
+              secondKnownOnlyCount === secondRecommendations.length
+              && secondOpenResult.counts.searchNoResults === 0
+            ) {
+              setRecommendationMessage("Всі запропоновані рекомендації вже наявні у колекції.");
+              showSnackbar("Нових рекомендацій не знайдено");
+              return;
+            }
+
+            setRecommendationMessage(
+              buildGameRecommendationOpenFailureMessage(
+                secondBatch.data.message,
+                secondOpenResult.counts,
+              ),
+            );
+            showSnackbar("Не вдалося відкрити жодну рекомендацію");
+            return;
+          }
+
+          setRecommendationMessage(
+            secondBatch.data.message || "Всі запропоновані рекомендації вже наявні у колекції.",
+          );
+          showSnackbar("Нових рекомендацій не знайдено");
+          return;
+        }
+      }
+
+      setRecommendationMessage(
+        buildGameRecommendationOpenFailureMessage(firstBatch.data.message, firstOpenResult.counts),
       );
+      showSnackbar("Не вдалося відкрити жодну рекомендацію");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Не вдалося згенерувати рекомендації.");
+      const nextMessage =
+        error instanceof Error ? error.message : "Не вдалося згенерувати рекомендації.";
+      setRecommendationMessage(nextMessage);
+      showSnackbar("Не вдалося згенерувати рекомендації");
     } finally {
       setIsGeneratingRecommendations(false);
     }
@@ -3971,11 +4139,17 @@ export default function GamesManager({
           emptyMessage={recommendationScopeState.emptyMessage}
           isLoading={isPreparingRecommendationRequest}
           isSubmitting={isGeneratingRecommendations}
+          statusMessage={recommendationMessage}
+          statusTone="error"
           canPreviewPrompt={isRecommendationPromptDebugEnabled}
           isPreviewingPrompt={isPreviewingRecommendationPrompt}
           promptPreview={recommendationPromptPreview}
           placeholder="щось легше, без жахів, не дуже довге"
-          onClose={() => setRecommendationScopeState(null)}
+          onClose={() => {
+            setRecommendationScopeState(null);
+            setRecommendationMessage("");
+            setRecommendationPromptPreview("");
+          }}
           onPreviewPrompt={async (scopeValue, wishes) => {
             await handlePreviewRecommendationPrompt(scopeValue, wishes);
           }}

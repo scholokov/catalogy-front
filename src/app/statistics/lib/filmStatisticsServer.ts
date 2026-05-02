@@ -6,6 +6,8 @@ import type {
   FilmStatisticsPayload,
 } from "../statisticsTypes";
 
+const RELATED_QUERY_BATCH_SIZE = 200;
+
 type RawStatsRow = {
   created_at: string | null;
   viewed_at: string | null;
@@ -132,10 +134,53 @@ const getDislikeWeight = (rating: number | null) => {
   return 0;
 };
 
+const buildCanonicalPersonHrefMap = (
+  rows: FilmStatsRow[],
+  roleKind: "actor" | "director" | "writer",
+) => {
+  const countsByLabel = new Map<string, Map<string, number>>();
+
+  rows.forEach((row) => {
+    row.people
+      .filter((person) => person.roleKind === roleKind)
+      .forEach((person) => {
+        const normalizedLabel = person.name.trim().toLocaleLowerCase("uk-UA");
+        if (!normalizedLabel || !person.tmdbPersonId.trim()) {
+          return;
+        }
+
+        const countsForLabel = countsByLabel.get(normalizedLabel) ?? new Map<string, number>();
+        countsForLabel.set(
+          person.tmdbPersonId,
+          (countsForLabel.get(person.tmdbPersonId) ?? 0) + 1,
+        );
+        countsByLabel.set(normalizedLabel, countsForLabel);
+      });
+  });
+
+  const hrefByLabel = new Map<string, string>();
+  countsByLabel.forEach((countsForLabel, normalizedLabel) => {
+    const preferredPersonId = Array.from(countsForLabel.entries())
+      .sort((left, right) => {
+        if (right[1] !== left[1]) {
+          return right[1] - left[1];
+        }
+        return left[0].localeCompare(right[0], "uk");
+      })[0]?.[0];
+
+    if (preferredPersonId) {
+      hrefByLabel.set(normalizedLabel, `/people/${preferredPersonId}`);
+    }
+  });
+
+  return hrefByLabel;
+};
+
 const buildRankedEntries = (
   rows: FilmStatsRow[],
   mode: "genres" | "directors" | "writers" | "actors",
   scoreMode: "viewed" | "liked" | "disliked",
+  canonicalPersonHrefByLabel?: Map<string, string>,
 ) => {
   type RankedAggregateEntry = {
     key: string;
@@ -178,7 +223,10 @@ const buildRankedEntries = (
           ).map((person) => ({
             key: person.tmdbPersonId,
             label: person.name,
-            href: `/people/${person.tmdbPersonId}`,
+            href:
+              canonicalPersonHrefByLabel?.get(
+                person.name.trim().toLocaleLowerCase("uk-UA"),
+              ) ?? `/people/${person.tmdbPersonId}`,
           }));
 
     if (entries.length === 0) {
@@ -289,6 +337,9 @@ const buildScopeStats = (rows: FilmStatsRow[], mediaType: FilmMediaType): FilmSc
   const ratedRows = rows.filter((row) => row.rating !== null);
   const addedLast30DaysRows = rows.filter((row) => isAddedInLast30Days(row, now));
   const engagedRows = rows.filter((row) => row.isViewed);
+  const canonicalActorHrefByLabel = buildCanonicalPersonHrefMap(rows, "actor");
+  const canonicalDirectorHrefByLabel = buildCanonicalPersonHrefMap(rows, "director");
+  const canonicalWriterHrefByLabel = buildCanonicalPersonHrefMap(rows, "writer");
   const maturityStatus = deriveScopeMaturityStatus({
     totalTitles: rows.length,
     ratedTitles: ratedRows.length,
@@ -316,15 +367,50 @@ const buildScopeStats = (rows: FilmStatsRow[], mediaType: FilmMediaType): FilmSc
     topLikedGenres: buildRankedEntries(rows, "genres", "liked"),
     topDislikedGenres: buildRankedEntries(rows, "genres", "disliked"),
     topDroppedGenres: buildRankedEntries(partialRows, "genres", "viewed"),
-    topLikedDirectors: buildRankedEntries(rows, "directors", "liked"),
-    topDislikedDirectors: buildRankedEntries(rows, "directors", "disliked"),
-    topDroppedDirectors: buildRankedEntries(partialRows, "directors", "viewed"),
-    topLikedWriters: buildRankedEntries(rows, "writers", "liked"),
-    topDislikedWriters: buildRankedEntries(rows, "writers", "disliked"),
-    topDroppedWriters: buildRankedEntries(partialRows, "writers", "viewed"),
-    topLikedActors: buildRankedEntries(rows, "actors", "liked"),
-    topDislikedActors: buildRankedEntries(rows, "actors", "disliked"),
-    topDroppedActors: buildRankedEntries(partialRows, "actors", "viewed"),
+    topLikedDirectors: buildRankedEntries(
+      rows,
+      "directors",
+      "liked",
+      canonicalDirectorHrefByLabel,
+    ),
+    topDislikedDirectors: buildRankedEntries(
+      rows,
+      "directors",
+      "disliked",
+      canonicalDirectorHrefByLabel,
+    ),
+    topDroppedDirectors: buildRankedEntries(
+      partialRows,
+      "directors",
+      "viewed",
+      canonicalDirectorHrefByLabel,
+    ),
+    topLikedWriters: buildRankedEntries(rows, "writers", "liked", canonicalWriterHrefByLabel),
+    topDislikedWriters: buildRankedEntries(
+      rows,
+      "writers",
+      "disliked",
+      canonicalWriterHrefByLabel,
+    ),
+    topDroppedWriters: buildRankedEntries(
+      partialRows,
+      "writers",
+      "viewed",
+      canonicalWriterHrefByLabel,
+    ),
+    topLikedActors: buildRankedEntries(rows, "actors", "liked", canonicalActorHrefByLabel),
+    topDislikedActors: buildRankedEntries(
+      rows,
+      "actors",
+      "disliked",
+      canonicalActorHrefByLabel,
+    ),
+    topDroppedActors: buildRankedEntries(
+      partialRows,
+      "actors",
+      "viewed",
+      canonicalActorHrefByLabel,
+    ),
     monthlyEntries: buildMonthlyEntries(rows.filter((row) => row.isViewed)),
   };
 };
@@ -376,29 +462,7 @@ export async function loadFilmStatistics(userId: string): Promise<FilmStatistics
     >();
 
     if (itemIds.length > 0) {
-      const [{ data: itemPeopleRows, error: itemPeopleError }, { data: itemGenreRows, error: itemGenresError }] =
-        await Promise.all([
-          supabaseAdmin
-            .from("item_people")
-            .select("item_id, role_kind, credit_order, people!inner(source_person_id, name)")
-            .in("item_id", itemIds)
-            .in("role_kind", ["actor", "director", "writer"])
-            .order("credit_order", { ascending: true }),
-          supabaseAdmin
-            .from("item_genres")
-            .select("item_id, genres!inner(source_genre_id, name)")
-            .in("item_id", itemIds),
-        ]);
-
-      if (itemPeopleError) {
-        throw new Error(itemPeopleError.message || "Не вдалося завантажити людей для статистики.");
-      }
-
-      if (itemGenresError) {
-        throw new Error(itemGenresError.message || "Не вдалося завантажити жанри для статистики.");
-      }
-
-      ((itemPeopleRows ?? []) as Array<{
+      const allItemPeopleRows: Array<{
         item_id?: string | null;
         role_kind?: "actor" | "director" | "writer" | null;
         credit_order?: number | null;
@@ -411,7 +475,77 @@ export async function loadFilmStatistics(userId: string): Promise<FilmStatistics
               source_person_id?: string | null;
               name?: string | null;
             }>;
-      }>).forEach((row) => {
+      }> = [];
+      const allItemGenreRows: Array<{
+        item_id?: string | null;
+        genres:
+          | {
+              source_genre_id?: string | null;
+              name?: string | null;
+            }
+          | Array<{
+              source_genre_id?: string | null;
+              name?: string | null;
+            }>;
+      }> = [];
+
+      for (let offset = 0; offset < itemIds.length; offset += RELATED_QUERY_BATCH_SIZE) {
+        const itemIdBatch = itemIds.slice(offset, offset + RELATED_QUERY_BATCH_SIZE);
+        const [{ data: itemPeopleRows, error: itemPeopleError }, { data: itemGenreRows, error: itemGenresError }] =
+          await Promise.all([
+            supabaseAdmin
+              .from("item_people")
+              .select("item_id, role_kind, credit_order, people!inner(source_person_id, name)")
+              .in("item_id", itemIdBatch)
+              .in("role_kind", ["actor", "director", "writer"])
+              .order("credit_order", { ascending: true }),
+            supabaseAdmin
+              .from("item_genres")
+              .select("item_id, genres!inner(source_genre_id, name)")
+              .in("item_id", itemIdBatch),
+          ]);
+
+        if (itemPeopleError) {
+          throw new Error(itemPeopleError.message || "Не вдалося завантажити людей для статистики.");
+        }
+
+        if (itemGenresError) {
+          throw new Error(itemGenresError.message || "Не вдалося завантажити жанри для статистики.");
+        }
+
+        allItemPeopleRows.push(
+          ...((itemPeopleRows ?? []) as Array<{
+            item_id?: string | null;
+            role_kind?: "actor" | "director" | "writer" | null;
+            credit_order?: number | null;
+            people:
+              | {
+                  source_person_id?: string | null;
+                  name?: string | null;
+                }
+              | Array<{
+                  source_person_id?: string | null;
+                  name?: string | null;
+                }>;
+          }>),
+        );
+        allItemGenreRows.push(
+          ...((itemGenreRows ?? []) as Array<{
+            item_id?: string | null;
+            genres:
+              | {
+                  source_genre_id?: string | null;
+                  name?: string | null;
+                }
+              | Array<{
+                  source_genre_id?: string | null;
+                  name?: string | null;
+                }>;
+          }>),
+        );
+      }
+
+      allItemPeopleRows.forEach((row) => {
         const itemId = row.item_id ?? null;
         const person = Array.isArray(row.people) ? row.people[0] : row.people;
 
@@ -436,18 +570,7 @@ export async function loadFilmStatistics(userId: string): Promise<FilmStatistics
         peopleByItemId.set(itemId, current);
       });
 
-      ((itemGenreRows ?? []) as Array<{
-        item_id?: string | null;
-        genres:
-          | {
-              source_genre_id?: string | null;
-              name?: string | null;
-            }
-          | Array<{
-              source_genre_id?: string | null;
-              name?: string | null;
-            }>;
-      }>).forEach((row) => {
+      allItemGenreRows.forEach((row) => {
         const itemId = row.item_id ?? null;
         const genre = Array.isArray(row.genres) ? row.genres[0] : row.genres;
 

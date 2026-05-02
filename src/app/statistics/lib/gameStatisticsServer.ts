@@ -8,6 +8,26 @@ import {
 } from "./scopeReadiness";
 import type { GameStatisticsPayload, GlobalSummary } from "../statisticsTypes";
 
+const RELATED_QUERY_BATCH_SIZE = 200;
+
+const logGameStatisticsDebug = (
+  stage: string,
+  details: Record<string, unknown>,
+  error: unknown,
+) => {
+  console.error("[statistics:games]", stage, {
+    ...details,
+    error:
+      error instanceof Error
+        ? {
+            name: error.name,
+            message: error.message,
+            stack: error.stack,
+          }
+        : error,
+  });
+};
+
 type RawStatsRow = {
   created_at: string | null;
   viewed_at: string | null;
@@ -190,6 +210,13 @@ export async function loadGameStatistics(userId: string): Promise<GameStatistics
     .in("source", ["rawg", "igdb"]);
 
   if (genreDictionaryError) {
+    logGameStatisticsDebug(
+      "load-genre-dictionary",
+      {
+        userId,
+      },
+      genreDictionaryError,
+    );
     throw new Error(
       genreDictionaryError.message || "Не вдалося завантажити словник жанрів ігор.",
     );
@@ -237,6 +264,15 @@ export async function loadGameStatistics(userId: string): Promise<GameStatistics
       .range(from, from + pageSize - 1);
 
     if (error) {
+      logGameStatisticsDebug(
+        "load-user-views",
+        {
+          userId,
+          from,
+          pageSize,
+        },
+        error,
+      );
       throw new Error(error.message || "Не вдалося завантажити статистику ігор.");
     }
 
@@ -258,16 +294,7 @@ export async function loadGameStatistics(userId: string): Promise<GameStatistics
     >();
 
     if (itemIds.length > 0) {
-      const { data: itemGenreRows, error: itemGenresError } = await supabaseAdmin
-        .from("item_genres")
-        .select("item_id, genres!inner(source, source_genre_id, name)")
-        .in("item_id", itemIds);
-
-      if (itemGenresError) {
-        throw new Error(itemGenresError.message || "Не вдалося завантажити жанри ігор.");
-      }
-
-      ((itemGenreRows ?? []) as Array<{
+      const allItemGenreRows: Array<{
         item_id?: string | null;
         genres:
           | {
@@ -280,7 +307,50 @@ export async function loadGameStatistics(userId: string): Promise<GameStatistics
               source_genre_id?: string | null;
               name?: string | null;
             }>;
-      }>).forEach((row) => {
+      }> = [];
+
+      for (let offset = 0; offset < itemIds.length; offset += RELATED_QUERY_BATCH_SIZE) {
+        const itemIdBatch = itemIds.slice(offset, offset + RELATED_QUERY_BATCH_SIZE);
+        const { data: itemGenreRows, error: itemGenresError } = await supabaseAdmin
+          .from("item_genres")
+          .select("item_id, genres!inner(source, source_genre_id, name)")
+          .in("item_id", itemIdBatch);
+
+        if (itemGenresError) {
+          logGameStatisticsDebug(
+            "load-item-genres",
+            {
+              userId,
+              from,
+              pageSize,
+              itemIdsCount: itemIds.length,
+              batchSize: itemIdBatch.length,
+              sampleItemIds: itemIdBatch.slice(0, 5),
+            },
+            itemGenresError,
+          );
+          throw new Error(itemGenresError.message || "Не вдалося завантажити жанри ігор.");
+        }
+
+        allItemGenreRows.push(
+          ...((itemGenreRows ?? []) as Array<{
+            item_id?: string | null;
+            genres:
+              | {
+                  source?: string | null;
+                  source_genre_id?: string | null;
+                  name?: string | null;
+                }
+              | Array<{
+                  source?: string | null;
+                  source_genre_id?: string | null;
+                  name?: string | null;
+                }>;
+          }>),
+        );
+      }
+
+      allItemGenreRows.forEach((row) => {
         const itemId = row.item_id ?? null;
         const genre = Array.isArray(row.genres) ? row.genres[0] : row.genres;
         if (

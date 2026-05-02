@@ -23,7 +23,7 @@ type PersonPreviewData = {
   filmography: Array<unknown>;
 };
 
-const previewCache = new Map<string, PersonPreviewData | null>();
+const previewCache = new Map<string, PersonPreviewData>();
 
 const getRoleBadge = (department: string) => {
   const normalized = department.trim().toLowerCase();
@@ -66,7 +66,13 @@ export default function PersonHoverLink({ personId, name }: PersonHoverLinkProps
   }, []);
 
   useEffect(() => {
-    if (!isOpen || previewCache.has(personId)) {
+    if (!isOpen) {
+      return;
+    }
+
+    const cachedPreview = previewCache.get(personId);
+    if (cachedPreview) {
+      setPreview(cachedPreview);
       return;
     }
 
@@ -75,10 +81,11 @@ export default function PersonHoverLink({ personId, name }: PersonHoverLinkProps
 
     void (async () => {
       try {
-        const response = await fetch(`/api/tmdb/person/${personId}`);
+        const response = await fetch(`/api/tmdb/person/${personId}`, {
+          cache: "no-store",
+        });
         if (!response.ok) {
           if (!isCancelled) {
-            previewCache.set(personId, null);
             setPreview(null);
           }
           return;
@@ -91,7 +98,6 @@ export default function PersonHoverLink({ personId, name }: PersonHoverLinkProps
         }
       } catch {
         if (!isCancelled) {
-          previewCache.set(personId, null);
           setPreview(null);
         }
       } finally {
