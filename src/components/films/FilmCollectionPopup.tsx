@@ -15,6 +15,7 @@ import {
   type FilmItemDraftInput,
   updateFilmView,
 } from "@/lib/films/collectionFlow";
+import { buildFilmServiceMenuAction } from "@/lib/collection/serviceSearchLinks";
 import {
   evaluateFilmWithProfile,
   getStoredFilmFitAssessment,
@@ -582,6 +583,7 @@ export default function FilmCollectionPopup({
         onClick: handleWatchTrailer,
         disabled: isTrailerLoading,
       }}
+      previewMenuAction={buildFilmServiceMenuAction(resolvedOriginalTitle, resolvedTitle)}
       submitLabel={mode === "edit" ? "Зберегти" : "Додати"}
       initialValues={
         mode === "edit" && existingView

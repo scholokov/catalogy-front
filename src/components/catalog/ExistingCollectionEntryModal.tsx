@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import CatalogModal from "@/components/catalog/CatalogModal";
+import type { PosterMenuAction } from "@/lib/collection/serviceSearchLinks";
 import type { ShishkaFitAssessment } from "@/lib/shishka/fitAssessment";
 
 type CatalogModalPayload = {
@@ -30,6 +31,7 @@ type ExistingCollectionEntryModalProps = {
     disabled?: boolean;
     icon?: ReactNode;
   };
+  previewMenuAction?: PosterMenuAction;
   extraActions?: ReactNode;
   initialValues: {
     viewedAt?: string;
@@ -61,6 +63,7 @@ export default function ExistingCollectionEntryModal({
   onClose,
   onAddToOwnCollection,
   previewAction,
+  previewMenuAction,
   extraActions,
   initialValues,
   availabilityOptions = [],
@@ -89,6 +92,7 @@ export default function ExistingCollectionEntryModal({
       onReadOnlyPrimaryAction={onAddToOwnCollection}
       readOnlyPrimarySuccessMessage={null}
       previewAction={previewAction}
+      previewMenuAction={previewMenuAction}
       extraActions={extraActions}
       onRefresh={readOnly ? undefined : onRefresh}
       onEvaluate={readOnly ? undefined : onEvaluate}

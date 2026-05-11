@@ -16,6 +16,10 @@ import {
   saveGameDraftToCollection,
 } from "@/lib/collection/draftSubmission";
 import {
+  buildFilmServiceMenuAction,
+  buildGameServiceMenuAction,
+} from "@/lib/collection/serviceSearchLinks";
+import {
   fetchFilmTrailers,
   fetchGameTrailers,
   selectPreferredTrailer,
@@ -643,6 +647,7 @@ export default function CollectionEntryHost({ request, onClose }: HostProps) {
                 }
               : undefined
           }
+          previewMenuAction={buildFilmServiceMenuAction(state.originalTitle, state.title)}
           onEvaluate={
             state.entryMode === "draft"
               ? (payload) =>
@@ -735,6 +740,7 @@ export default function CollectionEntryHost({ request, onClose }: HostProps) {
               }
             : undefined
         }
+        previewMenuAction={buildGameServiceMenuAction(state.title)}
         onAdd={async (payload) => {
           const result = await saveGameDraftToCollection({
             supabase,

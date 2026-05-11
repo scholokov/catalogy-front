@@ -44,6 +44,7 @@ import {
   COLLECTION_ENTRY_SAVED_EVENT,
   type CollectionEntrySavedEventDetail,
 } from "@/lib/collection/events";
+import { buildGameServiceMenuAction } from "@/lib/collection/serviceSearchLinks";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import {
   fetchGameTrailers,
@@ -4012,6 +4013,9 @@ export default function GamesManager({
             disabled: isTrailerLoading,
             icon: playIcon,
           }}
+          previewMenuAction={buildGameServiceMenuAction(
+            selectedView.items.title,
+          )}
           extraActions={
             readOnly ? null : (
               <button

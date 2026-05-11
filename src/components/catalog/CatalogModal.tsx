@@ -10,7 +10,9 @@ import {
   type CSSProperties,
 } from "react";
 import Image from "next/image";
+import { createPortal } from "react-dom";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
+import type { PosterMenuAction } from "@/lib/collection/serviceSearchLinks";
 import {
   stripShishkaAssessmentFromComment,
   type ShishkaFitAssessment,
@@ -58,6 +60,7 @@ type CatalogModalProps = {
     disabled?: boolean;
     icon?: React.ReactNode;
   };
+  previewMenuAction?: PosterMenuAction;
   fitTargetText?: string;
   initialValues?: {
     viewedAt?: string;
@@ -122,6 +125,7 @@ export default function CatalogModal({
   onPersistEvaluatedAssessment,
   extraActions,
   previewAction,
+  previewMenuAction,
   fitTargetText = "цей тайтл",
   initialValues,
   platformOptions = [],
@@ -185,16 +189,20 @@ export default function CatalogModal({
   const [isAvailabilityOpen, setIsAvailabilityOpen] = useState(false);
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
   const [isFitPopoverOpen, setIsFitPopoverOpen] = useState(false);
+  const [isPreviewMenuOpen, setIsPreviewMenuOpen] = useState(false);
   const [fitPopoverPlacement, setFitPopoverPlacement] = useState<FitPopoverPlacement>({
     horizontal: "left",
     vertical: "below",
   });
   const [fitPopoverStyle, setFitPopoverStyle] = useState<CSSProperties>({});
+  const [previewMenuStyle, setPreviewMenuStyle] = useState<CSSProperties>({});
   const platformsRef = useRef<HTMLDivElement | null>(null);
   const availabilityRef = useRef<HTMLDivElement | null>(null);
   const moreMenuRef = useRef<HTMLDivElement | null>(null);
   const fitPopoverRef = useRef<HTMLDivElement | null>(null);
   const fitPopoverCardRef = useRef<HTMLDivElement | null>(null);
+  const previewMenuRef = useRef<HTMLDivElement | null>(null);
+  const previewMenuCardRef = useRef<HTMLDivElement | null>(null);
   const handleAddRef = useRef<(() => Promise<void>) | null>(null);
   const copyTooltipTimeoutRef = useRef<number | null>(null);
   const [isTitleTooltipSuppressed, setIsTitleTooltipSuppressed] = useState(false);
@@ -289,7 +297,15 @@ export default function CatalogModal({
   }, []);
 
   useEffect(() => {
-    if (!isPlatformsOpen && !isAvailabilityOpen && !isMoreMenuOpen && !isFitPopoverOpen) return;
+    if (
+      !isPlatformsOpen &&
+      !isAvailabilityOpen &&
+      !isMoreMenuOpen &&
+      !isFitPopoverOpen &&
+      !isPreviewMenuOpen
+    ) {
+      return;
+    }
     const handleOutsideClick = (event: MouseEvent) => {
       if (
         platformsRef.current &&
@@ -315,10 +331,82 @@ export default function CatalogModal({
       ) {
         setIsFitPopoverOpen(false);
       }
+      const targetNode = event.target as Node;
+      const isPreviewTriggerClick = previewMenuRef.current?.contains(targetNode);
+      const isPreviewMenuClick = previewMenuCardRef.current?.contains(targetNode);
+      if (!isPreviewTriggerClick && !isPreviewMenuClick) {
+        setIsPreviewMenuOpen(false);
+      }
     };
     window.addEventListener("mousedown", handleOutsideClick);
     return () => window.removeEventListener("mousedown", handleOutsideClick);
-  }, [isAvailabilityOpen, isPlatformsOpen, isMoreMenuOpen, isFitPopoverOpen]);
+  }, [
+    isAvailabilityOpen,
+    isPlatformsOpen,
+    isMoreMenuOpen,
+    isFitPopoverOpen,
+    isPreviewMenuOpen,
+  ]);
+
+  useEffect(() => {
+    if (!previewMenuAction || previewMenuAction.items.length === 0) {
+      setIsPreviewMenuOpen(false);
+    }
+  }, [previewMenuAction]);
+
+  const updatePreviewMenuPlacement = useCallback(() => {
+    const triggerNode = previewMenuRef.current;
+    const menuNode = previewMenuCardRef.current;
+
+    if (!triggerNode || !menuNode) {
+      return;
+    }
+
+    const triggerRect = triggerNode.getBoundingClientRect();
+    const menuRect = menuNode.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const margin = 16;
+    const gap = 8;
+    const width = Math.min(Math.max(triggerRect.width, 220), viewportWidth - margin * 2);
+    const canOpenBelow = triggerRect.bottom + gap + menuRect.height <= viewportHeight - margin;
+    const top = canOpenBelow
+      ? triggerRect.bottom + gap
+      : Math.max(margin, triggerRect.top - menuRect.height - gap);
+    const left = Math.min(
+      Math.max(margin, triggerRect.right - width),
+      viewportWidth - margin - width,
+    );
+
+    setPreviewMenuStyle({
+      top: `${top}px`,
+      left: `${left}px`,
+      width: `${width}px`,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isPreviewMenuOpen) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      updatePreviewMenuPlacement();
+    });
+
+    const handleViewportChange = () => {
+      updatePreviewMenuPlacement();
+    };
+
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [isPreviewMenuOpen, updatePreviewMenuPlacement]);
 
   useEffect(() => {
     setActiveImageIndex(0);
@@ -815,6 +903,35 @@ export default function CatalogModal({
     }, 900);
   };
 
+  const previewMenuOverlay =
+    isPreviewMenuOpen && previewMenuAction
+      ? createPortal(
+          <div
+            ref={previewMenuCardRef}
+            className={styles.previewMenu}
+            style={previewMenuStyle}
+            role="menu"
+            onClick={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            {previewMenuAction.items.map((item) => (
+              <a
+                key={item.label}
+                href={item.href}
+                target="_blank"
+                rel="noreferrer"
+                className={styles.previewMenuItem}
+                role="menuitem"
+                onClick={() => setIsPreviewMenuOpen(false)}
+              >
+                {item.label}
+              </a>
+            ))}
+          </div>,
+          document.body,
+        )
+      : null;
+
   return (
     <div
       className={styles.overlay}
@@ -1008,18 +1125,63 @@ export default function CatalogModal({
                 </button>
               </>
             ) : null}
-            {previewAction ? (
-              <button
-                type="button"
-                className={styles.previewActionButton}
-                onClick={previewAction.onClick}
-                disabled={previewAction.disabled}
-              >
-                {previewAction.icon ? (
-                  <span className={styles.previewActionIcon}>{previewAction.icon}</span>
-                ) : null}
-                <span className={styles.previewActionLabel}>{previewAction.label}</span>
-              </button>
+            {previewAction || previewMenuAction ? (
+              previewAction && previewMenuAction ? (
+                <div className={styles.previewActionsRow}>
+                  <button
+                    type="button"
+                    className={styles.previewActionButton}
+                    onClick={previewAction.onClick}
+                    disabled={previewAction.disabled}
+                  >
+                    {previewAction.icon ? (
+                      <span className={styles.previewActionIcon}>{previewAction.icon}</span>
+                    ) : null}
+                    <span className={styles.previewActionLabel}>{previewAction.label}</span>
+                  </button>
+                  <div className={styles.previewMenuWrap} ref={previewMenuRef}>
+                    <button
+                      type="button"
+                      className={`${styles.previewMenuButton} ${
+                        isPreviewMenuOpen ? styles.previewMenuButtonOpen : ""
+                      }`}
+                      onClick={() => setIsPreviewMenuOpen((prev) => !prev)}
+                      aria-haspopup="menu"
+                      aria-expanded={isPreviewMenuOpen}
+                    >
+                      <span className={styles.previewActionLabel}>{previewMenuAction.label}</span>
+                      <span className={styles.previewMenuChevron}>▾</span>
+                    </button>
+                  </div>
+                </div>
+              ) : previewAction ? (
+                <button
+                  type="button"
+                  className={styles.previewActionButton}
+                  onClick={previewAction.onClick}
+                  disabled={previewAction.disabled}
+                >
+                  {previewAction.icon ? (
+                    <span className={styles.previewActionIcon}>{previewAction.icon}</span>
+                  ) : null}
+                  <span className={styles.previewActionLabel}>{previewAction.label}</span>
+                </button>
+              ) : (
+                <div className={styles.previewMenuWrap} ref={previewMenuRef}>
+                  <button
+                    type="button"
+                    className={`${styles.previewMenuButton} ${
+                      isPreviewMenuOpen ? styles.previewMenuButtonOpen : ""
+                    }`}
+                    onClick={() => setIsPreviewMenuOpen((prev) => !prev)}
+                    aria-haspopup="menu"
+                    aria-expanded={isPreviewMenuOpen}
+                  >
+                    <span className={styles.previewActionLabel}>{previewMenuAction.label}</span>
+                    <span className={styles.previewMenuChevron}>▾</span>
+                  </button>
+                </div>
+              )
             ) : null}
           </div>
           <div className={styles.details}>
@@ -1314,6 +1476,7 @@ export default function CatalogModal({
           </div>
         ) : null}
       </div>
+      {previewMenuOverlay}
     </div>
   );
 }

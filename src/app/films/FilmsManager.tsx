@@ -43,6 +43,7 @@ import {
   COLLECTION_ENTRY_SAVED_EVENT,
   type CollectionEntrySavedEventDetail,
 } from "@/lib/collection/events";
+import { buildFilmServiceMenuAction } from "@/lib/collection/serviceSearchLinks";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import {
   fetchFilmTrailers,
@@ -4351,6 +4352,10 @@ export default function FilmsManager({
             disabled: isTrailerLoading,
             icon: playIcon,
           }}
+          previewMenuAction={buildFilmServiceMenuAction(
+            selectedViewItemDraft?.title_original ?? selectedView.items.title_original,
+            selectedViewItemDraft?.title ?? selectedView.items.title,
+          )}
           extraActions={
             !readOnly ? (
               <button

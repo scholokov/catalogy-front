@@ -15,6 +15,7 @@ import CatalogLayout from "@/components/catalog/CatalogLayout";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import TrailerViewerModal from "@/components/films/TrailerViewerModal";
 import searchStyles from "@/components/catalog/CatalogSearch.module.css";
+import { buildGameServiceMenuAction } from "@/lib/collection/serviceSearchLinks";
 import { supabase } from "@/lib/supabase/client";
 import { buildGenreHref, type GenreSource } from "@/lib/genres/routes";
 import {
@@ -1049,6 +1050,7 @@ export default function GameGenreDetailPage({
               onClick: handleWatchSelectedGameTrailer,
               disabled: isTrailerLoading,
             }}
+            previewMenuAction={buildGameServiceMenuAction(activeGame.item.title)}
             onEvaluate={(payload) =>
               evaluateGameWithProfile(
                 {
