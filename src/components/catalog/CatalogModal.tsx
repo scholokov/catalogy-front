@@ -1177,7 +1177,7 @@ export default function CatalogModal({
                     aria-haspopup="menu"
                     aria-expanded={isPreviewMenuOpen}
                   >
-                    <span className={styles.previewActionLabel}>{previewMenuAction.label}</span>
+                    <span className={styles.previewActionLabel}>{previewMenuAction!.label}</span>
                     <span className={styles.previewMenuChevron}>▾</span>
                   </button>
                 </div>
