@@ -261,8 +261,6 @@ type Filters = {
   director: string;
   externalRatingRange: [number, number];
   personalRatingRange: [number, number];
-  favoriteAll: boolean;
-  recommendSimilarOnly: boolean;
   viewedDateFrom: string;
   viewedDateTo: string;
   sortBy: SortBy;
@@ -320,8 +318,6 @@ const DEFAULT_FILTERS: Filters = {
   director: "",
   externalRatingRange: [EXTERNAL_MIN, EXTERNAL_MAX],
   personalRatingRange: [PERSONAL_MIN, PERSONAL_MAX],
-  favoriteAll: true,
-  recommendSimilarOnly: false,
   viewedDateFrom: "",
   viewedDateTo: "",
   sortBy: "created_at",
@@ -407,8 +403,6 @@ const getFiltersRequestKey = (filters: Filters) =>
       filters.personalRatingRange[0],
       filters.personalRatingRange[1],
     ],
-    favoriteAll: filters.favoriteAll,
-    recommendSimilarOnly: filters.recommendSimilarOnly,
     viewedDateFrom: filters.viewedDateFrom,
     viewedDateTo: filters.viewedDateTo,
     sortBy: filters.sortBy,
@@ -655,6 +649,28 @@ export default function FilmsManager({
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
+
+  useEffect(() => {
+    if (showAvailability) return;
+    setPendingFilters((prev) =>
+      prev.availabilityAll && prev.availability.length === 0
+        ? prev
+        : {
+            ...prev,
+            availabilityAll: true,
+            availability: [],
+          },
+    );
+    setAppliedFilters((prev) =>
+      prev.availabilityAll && prev.availability.length === 0
+        ? prev
+        : {
+            ...prev,
+            availabilityAll: true,
+            availability: [],
+          },
+    );
+  }, [showAvailability]);
 
   useEffect(() => {
     logLazy("enabled");
@@ -1255,10 +1271,6 @@ export default function FilmsManager({
       query = query.in("availability", filters.availability);
     }
 
-    if (!filters.favoriteAll && filters.recommendSimilarOnly) {
-      query = query.eq("recommend_similar", true);
-    }
-
     const [minYear, maxYear] = yearBounds;
     const [fromYear, toYear] = clampRange(filters.yearRange, yearBounds);
     const isYearFilterActive = fromYear !== minYear || toYear !== maxYear;
@@ -1349,10 +1361,6 @@ export default function FilmsManager({
 
       if (!filters.availabilityAll && filters.availability.length > 0) {
         countQuery = countQuery.in("availability", filters.availability);
-      }
-
-      if (!filters.favoriteAll && filters.recommendSimilarOnly) {
-        countQuery = countQuery.eq("recommend_similar", true);
       }
 
       if (isExternalFilterActive) {
@@ -1496,7 +1504,6 @@ export default function FilmsManager({
           trimmedQuery ||
             effectiveViewed !== effectivePlanned ||
             !filters.availabilityAll ||
-            (!filters.favoriteAll && filters.recommendSimilarOnly) ||
             isYearFilterActive ||
             isExternalFilterActive ||
             isPersonalFilterActive ||
@@ -2233,7 +2240,6 @@ export default function FilmsManager({
     (appliedFilters.viewAll ? true : appliedFilters.viewed) !==
       (appliedFilters.viewAll ? true : appliedFilters.planned) ||
     !appliedFilters.availabilityAll ||
-    (!appliedFilters.favoriteAll && appliedFilters.recommendSimilarOnly) ||
     yearRangeFrom !== yearBounds[0] ||
     yearRangeTo !== yearBounds[1] ||
     appliedFilters.externalRatingRange[0] !== EXTERNAL_MIN ||
@@ -3927,50 +3933,52 @@ export default function FilmsManager({
                 />
               </label>
             </div>
-            <div className={styles.filtersGroup}>
-              <p className={styles.filtersGroupTitle}>Доступність</p>
-              <div className={styles.filtersControls}>
-                <label className={styles.filtersOption}>
-                  <input
-                    className={styles.filtersCheckbox}
-                    type="checkbox"
-                    checked={pendingFilters.availabilityAll}
-                    onChange={(event) =>
-                      setPendingFilters((prev) => ({
-                        ...prev,
-                        availabilityAll: event.target.checked,
-                      }))
-                    }
-                  />
-                  Все
-                </label>
-                {AVAILABILITY_OPTIONS.map((option) => (
-                  <label
-                    key={option}
-                    className={`${styles.filtersOption} ${
-                      pendingFilters.availabilityAll ? styles.filtersOptionDisabled : ""
-                    }`}
-                  >
+            {showAvailability ? (
+              <div className={styles.filtersGroup}>
+                <p className={styles.filtersGroupTitle}>Доступність</p>
+                <div className={styles.filtersControls}>
+                  <label className={styles.filtersOption}>
                     <input
                       className={styles.filtersCheckbox}
                       type="checkbox"
-                      checked={pendingFilters.availability.includes(option)}
-                      disabled={pendingFilters.availabilityAll}
+                      checked={pendingFilters.availabilityAll}
                       onChange={(event) =>
                         setPendingFilters((prev) => ({
                           ...prev,
-                          availabilityAll: false,
-                          availability: event.target.checked
-                            ? [...prev.availability, option]
-                            : prev.availability.filter((value) => value !== option),
+                          availabilityAll: event.target.checked,
                         }))
                       }
                     />
-                    {option}
+                    Все
                   </label>
-                ))}
+                  {AVAILABILITY_OPTIONS.map((option) => (
+                    <label
+                      key={option}
+                      className={`${styles.filtersOption} ${
+                        pendingFilters.availabilityAll ? styles.filtersOptionDisabled : ""
+                      }`}
+                    >
+                      <input
+                        className={styles.filtersCheckbox}
+                        type="checkbox"
+                        checked={pendingFilters.availability.includes(option)}
+                        disabled={pendingFilters.availabilityAll}
+                        onChange={(event) =>
+                          setPendingFilters((prev) => ({
+                            ...prev,
+                            availabilityAll: false,
+                            availability: event.target.checked
+                              ? [...prev.availability, option]
+                              : prev.availability.filter((value) => value !== option),
+                          }))
+                        }
+                      />
+                      {option}
+                    </label>
+                  ))}
+                </div>
               </div>
-            </div>
+            ) : null}
             <div className={styles.filtersGroup}>
               <p className={styles.filtersGroupTitle}>Перегляд</p>
               <div className={styles.filtersControls}>
@@ -4029,48 +4037,6 @@ export default function FilmsManager({
                     }
                   />
                   Заплановано
-                </label>
-              </div>
-            </div>
-            <div className={styles.filtersGroup}>
-              <p className={styles.filtersGroupTitle}>Улюблене</p>
-              <div className={styles.filtersControls}>
-                <label className={styles.filtersOption}>
-                  <input
-                    className={styles.filtersCheckbox}
-                    type="checkbox"
-                    checked={pendingFilters.favoriteAll}
-                    onChange={(event) =>
-                      setPendingFilters((prev) => ({
-                        ...prev,
-                        favoriteAll: event.target.checked,
-                        recommendSimilarOnly: event.target.checked
-                          ? false
-                          : prev.recommendSimilarOnly,
-                      }))
-                    }
-                  />
-                  Все
-                </label>
-                <label
-                  className={`${styles.filtersOption} ${
-                    pendingFilters.favoriteAll ? styles.filtersOptionDisabled : ""
-                  }`}
-                >
-                  <input
-                    className={styles.filtersCheckbox}
-                    type="checkbox"
-                    checked={pendingFilters.recommendSimilarOnly}
-                    disabled={pendingFilters.favoriteAll}
-                    onChange={(event) =>
-                      setPendingFilters((prev) => ({
-                        ...prev,
-                        favoriteAll: false,
-                        recommendSimilarOnly: event.target.checked,
-                      }))
-                    }
-                  />
-                  Рекомендувати подібне
                 </label>
               </div>
             </div>

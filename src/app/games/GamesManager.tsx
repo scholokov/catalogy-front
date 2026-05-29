@@ -226,17 +226,17 @@ type GamesManagerProps = {
 
 type Filters = {
   availabilityAll: boolean;
+  platformsAll: boolean;
   query: string;
   viewAll: boolean;
   viewed: boolean;
   planned: boolean;
   yearRange: [number, number];
   availability: string[];
+  platforms: string[];
   genres: string;
   externalRatingRange: [number, number];
   personalRatingRange: [number, number];
-  favoriteAll: boolean;
-  recommendSimilarOnly: boolean;
   viewedDateFrom: string;
   viewedDateTo: string;
   sortBy: SortBy;
@@ -276,17 +276,17 @@ const LOAD_AHEAD_PX = 700;
 const NICKNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
 const DEFAULT_FILTERS: Filters = {
   availabilityAll: true,
+  platformsAll: true,
   query: "",
   viewAll: true,
   viewed: true,
   planned: true,
   yearRange: [MIN_YEAR, MAX_YEAR],
   availability: [],
+  platforms: [],
   genres: "",
   externalRatingRange: [EXTERNAL_MIN, EXTERNAL_MAX],
   personalRatingRange: [PERSONAL_MIN, PERSONAL_MAX],
-  favoriteAll: true,
-  recommendSimilarOnly: false,
   viewedDateFrom: "",
   viewedDateTo: "",
   sortBy: "created_at",
@@ -347,12 +347,14 @@ const getDefaultSortDirection = (sortBy: SortBy): SortDirection => {
 const getFiltersRequestKey = (filters: Filters) =>
   JSON.stringify({
     availabilityAll: filters.availabilityAll,
+    platformsAll: filters.platformsAll,
     query: filters.query,
     viewAll: filters.viewAll,
     viewed: filters.viewed,
     planned: filters.planned,
     yearRange: [filters.yearRange[0], filters.yearRange[1]],
     availability: [...filters.availability],
+    platforms: [...filters.platforms],
     genres: filters.genres,
     externalRatingRange: [
       filters.externalRatingRange[0],
@@ -362,8 +364,6 @@ const getFiltersRequestKey = (filters: Filters) =>
       filters.personalRatingRange[0],
       filters.personalRatingRange[1],
     ],
-    favoriteAll: filters.favoriteAll,
-    recommendSimilarOnly: filters.recommendSimilarOnly,
     viewedDateFrom: filters.viewedDateFrom,
     viewedDateTo: filters.viewedDateTo,
     sortBy: filters.sortBy,
@@ -489,6 +489,7 @@ export default function GamesManager({
   const [page, setPage] = useState(0);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [isPlatformsFilterOpen, setIsPlatformsFilterOpen] = useState(false);
   const [isSortPopoverOpen, setIsSortPopoverOpen] = useState(false);
   const [isSortModalOpen, setIsSortModalOpen] = useState(false);
   const [sortModalState, setSortModalState] = useState({
@@ -528,6 +529,7 @@ export default function GamesManager({
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const observerFetchInFlightRef = useRef(false);
   const filtersQueryInputRef = useRef<HTMLInputElement | null>(null);
+  const platformsFilterRef = useRef<HTMLDivElement | null>(null);
   const sortMenuRef = useRef<HTMLDivElement | null>(null);
   const skipNextApplyRef = useRef(false);
   const initialLoadRunRef = useRef(false);
@@ -610,6 +612,52 @@ export default function GamesManager({
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
+
+  useEffect(() => {
+    if (showAvailability) return;
+    setPendingFilters((prev) =>
+      prev.availabilityAll && prev.availability.length === 0
+        ? prev
+        : {
+            ...prev,
+            availabilityAll: true,
+            availability: [],
+          },
+    );
+    setAppliedFilters((prev) =>
+      prev.availabilityAll && prev.availability.length === 0
+        ? prev
+        : {
+            ...prev,
+            availabilityAll: true,
+            availability: [],
+          },
+    );
+  }, [showAvailability]);
+
+  useEffect(() => {
+    const visiblePlatformsSet = new Set(visiblePlatforms);
+    const reconcilePlatforms = (prev: Filters): Filters => {
+      const nextPlatforms = prev.platforms.filter((platform) =>
+        visiblePlatformsSet.has(platform),
+      );
+      const shouldSelectAll = nextPlatforms.length === 0;
+      if (
+        prev.platformsAll === shouldSelectAll &&
+        prev.platforms.length === nextPlatforms.length &&
+        prev.platforms.every((platform, index) => platform === nextPlatforms[index])
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        platformsAll: shouldSelectAll,
+        platforms: nextPlatforms,
+      };
+    };
+    setPendingFilters(reconcilePlatforms);
+    setAppliedFilters(reconcilePlatforms);
+  }, [visiblePlatforms]);
 
   useEffect(() => {
     logLazy("enabled");
@@ -1137,8 +1185,8 @@ export default function GamesManager({
       query = query.in("availability", filters.availability);
     }
 
-    if (!filters.favoriteAll && filters.recommendSimilarOnly) {
-      query = query.eq("recommend_similar", true);
+    if (!filters.platformsAll && filters.platforms.length > 0) {
+      query = query.overlaps("platforms", filters.platforms);
     }
 
     const [minYear, maxYear] = yearBounds;
@@ -1233,8 +1281,8 @@ export default function GamesManager({
         countQuery = countQuery.in("availability", filters.availability);
       }
 
-      if (!filters.favoriteAll && filters.recommendSimilarOnly) {
-        countQuery = countQuery.eq("recommend_similar", true);
+      if (!filters.platformsAll && filters.platforms.length > 0) {
+        countQuery = countQuery.overlaps("platforms", filters.platforms);
       }
 
       if (isExternalFilterActive) {
@@ -1376,7 +1424,7 @@ export default function GamesManager({
           trimmedQuery ||
             effectiveViewed !== effectivePlanned ||
             !filters.availabilityAll ||
-            (!filters.favoriteAll && filters.recommendSimilarOnly) ||
+            !filters.platformsAll ||
             isYearFilterActive ||
             isExternalFilterActive ||
             isPersonalFilterActive ||
@@ -1557,6 +1605,10 @@ export default function GamesManager({
     () => new Set(visiblePlatforms),
     [visiblePlatforms],
   );
+  const selectedPlatformsFilterLabel =
+    pendingFilters.platforms.length > 0
+      ? pendingFilters.platforms.join(", ")
+      : "Оберіть платформи";
   const [yearRangeFrom, yearRangeTo] = clampRange(appliedFilters.yearRange, yearBounds);
   const isFiltersApplied =
     Boolean(
@@ -1568,7 +1620,7 @@ export default function GamesManager({
     (appliedFilters.viewAll ? true : appliedFilters.viewed) !==
       (appliedFilters.viewAll ? true : appliedFilters.planned) ||
     !appliedFilters.availabilityAll ||
-    (!appliedFilters.favoriteAll && appliedFilters.recommendSimilarOnly) ||
+    !appliedFilters.platformsAll ||
     yearRangeFrom !== yearBounds[0] ||
     yearRangeTo !== yearBounds[1] ||
     appliedFilters.externalRatingRange[0] !== EXTERNAL_MIN ||
@@ -1681,6 +1733,24 @@ export default function GamesManager({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isFiltersOpen]);
+
+  useEffect(() => {
+    if (isFiltersOpen) return;
+    setIsPlatformsFilterOpen(false);
+  }, [isFiltersOpen]);
+
+  useEffect(() => {
+    if (!isPlatformsFilterOpen) return;
+    const handleOutsideClick = (event: globalThis.MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (!platformsFilterRef.current?.contains(target)) {
+        setIsPlatformsFilterOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", handleOutsideClick);
+    return () => window.removeEventListener("mousedown", handleOutsideClick);
+  }, [isPlatformsFilterOpen]);
 
   const gameViewsByExternalId = useMemo(() => {
     const map = new Map<string, GameCollectionItem>();
@@ -3461,6 +3531,77 @@ export default function GamesManager({
                 }
               />
             </label>
+            {visiblePlatforms.length > 0 ? (
+              <div className={styles.filtersGroup}>
+                <p className={styles.filtersGroupTitle}>Платформи</p>
+                <div className={styles.filtersControls}>
+                  <label className={styles.filtersOption}>
+                    <input
+                      className={styles.filtersCheckbox}
+                      type="checkbox"
+                      checked={pendingFilters.platformsAll}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setPendingFilters((prev) => ({
+                          ...prev,
+                          platformsAll: checked,
+                          platforms: checked ? [] : prev.platforms,
+                        }));
+                        setIsPlatformsFilterOpen(!checked);
+                      }}
+                    />
+                    Обрати всі
+                  </label>
+                </div>
+                <div
+                  ref={platformsFilterRef}
+                  className={`${styles.filtersDropdownField} ${
+                    pendingFilters.platformsAll ? styles.filtersDropdownFieldDisabled : ""
+                  }`}
+                >
+                  <button
+                    type="button"
+                    className={styles.filtersDropdownTrigger}
+                    disabled={pendingFilters.platformsAll}
+                    onClick={() => setIsPlatformsFilterOpen((prev) => !prev)}
+                  >
+                    <span className={styles.filtersDropdownText}>
+                      {selectedPlatformsFilterLabel}
+                    </span>
+                    <span className={styles.filtersDropdownChevron}>▾</span>
+                  </button>
+                  {isPlatformsFilterOpen && !pendingFilters.platformsAll ? (
+                    <div className={styles.filtersDropdownMenu}>
+                      {visiblePlatforms.map((option) => {
+                        const checked = pendingFilters.platforms.includes(option);
+                        return (
+                          <label key={option} className={styles.filtersDropdownOption}>
+                            <input
+                              className={styles.filtersCheckbox}
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                setPendingFilters((prev) => {
+                                  const nextPlatforms = checked
+                                    ? prev.platforms.filter((value) => value !== option)
+                                    : [...prev.platforms, option];
+                                  return {
+                                    ...prev,
+                                    platforms: nextPlatforms,
+                                    platformsAll: nextPlatforms.length === 0,
+                                  };
+                                })
+                              }
+                            />
+                            {option}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             <div className={styles.rangeBlock}>
               <div className={styles.rangeHeader}>
                 <span>Рік</span>
@@ -3670,50 +3811,52 @@ export default function GamesManager({
                 />
               </label>
             </div>
-            <div className={styles.filtersGroup}>
-              <p className={styles.filtersGroupTitle}>Доступність</p>
-              <div className={styles.filtersControls}>
-                <label className={styles.filtersOption}>
-                  <input
-                    className={styles.filtersCheckbox}
-                    type="checkbox"
-                    checked={pendingFilters.availabilityAll}
-                    onChange={(event) =>
-                      setPendingFilters((prev) => ({
-                        ...prev,
-                        availabilityAll: event.target.checked,
-                      }))
-                    }
-                  />
-                  Все
-                </label>
-                {AVAILABILITY_OPTIONS.map((option) => (
-                  <label
-                    key={option}
-                    className={`${styles.filtersOption} ${
-                      pendingFilters.availabilityAll ? styles.filtersOptionDisabled : ""
-                    }`}
-                  >
+            {showAvailability ? (
+              <div className={styles.filtersGroup}>
+                <p className={styles.filtersGroupTitle}>Доступність</p>
+                <div className={styles.filtersControls}>
+                  <label className={styles.filtersOption}>
                     <input
                       className={styles.filtersCheckbox}
                       type="checkbox"
-                      checked={pendingFilters.availability.includes(option)}
-                      disabled={pendingFilters.availabilityAll}
+                      checked={pendingFilters.availabilityAll}
                       onChange={(event) =>
                         setPendingFilters((prev) => ({
                           ...prev,
-                          availabilityAll: false,
-                          availability: event.target.checked
-                            ? [...prev.availability, option]
-                            : prev.availability.filter((value) => value !== option),
+                          availabilityAll: event.target.checked,
                         }))
                       }
                     />
-                    {option}
+                    Все
                   </label>
-                ))}
+                  {AVAILABILITY_OPTIONS.map((option) => (
+                    <label
+                      key={option}
+                      className={`${styles.filtersOption} ${
+                        pendingFilters.availabilityAll ? styles.filtersOptionDisabled : ""
+                      }`}
+                    >
+                      <input
+                        className={styles.filtersCheckbox}
+                        type="checkbox"
+                        checked={pendingFilters.availability.includes(option)}
+                        disabled={pendingFilters.availabilityAll}
+                        onChange={(event) =>
+                          setPendingFilters((prev) => ({
+                            ...prev,
+                            availabilityAll: false,
+                            availability: event.target.checked
+                              ? [...prev.availability, option]
+                              : prev.availability.filter((value) => value !== option),
+                          }))
+                        }
+                      />
+                      {option}
+                    </label>
+                  ))}
+                </div>
               </div>
-            </div>
+            ) : null}
             <div className={styles.filtersGroup}>
               <p className={styles.filtersGroupTitle}>Перегляд</p>
               <div className={styles.filtersControls}>
@@ -3775,48 +3918,6 @@ export default function GamesManager({
                 </label>
               </div>
             </div>
-            <div className={styles.filtersGroup}>
-              <p className={styles.filtersGroupTitle}>Улюблене</p>
-              <div className={styles.filtersControls}>
-                <label className={styles.filtersOption}>
-                  <input
-                    className={styles.filtersCheckbox}
-                    type="checkbox"
-                    checked={pendingFilters.favoriteAll}
-                    onChange={(event) =>
-                      setPendingFilters((prev) => ({
-                        ...prev,
-                        favoriteAll: event.target.checked,
-                        recommendSimilarOnly: event.target.checked
-                          ? false
-                          : prev.recommendSimilarOnly,
-                      }))
-                    }
-                  />
-                  Все
-                </label>
-                <label
-                  className={`${styles.filtersOption} ${
-                    pendingFilters.favoriteAll ? styles.filtersOptionDisabled : ""
-                  }`}
-                >
-                  <input
-                    className={styles.filtersCheckbox}
-                    type="checkbox"
-                    checked={pendingFilters.recommendSimilarOnly}
-                    disabled={pendingFilters.favoriteAll}
-                    onChange={(event) =>
-                      setPendingFilters((prev) => ({
-                        ...prev,
-                        favoriteAll: false,
-                        recommendSimilarOnly: event.target.checked,
-                      }))
-                    }
-                  />
-                  Рекомендувати подібне
-                </label>
-              </div>
-            </div>
             <div className={styles.filtersActions}>
               <button
                 type="button"
@@ -3826,6 +3927,7 @@ export default function GamesManager({
                     ...DEFAULT_FILTERS,
                     yearRange: yearBounds,
                   };
+                  setIsPlatformsFilterOpen(false);
                   setPendingFilters(clearedFilters);
                   setAppliedFilters(clearedFilters);
                   setToolbarQueryDraft(clearedFilters.query);
