@@ -14,6 +14,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Range, getTrackBackground } from "react-range";
 import ExistingCollectionEntryModal from "@/components/catalog/ExistingCollectionEntryModal";
+import FilterMultiSelectDropdown from "@/components/catalog/FilterMultiSelectDropdown";
 import CatalogSearchModal, {
   type CatalogSearchRequest,
 } from "@/components/catalog/CatalogSearchModal";
@@ -50,6 +51,10 @@ import {
   COLLECTION_ENTRY_SAVED_EVENT,
   type CollectionEntrySavedEventDetail,
 } from "@/lib/collection/events";
+import {
+  loadAvailableGenresForCollection,
+  loadMatchingItemIdsForGenres,
+} from "@/lib/collection/genreFilter";
 import { buildFilmServiceMenuAction } from "@/lib/collection/serviceSearchLinks";
 import { useSnackbar } from "@/components/ui/SnackbarProvider";
 import {
@@ -258,13 +263,14 @@ type FilmsManagerProps = {
 
 type Filters = {
   availabilityAll: boolean;
+  genresAll: boolean;
   query: string;
   viewAll: boolean;
   viewed: boolean;
   planned: boolean;
   yearRange: [number, number];
   availability: string[];
-  genres: string;
+  genres: string[];
   director: string;
   externalRatingRange: [number, number];
   personalRatingRange: [number, number];
@@ -315,13 +321,14 @@ const getFilmExternalKey = (externalId?: string | null, mediaType?: string | nul
 };
 const DEFAULT_FILTERS: Filters = {
   availabilityAll: true,
+  genresAll: true,
   query: "",
   viewAll: true,
   viewed: true,
   planned: true,
   yearRange: [MIN_YEAR, MAX_YEAR],
   availability: [],
-  genres: "",
+  genres: [],
   director: "",
   externalRatingRange: [EXTERNAL_MIN, EXTERNAL_MAX],
   personalRatingRange: [PERSONAL_MIN, PERSONAL_MAX],
@@ -394,13 +401,14 @@ const getDefaultSortDirection = (sortBy: SortBy): SortDirection => {
 const getFiltersRequestKey = (filters: Filters) =>
   JSON.stringify({
     availabilityAll: filters.availabilityAll,
+    genresAll: filters.genresAll,
     query: filters.query,
     viewAll: filters.viewAll,
     viewed: filters.viewed,
     planned: filters.planned,
     yearRange: [filters.yearRange[0], filters.yearRange[1]],
     availability: [...filters.availability],
-    genres: filters.genres,
+    genres: [...filters.genres],
     director: filters.director,
     externalRatingRange: [
       filters.externalRatingRange[0],
@@ -557,6 +565,7 @@ export default function FilmsManager({
   const [selectedViewImageUrls, setSelectedViewImageUrls] = useState<string[] | null>(null);
   const [selectedViewPeople, setSelectedViewPeople] = useState<FilmNormalizedPerson[]>([]);
   const [selectedViewGenres, setSelectedViewGenres] = useState<FilmNormalizedGenre[]>([]);
+  const [availableGenres, setAvailableGenres] = useState<string[]>([]);
   const [selectedViewPreloadedPeople, setSelectedViewPreloadedPeople] = useState<{
     itemId: string;
     people: FilmNormalizedPerson[];
@@ -1243,6 +1252,34 @@ export default function FilmsManager({
     };
   }, [ownerUserId, readOnly]);
 
+  useEffect(() => {
+    if (readOnly && ownerUserId && friendAccessState !== "allowed") {
+      setAvailableGenres([]);
+      return;
+    }
+
+    let isCancelled = false;
+    void (async () => {
+      try {
+        const nextGenres = await loadAvailableGenresForCollection({
+          mediaKind: "film",
+          ownerUserId,
+        });
+        if (!isCancelled) {
+          setAvailableGenres(nextGenres);
+        }
+      } catch {
+        if (!isCancelled) {
+          setAvailableGenres([]);
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [friendAccessState, ownerUserId, readOnly]);
+
   const fetchPage = useCallback(async (pageIndex: number, filters: Filters) => {
     const requestKey = getFiltersRequestKey(filters);
     if (pageIndex === 0) {
@@ -1289,6 +1326,14 @@ export default function FilmsManager({
       return false;
     }
     const effectiveOwnerId = ownerUserId ?? user.id;
+    const selectedGenres = filters.genresAll ? [] : filters.genres;
+    const matchingGenreItemIds =
+      selectedGenres.length > 0
+        ? await loadMatchingItemIdsForGenres({
+            mediaKind: "film",
+            selectedGenres,
+          })
+        : null;
 
     const trimmedQuery = filters.query.trim();
     const effectiveViewed = filters.viewAll ? true : filters.viewed;
@@ -1338,6 +1383,26 @@ export default function FilmsManager({
       .select(FILM_VIEW_SELECT)
       .eq("user_id", effectiveOwnerId)
       .eq("items.type", "film");
+
+    if (matchingGenreItemIds && matchingGenreItemIds.length === 0) {
+      if (pageIndex === 0) {
+        setCollection([]);
+        collectionRef.current = [];
+        setHasMore(false);
+        setTotalCount(0);
+        setPage(0);
+        setMessage("Нічого не знайдено за вашим запитом");
+        setIsLoading(false);
+      } else {
+        setIsLoadingMore(false);
+      }
+      loadingPagesRef.current.delete(pageIndex);
+      return false;
+    }
+
+    if (matchingGenreItemIds && matchingGenreItemIds.length > 0) {
+      query = query.in("item_id", matchingGenreItemIds);
+    }
 
     if (effectiveViewed !== effectivePlanned) {
       query = query.eq("is_viewed", effectiveViewed);
@@ -1426,6 +1491,10 @@ export default function FilmsManager({
         .select("id, items:items!inner(id)", { count: "exact", head: true })
         .eq("user_id", effectiveOwnerId)
         .eq("items.type", "film");
+
+      if (matchingGenreItemIds && matchingGenreItemIds.length > 0) {
+        countQuery = countQuery.in("item_id", matchingGenreItemIds);
+      }
 
       if (effectiveViewed !== effectivePlanned) {
         countQuery = countQuery.eq("is_viewed", effectiveViewed);
@@ -1561,9 +1630,7 @@ export default function FilmsManager({
       const mergedCount = mergedCollection.length;
       collectionRef.current = mergedCollection;
       setCollection(mergedCollection);
-      const hasClientFilters = Boolean(
-        filters.genres.trim() || filters.director.trim(),
-      );
+      const hasClientFilters = Boolean(filters.director.trim());
       const hasTotalCount = totalCountRef.current > 0 && !hasClientFilters;
       const nextHasMore = needsClientSort
         ? false
@@ -1595,7 +1662,7 @@ export default function FilmsManager({
             isPersonalFilterActive ||
             filters.viewedDateFrom ||
             filters.viewedDateTo ||
-            filters.genres.trim() ||
+            (!filters.genresAll && filters.genres.length > 0) ||
             filters.director.trim(),
         );
         setMessage(
@@ -1892,24 +1959,15 @@ export default function FilmsManager({
   ]);
 
   const displayedCollection = useMemo(() => {
-    const genresFilter = appliedFilters.genres.trim().toLowerCase();
     const directorFilter = appliedFilters.director.trim().toLowerCase();
-    return (!genresFilter && !directorFilter)
+    return !directorFilter
       ? collection
       : collection.filter((item) => {
           const description = item.items.description?.toLowerCase() ?? "";
-          const genresText = item.items.genres?.toLowerCase() ?? "";
           const directorText = item.items.director?.toLowerCase() ?? "";
-          const genresMatches = genresFilter
-            ? genresText.includes(genresFilter) || description.includes(genresFilter)
-            : true;
-          const directorMatches = directorFilter
-            ? directorText.includes(directorFilter) || description.includes(directorFilter)
-            : true;
-
-          return genresMatches && directorMatches;
+          return directorText.includes(directorFilter) || description.includes(directorFilter);
         });
-  }, [appliedFilters.director, appliedFilters.genres, collection]);
+  }, [appliedFilters.director, collection]);
   const fetchAllFilmsLibraryForRecommendations = async () => {
     const {
       data: { user },
@@ -2412,7 +2470,6 @@ export default function FilmsManager({
   const isFiltersApplied =
     Boolean(
       appliedFilters.query.trim() ||
-        appliedFilters.genres.trim() ||
         appliedFilters.director.trim() ||
         appliedFilters.viewedDateFrom ||
         appliedFilters.viewedDateTo,
@@ -2420,6 +2477,7 @@ export default function FilmsManager({
     (appliedFilters.viewAll ? true : appliedFilters.viewed) !==
       (appliedFilters.viewAll ? true : appliedFilters.planned) ||
     !appliedFilters.availabilityAll ||
+    (!appliedFilters.genresAll && appliedFilters.genres.length > 0) ||
     yearRangeFrom !== yearBounds[0] ||
     yearRangeTo !== yearBounds[1] ||
     appliedFilters.externalRatingRange[0] !== EXTERNAL_MIN ||
@@ -2515,13 +2573,12 @@ export default function FilmsManager({
 
   useEffect(() => {
     const hasClientFilters = Boolean(
-      appliedFilters.genres.trim() || appliedFilters.director.trim(),
+      appliedFilters.director.trim(),
     );
     const countToShow = hasClientFilters ? displayedCollection.length : totalCount;
     onCountChange?.(countToShow);
   }, [
     appliedFilters.director,
-    appliedFilters.genres,
     displayedCollection.length,
     onCountChange,
     totalCount,
@@ -3876,20 +3933,20 @@ export default function FilmsManager({
                 }
               />
             </label>
-            <label className={styles.filtersField}>
-              Жанри
-              <input
-                className={styles.filtersInput}
-                value={pendingFilters.genres}
-                placeholder="Напр. Drama"
-                onChange={(event) =>
-                  setPendingFilters((prev) => ({
-                    ...prev,
-                    genres: event.target.value,
-                  }))
-                }
-              />
-            </label>
+            <FilterMultiSelectDropdown
+              title="Жанри"
+              options={availableGenres}
+              selectedValues={pendingFilters.genres}
+              allSelected={pendingFilters.genresAll}
+              emptyLabel="Оберіть жанри"
+              onChange={({ selectedValues, allSelected }) =>
+                setPendingFilters((prev) => ({
+                  ...prev,
+                  genres: selectedValues,
+                  genresAll: allSelected,
+                }))
+              }
+            />
             <label className={styles.filtersField}>
               Режисер
               <input

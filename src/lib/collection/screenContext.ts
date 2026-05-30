@@ -1,6 +1,6 @@
 "use client";
 
-export const CATALOG_SCREEN_SNAPSHOT_VERSION = 1;
+export const CATALOG_SCREEN_SNAPSHOT_VERSION = 2;
 
 const CATALOG_SCREEN_STORAGE_KEY_PREFIX = "catalog-screen-context:";
 
