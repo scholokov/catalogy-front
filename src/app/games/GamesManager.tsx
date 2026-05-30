@@ -4074,7 +4074,7 @@ export default function GamesManager({
                       }))
                     }
                   />
-                  Заплановано
+                  Не переглянуто
                 </label>
               </div>
             </div>

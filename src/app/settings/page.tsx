@@ -579,7 +579,7 @@ export default function SettingsPage() {
               >
                 <option value="">-</option>
                 <option value="viewed">Переглянуто</option>
-                <option value="planned">Заплановано</option>
+                <option value="planned">Не переглянуто</option>
               </select>
             </label>
           </section>
@@ -674,7 +674,7 @@ export default function SettingsPage() {
               >
                 <option value="">-</option>
                 <option value="viewed">Переглянуто</option>
-                <option value="planned">Заплановано</option>
+                <option value="planned">Не переглянуто</option>
               </select>
             </label>
           </section>

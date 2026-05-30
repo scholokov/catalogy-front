@@ -4273,7 +4273,7 @@ export default function FilmsManager({
                       }))
                     }
                   />
-                  Заплановано
+                  Не переглянуто
                 </label>
               </div>
             </div>
