@@ -4087,7 +4087,6 @@ export default function GamesManager({
                     ...DEFAULT_FILTERS,
                     yearRange: yearBounds,
                   };
-                  setIsPlatformsFilterOpen(false);
                   setPendingFilters(clearedFilters);
                   setAppliedFilters(clearedFilters);
                   setToolbarQueryDraft(clearedFilters.query);
