@@ -11,7 +11,7 @@ import {
 } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { Range, getTrackBackground } from "react-range";
 import ExistingCollectionEntryModal from "@/components/catalog/ExistingCollectionEntryModal";
 import CatalogSearchModal, {
@@ -39,6 +39,13 @@ import {
   replaceSelectedCollectionViewSearchParam,
   useRequestedCollectionViewSync,
 } from "@/lib/collection/entryRouting";
+import {
+  CATALOG_SCREEN_SNAPSHOT_VERSION,
+  buildCatalogScreenKey,
+  loadCatalogScreenSnapshot,
+  saveCatalogScreenSnapshot,
+  type CatalogScreenSnapshot,
+} from "@/lib/collection/screenContext";
 import {
   COLLECTION_ENTRY_SAVED_EVENT,
   type CollectionEntrySavedEventDetail,
@@ -481,11 +488,14 @@ export default function FilmsManager({
 }: FilmsManagerProps) {
   const { showSnackbar } = useSnackbar();
   const { openCreateOwnEntry, openDraftEntry } = useCollectionEntryLauncher();
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { requestedViewId, requestedItemId, requestedAddItemId } =
     readCollectionEntrySearchParams(searchParams);
+  const screenKey = useMemo(
+    () => buildCatalogScreenKey({ screen: "films", ownerUserId, readOnly }),
+    [ownerUserId, readOnly],
+  );
   const [lazyDebug, setLazyDebug] = useState<string[]>([]);
   const [lazyDebugEnabled, setLazyDebugEnabled] = useState(false);
   const logLazy = useCallback(
@@ -586,7 +596,13 @@ export default function FilmsManager({
   const viewModeStorageKeyRef = useRef("films:view-mode:v2:guest");
   const isViewModeStorageReadyRef = useRef(false);
   const directorsHydrationRunRef = useRef(0);
+  const restoreSnapshotRef =
+    useRef<CatalogScreenSnapshot<Filters, FilmsViewMode> | null>(null);
+  const restoredPageTargetRef = useRef(0);
+  const restoredScrollYRef = useRef<number | null>(null);
+  const shouldRestoreScrollRef = useRef(false);
   const pendingViewParamSyncRef = useRef<string | null | false>(false);
+  const [isScreenContextReady, setIsScreenContextReady] = useState(false);
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
     title: string;
@@ -742,24 +758,22 @@ export default function FilmsManager({
     (viewId: string | null) => {
       replaceSelectedCollectionViewSearchParam({
         pathname,
-        router,
         searchParams,
         viewId,
       });
     },
-    [pathname, router, searchParams],
+    [pathname, searchParams],
   );
 
   const replaceAddItemSearchParam = useCallback(
     (itemId: string | null) => {
       replaceSelectedCollectionAddItemSearchParam({
         pathname,
-        router,
         searchParams,
         itemId,
       });
     },
-    [pathname, router, searchParams],
+    [pathname, searchParams],
   );
 
   const clearSelectedView = useCallback(() => {
@@ -1073,6 +1087,71 @@ export default function FilmsManager({
   }, [yearBounds]);
 
   useEffect(() => {
+    const snapshot = loadCatalogScreenSnapshot<Filters, FilmsViewMode>(screenKey);
+    restoreSnapshotRef.current = snapshot;
+    restoredPageTargetRef.current = Math.max(0, snapshot?.page ?? 0);
+    restoredScrollYRef.current =
+      snapshot && Number.isFinite(snapshot.scrollY) ? Math.max(0, snapshot.scrollY) : null;
+    shouldRestoreScrollRef.current = Boolean(snapshot?.hasApplied);
+
+    if (snapshot) {
+      setAppliedFilters(snapshot.appliedFilters);
+      setPendingFilters(snapshot.pendingFilters);
+      setToolbarQueryDraft(snapshot.toolbarQueryDraft);
+      setHasApplied(snapshot.hasApplied);
+      if (FILMS_VIEW_MODES.includes(snapshot.viewMode)) {
+        setViewMode(snapshot.viewMode);
+      }
+    } else {
+      setAppliedFilters(DEFAULT_FILTERS);
+      setPendingFilters(DEFAULT_FILTERS);
+      setToolbarQueryDraft(DEFAULT_FILTERS.query);
+      setHasApplied(false);
+    }
+
+    initialLoadRunRef.current = false;
+    lastAppliedRequestKeyRef.current = "";
+    setIsScreenContextReady(true);
+  }, [screenKey]);
+
+  const persistScreenContext = useCallback(
+    (scrollYOverride?: number) => {
+      if (!isScreenContextReady || typeof window === "undefined") {
+        return;
+      }
+
+      const restoringPageTarget = restoredPageTargetRef.current;
+      const nextPage =
+        shouldRestoreScrollRef.current && restoringPageTarget > page ? restoringPageTarget : page;
+      const nextScrollY =
+        scrollYOverride ??
+        (shouldRestoreScrollRef.current ? restoredScrollYRef.current ?? window.scrollY : window.scrollY);
+
+      saveCatalogScreenSnapshot(screenKey, {
+        version: CATALOG_SCREEN_SNAPSHOT_VERSION,
+        appliedFilters,
+        pendingFilters,
+        toolbarQueryDraft,
+        hasApplied,
+        viewMode,
+        page: nextPage,
+        scrollY: Math.max(0, nextScrollY),
+        updatedAt: Date.now(),
+      });
+    },
+    [
+      appliedFilters,
+      hasApplied,
+      isScreenContextReady,
+      page,
+      pendingFilters,
+      screenKey,
+      toolbarQueryDraft,
+      viewMode,
+    ],
+  );
+
+  useEffect(() => {
     return () => {
       if (copyTooltipTimeoutRef.current !== null) {
         window.clearTimeout(copyTooltipTimeoutRef.current);
@@ -1082,6 +1161,13 @@ export default function FilmsManager({
 
   useEffect(() => {
     let isCancelled = false;
+    const snapshotViewMode = restoreSnapshotRef.current?.viewMode;
+    if (snapshotViewMode && FILMS_VIEW_MODES.includes(snapshotViewMode)) {
+      isViewModeStorageReadyRef.current = true;
+      return () => {
+        isCancelled = true;
+      };
+    }
     void (async () => {
       const {
         data: { user },
@@ -1532,6 +1618,7 @@ export default function FilmsManager({
 
   useEffect(() => {
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
+    if (!isScreenContextReady) return;
     if (!hasApplied) return;
     if (skipNextApplyRef.current) {
       skipNextApplyRef.current = false;
@@ -1541,7 +1628,15 @@ export default function FilmsManager({
     if (lastAppliedRequestKeyRef.current === requestKey) return;
     lastAppliedRequestKeyRef.current = requestKey;
     void fetchPage(0, appliedFilters);
-  }, [appliedFilters, fetchPage, friendAccessState, hasApplied, ownerUserId, readOnly]);
+  }, [
+    appliedFilters,
+    fetchPage,
+    friendAccessState,
+    hasApplied,
+    isScreenContextReady,
+    ownerUserId,
+    readOnly,
+  ]);
 
   useEffect(() => {
     if (readOnly || ownerUserId || !hasApplied) {
@@ -1565,8 +1660,12 @@ export default function FilmsManager({
 
   useEffect(() => {
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
+    if (!isScreenContextReady) return;
     if (initialLoadRunRef.current) return;
-    if (hasApplied) return;
+    if (hasApplied) {
+      initialLoadRunRef.current = true;
+      return;
+    }
     initialLoadRunRef.current = true;
     skipNextApplyRef.current = true;
     setAppliedFilters(DEFAULT_FILTERS);
@@ -1574,7 +1673,88 @@ export default function FilmsManager({
     setHasApplied(true);
     lastAppliedRequestKeyRef.current = getFiltersRequestKey(DEFAULT_FILTERS);
     void fetchPage(0, DEFAULT_FILTERS);
-  }, [fetchPage, friendAccessState, hasApplied, ownerUserId, readOnly]);
+  }, [fetchPage, friendAccessState, hasApplied, isScreenContextReady, ownerUserId, readOnly]);
+
+  useEffect(() => {
+    if (!isScreenContextReady || !hasApplied) {
+      return;
+    }
+
+    const targetPage = restoredPageTargetRef.current;
+    if (targetPage <= 0 || page >= targetPage || isLoading || isLoadingMore || !hasMore) {
+      return;
+    }
+
+    void fetchPage(page + 1, appliedFilters);
+  }, [appliedFilters, fetchPage, hasApplied, hasMore, isLoading, isLoadingMore, isScreenContextReady, page]);
+
+  useEffect(() => {
+    if (!isScreenContextReady || !shouldRestoreScrollRef.current || typeof window === "undefined") {
+      return;
+    }
+
+    const targetPage = restoredPageTargetRef.current;
+    if (isLoading || isLoadingMore) {
+      return;
+    }
+    if (targetPage > page && hasMore) {
+      return;
+    }
+
+    const targetScrollY = restoredScrollYRef.current;
+    if (targetScrollY === null) {
+      shouldRestoreScrollRef.current = false;
+      restoredPageTargetRef.current = 0;
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: targetScrollY, behavior: "auto" });
+      shouldRestoreScrollRef.current = false;
+      restoredPageTargetRef.current = 0;
+      restoredScrollYRef.current = null;
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [hasMore, isLoading, isLoadingMore, isScreenContextReady, page]);
+
+  useEffect(() => {
+    if (!isScreenContextReady) {
+      return;
+    }
+
+    persistScreenContext();
+  }, [isScreenContextReady, persistScreenContext]);
+
+  useEffect(() => {
+    if (!isScreenContextReady || typeof window === "undefined") {
+      return;
+    }
+
+    let timeoutId: number | null = null;
+    const handleScroll = () => {
+      if (timeoutId !== null) {
+        return;
+      }
+
+      timeoutId = window.setTimeout(() => {
+        timeoutId = null;
+        persistScreenContext(window.scrollY);
+      }, 150);
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+
+    return () => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      persistScreenContext(window.scrollY);
+      window.removeEventListener("scroll", handleScroll);
+    };
+  }, [isScreenContextReady, persistScreenContext]);
 
   const loadYearBounds = useCallback(async () => {
     const { data: minRows } = await supabase

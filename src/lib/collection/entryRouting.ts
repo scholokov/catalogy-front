@@ -8,10 +8,6 @@ export const ADD_ITEM_SEARCH_PARAM = "addItem";
 
 type SearchParamsLike = Pick<URLSearchParams, "get" | "toString">;
 
-type RouterLike = {
-  replace: (href: string, options?: { scroll?: boolean }) => void;
-};
-
 type OpenSelectedViewOptions = {
   syncUrl?: boolean;
 };
@@ -45,12 +41,10 @@ export const readCollectionEntrySearchParams = (
 
 export const replaceSelectedCollectionViewSearchParam = ({
   pathname,
-  router,
   searchParams,
   viewId,
 }: {
   pathname: string;
-  router: RouterLike;
   searchParams: SearchParamsLike;
   viewId: string | null;
 }) => {
@@ -64,17 +58,17 @@ export const replaceSelectedCollectionViewSearchParam = ({
   nextParams.delete(ADD_ITEM_SEARCH_PARAM);
   const nextSearch = nextParams.toString();
   const nextUrl = nextSearch ? `${pathname}?${nextSearch}` : pathname;
-  router.replace(nextUrl, { scroll: false });
+  if (typeof window !== "undefined") {
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }
 };
 
 export const replaceSelectedCollectionAddItemSearchParam = ({
   pathname,
-  router,
   searchParams,
   itemId,
 }: {
   pathname: string;
-  router: RouterLike;
   searchParams: SearchParamsLike;
   itemId: string | null;
 }) => {
@@ -86,7 +80,9 @@ export const replaceSelectedCollectionAddItemSearchParam = ({
   }
   const nextSearch = nextParams.toString();
   const nextUrl = nextSearch ? `${pathname}?${nextSearch}` : pathname;
-  router.replace(nextUrl, { scroll: false });
+  if (typeof window !== "undefined") {
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }
 };
 
 export const useRequestedCollectionViewSync = <T>({
