@@ -38,7 +38,9 @@ import {
   readCollectionEntrySearchParams,
   replaceSelectedCollectionAddItemSearchParam,
 } from "@/lib/collection/entryRouting";
+import { loadOwnCollectionItemExists } from "@/lib/collection/loadOwnCollectionItemExists";
 import { buildFilmViewHref } from "@/lib/catalog/edit/routes";
+import { buildFriendFilmViewHref } from "@/lib/friends/routes";
 import {
   CATALOG_SCREEN_SNAPSHOT_VERSION,
   buildCatalogScreenKey,
@@ -644,6 +646,8 @@ export default function FilmsManager({
     "checking" | "allowed" | "unauthenticated" | "not_friends" | "closed"
   >(readOnly && ownerUserId ? "checking" : "allowed");
   const [friendOwnerName, setFriendOwnerName] = useState("");
+  const [isOwnEntryStateLoading, setIsOwnEntryStateLoading] = useState(false);
+  const [doesOwnEntryExist, setDoesOwnEntryExist] = useState(false);
   const [showAvailability, setShowAvailability] = useState(true);
   const [isRecommendationPromptDebugEnabled, setIsRecommendationPromptDebugEnabled] =
     useState(false);
@@ -923,11 +927,21 @@ export default function FilmsManager({
         historyMode?: "replace" | "push";
       } = {},
     ) => {
-      router.push(buildFilmViewHref(item.id, `${Date.now()}-${Math.random()}`), {
+      if (readOnly && ownerUserId) {
+        const href = buildFriendFilmViewHref(
+          ownerUserId,
+          item.id,
+          `${Date.now()}-${Math.random()}`,
+        );
+        router.push(href, { scroll: false });
+        return;
+      }
+      const href = buildFilmViewHref(item.id, `${Date.now()}-${Math.random()}`);
+      router.push(href, {
         scroll: false,
       });
     },
-    [router],
+    [ownerUserId, readOnly, router, selectSelectedView],
   );
 
   const closeSelectedView = useCallback(() => {
@@ -941,6 +955,30 @@ export default function FilmsManager({
   useEffect(() => {
     onEditDirtyChange?.(isSelectedViewDirty);
   }, [isSelectedViewDirty, onEditDirtyChange]);
+
+  useEffect(() => {
+    if (!readOnly || !ownerUserId || !selectedView?.items.id) {
+      setIsOwnEntryStateLoading(false);
+      setDoesOwnEntryExist(false);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsOwnEntryStateLoading(true);
+
+    void (async () => {
+      const exists = await loadOwnCollectionItemExists(selectedView.items.id);
+      if (isCancelled) {
+        return;
+      }
+      setDoesOwnEntryExist(exists);
+      setIsOwnEntryStateLoading(false);
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [ownerUserId, readOnly, selectedView?.items.id]);
 
   const openSelectedFilmDraft = useCallback(
     (
@@ -3238,6 +3276,10 @@ export default function FilmsManager({
   };
 
   const handleAddToOwnCollection = async (itemId: string) => {
+    if (doesOwnEntryExist || isOwnEntryStateLoading) {
+      return;
+    }
+
     openCreateOwnEntry({
       mediaKind: "film",
       itemId,
@@ -3654,6 +3696,16 @@ export default function FilmsManager({
       onDirtyChange={setIsSelectedViewDirty}
       readOnly={readOnly}
       onAddToOwnCollection={() => handleAddToOwnCollection(selectedView.items.id)}
+      readOnlyPrimaryLabel={
+        readOnly
+          ? isOwnEntryStateLoading
+            ? "Перевірка..."
+            : doesOwnEntryExist
+              ? "Вже існує у колекції"
+              : "Відкрити форму додавання"
+          : undefined
+      }
+      readOnlyPrimaryDisabled={readOnly ? isOwnEntryStateLoading || doesOwnEntryExist : false}
       previewAction={{
         label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
         onClick: handleWatchSelectedViewTrailer,

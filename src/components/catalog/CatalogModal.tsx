@@ -76,6 +76,8 @@ type CatalogModalProps = {
   };
   submitLabel?: string;
   onReadOnlyPrimaryAction?: () => Promise<void> | void;
+  readOnlyPrimaryLabel?: string;
+  readOnlyPrimaryDisabled?: boolean;
   readOnlyPrimarySuccessMessage?: string | null;
   readOnlyPrimaryCloses?: boolean;
   showRecommendSimilar?: boolean;
@@ -136,6 +138,8 @@ export default function CatalogModal({
   readOnly = false,
   submitLabel = "Додати",
   onReadOnlyPrimaryAction,
+  readOnlyPrimaryLabel,
+  readOnlyPrimaryDisabled = false,
   readOnlyPrimarySuccessMessage = "Додано",
   readOnlyPrimaryCloses = true,
   showRecommendSimilar = true,
@@ -609,6 +613,9 @@ export default function CatalogModal({
 
   const handleAdd = async () => {
     if (readOnly) {
+      if (readOnlyPrimaryDisabled) {
+        return;
+      }
       if (!onReadOnlyPrimaryAction) {
         onClose();
         return;
@@ -666,6 +673,8 @@ export default function CatalogModal({
       setIsSaving(false);
     }
   };
+  const primaryButtonLabel =
+    readOnly && readOnlyPrimaryLabel ? readOnlyPrimaryLabel : submitLabel;
   handleAddRef.current = handleAdd;
 
   const handleDelete = async () => {
@@ -1531,9 +1540,9 @@ export default function CatalogModal({
                 type="button"
                 className="btnBase btnPrimary"
                 onClick={() => void handleAdd()}
-                disabled={isSaving || isRefreshing}
+                disabled={isSaving || isRefreshing || (readOnly && readOnlyPrimaryDisabled)}
               >
-                {isSaving ? "Збереження..." : submitLabel}
+                {isSaving ? "Збереження..." : primaryButtonLabel}
               </button>
             </div>
           </div>

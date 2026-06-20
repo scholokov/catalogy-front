@@ -26,6 +26,8 @@ type ExistingCollectionEntryModalProps = {
   onClose: () => void;
   onDirtyChange?: (isDirty: boolean) => void;
   onAddToOwnCollection: () => Promise<void> | void;
+  readOnlyPrimaryLabel?: string;
+  readOnlyPrimaryDisabled?: boolean;
   previewAction: {
     label: string;
     onClick: () => void;
@@ -64,6 +66,8 @@ export default function ExistingCollectionEntryModal({
   onClose,
   onDirtyChange,
   onAddToOwnCollection,
+  readOnlyPrimaryLabel,
+  readOnlyPrimaryDisabled = false,
   previewAction,
   previewMenuAction,
   extraActions,
@@ -93,6 +97,8 @@ export default function ExistingCollectionEntryModal({
       onDirtyChange={onDirtyChange}
       readOnly={readOnly}
       onReadOnlyPrimaryAction={onAddToOwnCollection}
+      readOnlyPrimaryLabel={readOnlyPrimaryLabel}
+      readOnlyPrimaryDisabled={readOnlyPrimaryDisabled}
       readOnlyPrimarySuccessMessage={null}
       previewAction={previewAction}
       previewMenuAction={previewMenuAction}
