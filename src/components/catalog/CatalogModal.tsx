@@ -62,6 +62,7 @@ type CatalogModalProps = {
   };
   previewMenuAction?: PosterMenuAction;
   fitTargetText?: string;
+  onDirtyChange?: (isDirty: boolean) => void;
   initialValues?: {
     viewedAt?: string;
     comment?: string | null;
@@ -127,6 +128,7 @@ export default function CatalogModal({
   previewAction,
   previewMenuAction,
   fitTargetText = "цей тайтл",
+  onDirtyChange,
   initialValues,
   platformOptions = [],
   availabilityOptions = [],
@@ -143,7 +145,7 @@ export default function CatalogModal({
   const viewedAtId = useId();
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const initialPlatformsKey = useMemo(
-    () => (initialValues?.platforms ?? []).join("|"),
+    () => [...(initialValues?.platforms ?? [])].sort().join("|"),
     [initialValues?.platforms],
   );
   const isEditMode = initialValues !== undefined;
@@ -258,6 +260,58 @@ export default function CatalogModal({
   useEffect(() => {
     setShishkaFitAssessment(initialShishkaFitAssessment);
   }, [initialShishkaFitAssessment]);
+
+  const isDirty = useMemo(() => {
+    if (readOnly) {
+      return false;
+    }
+
+    const currentPlatformsKey = [...platforms].sort().join("|");
+    return (
+      viewedAt !== (isEditMode
+        ? (() => {
+            if (!initialViewedAt) return today;
+            const date = new Date(initialViewedAt);
+            if (Number.isNaN(date.getTime())) return today;
+            return date.toISOString().slice(0, 10);
+          })()
+        : today) ||
+      comment !== (initialComment ?? "") ||
+      recommendSimilar !== Boolean(initialRecommendSimilar) ||
+      isViewed !== (initialIsViewed ?? true) ||
+      rating !== (initialRating ?? null) ||
+      viewPercent !== normalizeViewPercent(initialViewPercent ?? 100) ||
+      currentPlatformsKey !== initialPlatformsKey ||
+      availability !== (initialAvailability ?? null)
+    );
+  }, [
+    availability,
+    comment,
+    initialAvailability,
+    initialComment,
+    initialIsViewed,
+    initialPlatformsKey,
+    initialRating,
+    initialRecommendSimilar,
+    initialViewPercent,
+    initialViewedAt,
+    isEditMode,
+    isViewed,
+    platforms,
+    rating,
+    readOnly,
+    recommendSimilar,
+    today,
+    viewPercent,
+    viewedAt,
+  ]);
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+    return () => {
+      onDirtyChange?.(false);
+    };
+  }, [isDirty, onDirtyChange]);
 
   useEffect(() => {
     if (platformOptions.length === 0) {
@@ -492,10 +546,20 @@ export default function CatalogModal({
     };
   }, [isFitPopoverOpen, updateFitPopoverPlacement]);
 
+  const requestClose = useCallback(() => {
+    if (isSaving || isRefreshing) {
+      return;
+    }
+    if (isDirty && !window.confirm("Є незбережені зміни. Закрити форму?")) {
+      return;
+    }
+    onClose();
+  }, [isDirty, isRefreshing, isSaving, onClose]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        onClose();
+        requestClose();
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -509,7 +573,7 @@ export default function CatalogModal({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isConfirmOpen, isSaving, onClose]);
+  }, [isConfirmOpen, isSaving, requestClose]);
 
   const handleAdd = async () => {
     if (readOnly) {
@@ -937,7 +1001,7 @@ export default function CatalogModal({
       className={styles.overlay}
       role="dialog"
       aria-modal="true"
-      onClick={onClose}
+      onClick={requestClose}
     >
       <div
         className={`${styles.modal} ${size === "wide" ? styles.modalWide : ""}`}
@@ -1074,7 +1138,7 @@ export default function CatalogModal({
             <button
               type="button"
               className={styles.iconButton}
-              onClick={onClose}
+                onClick={requestClose}
               aria-label="Закрити"
               disabled={isSaving || isRefreshing}
             >
@@ -1426,7 +1490,7 @@ export default function CatalogModal({
               <button
                 type="button"
                 className="btnBase btnSecondary"
-                onClick={onClose}
+                onClick={requestClose}
                 disabled={isSaving || isRefreshing}
               >
                 Закрити

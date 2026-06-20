@@ -36,9 +36,11 @@ import {
   evaluateGameCollectionFit,
 } from "@/lib/collection/fitEvaluation";
 import {
+  hasCollectionEntryHistoryState,
   readCollectionEntrySearchParams,
   replaceSelectedCollectionAddItemSearchParam,
   replaceSelectedCollectionViewSearchParam,
+  type CloseSelectedViewRouteOptions,
   useRequestedCollectionViewSync,
 } from "@/lib/collection/entryRouting";
 import {
@@ -519,6 +521,7 @@ export default function GamesManager({
   const [selectedView, setSelectedView] = useState<GameCollectionItem | null>(
     null,
   );
+  const [isSelectedViewDirty, setIsSelectedViewDirty] = useState(false);
   const [selectedViewItemDraft, setSelectedViewItemDraft] = useState<GameItemDraft | null>(
     null,
   );
@@ -730,11 +733,12 @@ export default function GamesManager({
   }, [selectedView]);
 
   const replaceSelectedItemSearchParam = useCallback(
-    (viewId: string | null) => {
+    (viewId: string | null, historyMode: "replace" | "push" = "replace") => {
       replaceSelectedCollectionViewSearchParam({
         pathname,
         searchParams,
         viewId,
+        historyMode,
       });
     },
     [pathname, searchParams],
@@ -847,22 +851,41 @@ export default function GamesManager({
       item: GameCollectionItem,
       options: {
         syncUrl?: boolean;
+        historyMode?: "replace" | "push";
       } = {},
     ) => {
       setSelectedView(item);
       if (options.syncUrl ?? true) {
         pendingViewParamSyncRef.current = item.id;
-        replaceSelectedItemSearchParam(item.id);
+        replaceSelectedItemSearchParam(item.id, options.historyMode ?? "push");
       }
     },
     [replaceSelectedItemSearchParam],
   );
 
-  const closeSelectedView = useCallback(() => {
+  const closeSelectedView = useCallback((options: CloseSelectedViewRouteOptions = {}) => {
+    if (isSelectedViewDirty) {
+      const shouldClose = window.confirm("Є незбережені зміни. Закрити форму?");
+      if (!shouldClose) {
+        if (options.source === "history") {
+          window.history.forward();
+        }
+        return;
+      }
+    }
+
     pendingViewParamSyncRef.current = null;
     clearSelectedView();
+    setIsSelectedViewDirty(false);
+    if (options.source === "history") {
+      return;
+    }
+    if (hasCollectionEntryHistoryState()) {
+      window.history.back();
+      return;
+    }
     replaceSelectedItemSearchParam(null);
-  }, [clearSelectedView, replaceSelectedItemSearchParam]);
+  }, [clearSelectedView, isSelectedViewDirty, replaceSelectedItemSearchParam]);
 
   useRequestedCollectionViewSync({
     pendingViewParamSyncRef,
@@ -873,7 +896,6 @@ export default function GamesManager({
     collection,
     getViewId: (item) => item.id,
     getItemId: (item) => item.items.id,
-    clearSelectedView,
     clearSelectedViewRoute: closeSelectedView,
     openSelectedView,
     loadSelectedViewById,
@@ -4266,6 +4288,7 @@ export default function GamesManager({
           platformOptions={visiblePlatforms}
           availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
           onClose={closeSelectedView}
+          onDirtyChange={setIsSelectedViewDirty}
           readOnly={readOnly}
           onAddToOwnCollection={() => handleAddToOwnCollection(selectedView.items.id)}
           previewAction={{

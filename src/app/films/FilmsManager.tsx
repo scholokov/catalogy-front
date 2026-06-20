@@ -35,9 +35,11 @@ import {
   persistCollectionEntryAssessment,
 } from "@/lib/collection/existingEntryState";
 import {
+  hasCollectionEntryHistoryState,
   readCollectionEntrySearchParams,
   replaceSelectedCollectionAddItemSearchParam,
   replaceSelectedCollectionViewSearchParam,
+  type CloseSelectedViewRouteOptions,
   useRequestedCollectionViewSync,
 } from "@/lib/collection/entryRouting";
 import {
@@ -559,6 +561,7 @@ export default function FilmsManager({
   const [selectedView, setSelectedView] = useState<FilmCollectionItem | null>(
     null,
   );
+  const [isSelectedViewDirty, setIsSelectedViewDirty] = useState(false);
   const [selectedViewItemDraft, setSelectedViewItemDraft] = useState<FilmItemDraft | null>(
     null,
   );
@@ -764,11 +767,12 @@ export default function FilmsManager({
   }, [selectedView?.items.id]);
 
   const replaceSelectedItemSearchParam = useCallback(
-    (viewId: string | null) => {
+    (viewId: string | null, historyMode: "replace" | "push" = "replace") => {
       replaceSelectedCollectionViewSearchParam({
         pathname,
         searchParams,
         viewId,
+        historyMode,
       });
     },
     [pathname, searchParams],
@@ -886,6 +890,7 @@ export default function FilmsManager({
       item: FilmCollectionItem,
       options: {
         syncUrl?: boolean;
+        historyMode?: "replace" | "push";
       } = {},
     ) => {
       const people = await loadStoredPeopleForItem(supabase, item.items.id);
@@ -896,17 +901,35 @@ export default function FilmsManager({
       setSelectedView(item);
       if (options.syncUrl ?? true) {
         pendingViewParamSyncRef.current = item.id;
-        replaceSelectedItemSearchParam(item.id);
+        replaceSelectedItemSearchParam(item.id, options.historyMode ?? "push");
       }
     },
     [replaceSelectedItemSearchParam],
   );
 
-  const closeSelectedView = useCallback(() => {
+  const closeSelectedView = useCallback((options: CloseSelectedViewRouteOptions = {}) => {
+    if (isSelectedViewDirty) {
+      const shouldClose = window.confirm("Є незбережені зміни. Закрити форму?");
+      if (!shouldClose) {
+        if (options.source === "history") {
+          window.history.forward();
+        }
+        return;
+      }
+    }
+
     pendingViewParamSyncRef.current = null;
     clearSelectedView();
+    setIsSelectedViewDirty(false);
+    if (options.source === "history") {
+      return;
+    }
+    if (hasCollectionEntryHistoryState()) {
+      window.history.back();
+      return;
+    }
     replaceSelectedItemSearchParam(null);
-  }, [clearSelectedView, replaceSelectedItemSearchParam]);
+  }, [clearSelectedView, isSelectedViewDirty, replaceSelectedItemSearchParam]);
 
   useRequestedCollectionViewSync({
     pendingViewParamSyncRef,
@@ -917,7 +940,6 @@ export default function FilmsManager({
     collection,
     getViewId: (item) => item.id,
     getItemId: (item) => item.items.id,
-    clearSelectedView,
     clearSelectedViewRoute: closeSelectedView,
     openSelectedView,
     loadSelectedViewById,
@@ -4547,6 +4569,7 @@ export default function FilmsManager({
           imageUrls={selectedViewItemDraft?.imageUrls ?? selectedViewImageUrls ?? undefined}
           fitTargetText="цей фільм"
           onClose={closeSelectedView}
+          onDirtyChange={setIsSelectedViewDirty}
           readOnly={readOnly}
           onAddToOwnCollection={() => handleAddToOwnCollection(selectedView.items.id)}
           previewAction={{

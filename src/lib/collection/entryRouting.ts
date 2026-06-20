@@ -5,11 +5,62 @@ import { useEffect, type MutableRefObject } from "react";
 export const VIEW_SEARCH_PARAM = "view";
 export const ITEM_SEARCH_PARAM = "item";
 export const ADD_ITEM_SEARCH_PARAM = "addItem";
+const COLLECTION_ENTRY_HISTORY_STATE_KEY = "__catalogyCollectionEntry";
 
 type SearchParamsLike = Pick<URLSearchParams, "get" | "toString">;
 
+const readBrowserHistoryState = () => {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  if (typeof window.history.state !== "object" || window.history.state === null) {
+    return {};
+  }
+  return window.history.state as Record<string, unknown>;
+};
+
+const writeBrowserHistoryState = ({
+  nextUrl,
+  historyMode,
+  marksCollectionEntryOpen,
+}: {
+  nextUrl: string;
+  historyMode: "replace" | "push";
+  marksCollectionEntryOpen: boolean;
+}) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const nextState = { ...readBrowserHistoryState() };
+  if (marksCollectionEntryOpen) {
+    nextState[COLLECTION_ENTRY_HISTORY_STATE_KEY] = true;
+  } else {
+    delete nextState[COLLECTION_ENTRY_HISTORY_STATE_KEY];
+  }
+
+  if (historyMode === "push") {
+    window.history.pushState(nextState, "", nextUrl);
+    return;
+  }
+
+  window.history.replaceState(nextState, "", nextUrl);
+};
+
+export const hasCollectionEntryHistoryState = () => {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return readBrowserHistoryState()[COLLECTION_ENTRY_HISTORY_STATE_KEY] === true;
+};
+
 type OpenSelectedViewOptions = {
   syncUrl?: boolean;
+  historyMode?: "replace" | "push";
+};
+
+export type CloseSelectedViewRouteOptions = {
+  source?: "user" | "history";
 };
 
 type UseRequestedCollectionViewSyncParams<T> = {
@@ -21,8 +72,7 @@ type UseRequestedCollectionViewSyncParams<T> = {
   collection: T[];
   getViewId: (item: T) => string;
   getItemId: (item: T) => string;
-  clearSelectedView: () => void;
-  clearSelectedViewRoute: () => void;
+  clearSelectedViewRoute: (options?: CloseSelectedViewRouteOptions) => void;
   openSelectedView: (
     item: T,
     options?: OpenSelectedViewOptions,
@@ -43,10 +93,12 @@ export const replaceSelectedCollectionViewSearchParam = ({
   pathname,
   searchParams,
   viewId,
+  historyMode = "replace",
 }: {
   pathname: string;
   searchParams: SearchParamsLike;
   viewId: string | null;
+  historyMode?: "replace" | "push";
 }) => {
   const nextParams = new URLSearchParams(searchParams.toString());
   if (viewId) {
@@ -58,9 +110,11 @@ export const replaceSelectedCollectionViewSearchParam = ({
   nextParams.delete(ADD_ITEM_SEARCH_PARAM);
   const nextSearch = nextParams.toString();
   const nextUrl = nextSearch ? `${pathname}?${nextSearch}` : pathname;
-  if (typeof window !== "undefined") {
-    window.history.replaceState(window.history.state, "", nextUrl);
-  }
+  writeBrowserHistoryState({
+    nextUrl,
+    historyMode,
+    marksCollectionEntryOpen: Boolean(viewId),
+  });
 };
 
 export const replaceSelectedCollectionAddItemSearchParam = ({
@@ -94,7 +148,6 @@ export const useRequestedCollectionViewSync = <T>({
   collection,
   getViewId,
   getItemId,
-  clearSelectedView,
   clearSelectedViewRoute,
   openSelectedView,
   loadSelectedViewById,
@@ -118,10 +171,10 @@ export const useRequestedCollectionViewSync = <T>({
     }
 
     if (!requestedViewId && !requestedItemId && selectedViewId) {
-      clearSelectedView();
+      clearSelectedViewRoute({ source: "history" });
     }
   }, [
-    clearSelectedView,
+    clearSelectedViewRoute,
     pendingViewParamSyncRef,
     requestedItemId,
     requestedViewId,
@@ -149,7 +202,10 @@ export const useRequestedCollectionViewSync = <T>({
       ? collection.find((item) => getViewId(item) === requestedViewId)
       : collection.find((item) => getItemId(item) === requestedItemId);
     if (existingView) {
-      void openSelectedView(existingView, { syncUrl: !requestedViewId });
+      void openSelectedView(existingView, {
+        syncUrl: !requestedViewId,
+        historyMode: "replace",
+      });
       return;
     }
 
@@ -165,11 +221,14 @@ export const useRequestedCollectionViewSync = <T>({
         return;
       }
       if (view) {
-        await openSelectedView(view, { syncUrl: !requestedViewId });
+        await openSelectedView(view, {
+          syncUrl: !requestedViewId,
+          historyMode: "replace",
+        });
         return;
       }
       pendingViewParamSyncRef.current = null;
-      clearSelectedViewRoute();
+      clearSelectedViewRoute({ source: "history" });
     })();
 
     return () => {
