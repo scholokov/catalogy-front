@@ -19,6 +19,38 @@ export const buildGenreHref = ({
   return `/genres/game-${source}-${sourceGenreId}`;
 };
 
+export const buildFilmGenreViewHref = ({
+  sourceGenreId,
+  viewId,
+  navigationToken,
+}: {
+  sourceGenreId: string;
+  viewId: string;
+  navigationToken?: string;
+}) => {
+  const href = `${buildGenreHref({
+    mediaKind: "film",
+    source: "tmdb",
+    sourceGenreId,
+  })}/view/${viewId}`;
+  return navigationToken ? `${href}?nav=${encodeURIComponent(navigationToken)}` : href;
+};
+
+export const buildGameGenreViewHref = ({
+  source,
+  sourceGenreId,
+  viewId,
+  navigationToken,
+}: {
+  source: GenreSource;
+  sourceGenreId: string;
+  viewId: string;
+  navigationToken?: string;
+}) => {
+  const href = `${buildGenreHref({ mediaKind: "game", source, sourceGenreId })}/view/${viewId}`;
+  return navigationToken ? `${href}?nav=${encodeURIComponent(navigationToken)}` : href;
+};
+
 export const parseGenreRouteId = (genreId: string): GenreRouteTarget => {
   if (!genreId.startsWith("game-")) {
     return {

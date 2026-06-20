@@ -11,7 +11,7 @@ import {
 } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams, useSelectedLayoutSegment } from "next/navigation";
 import { Range, getTrackBackground } from "react-range";
 import ExistingCollectionEntryModal from "@/components/catalog/ExistingCollectionEntryModal";
 import FilterMultiSelectDropdown from "@/components/catalog/FilterMultiSelectDropdown";
@@ -35,13 +35,10 @@ import {
   persistCollectionEntryAssessment,
 } from "@/lib/collection/existingEntryState";
 import {
-  hasCollectionEntryHistoryState,
   readCollectionEntrySearchParams,
   replaceSelectedCollectionAddItemSearchParam,
-  replaceSelectedCollectionViewSearchParam,
-  type CloseSelectedViewRouteOptions,
-  useRequestedCollectionViewSync,
 } from "@/lib/collection/entryRouting";
+import { buildFilmViewHref } from "@/lib/catalog/edit/routes";
 import {
   CATALOG_SCREEN_SNAPSHOT_VERSION,
   buildCatalogScreenKey,
@@ -261,6 +258,11 @@ type FilmsManagerProps = {
   onCountChange?: (count: number) => void;
   ownerUserId?: string;
   readOnly?: boolean;
+  renderMode?: "catalog" | "edit-only";
+  onRequestClose?: () => void;
+  onEditDirtyChange?: (isDirty: boolean) => void;
+  prefetchedSelectedView?: FilmCollectionItem | null;
+  prefetchedSelectedViewPeople?: FilmNormalizedPerson[] | null;
 };
 
 type Filters = {
@@ -495,13 +497,22 @@ export default function FilmsManager({
   onCountChange,
   ownerUserId,
   readOnly = false,
+  renderMode = "catalog",
+  onRequestClose,
+  onEditDirtyChange,
+  prefetchedSelectedView,
+  prefetchedSelectedViewPeople,
 }: FilmsManagerProps) {
   const { showSnackbar } = useSnackbar();
   const { openCreateOwnEntry, openDraftEntry } = useCollectionEntryLauncher();
+  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { requestedViewId, requestedItemId, requestedAddItemId } =
+  const modalRouteSegment = useSelectedLayoutSegment("modal");
+  const { requestedAddItemId } =
     readCollectionEntrySearchParams(searchParams);
+  const isEditOnly = renderMode === "edit-only";
+  const isRouteModalOpen = !isEditOnly && modalRouteSegment !== null;
   const screenKey = useMemo(
     () => buildCatalogScreenKey({ screen: "films", ownerUserId, readOnly }),
     [ownerUserId, readOnly],
@@ -613,7 +624,6 @@ export default function FilmsManager({
   const restoredPageTargetRef = useRef(0);
   const restoredScrollYRef = useRef<number | null>(null);
   const shouldRestoreScrollRef = useRef(false);
-  const pendingViewParamSyncRef = useRef<string | null | false>(false);
   const [isScreenContextReady, setIsScreenContextReady] = useState(false);
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
@@ -766,18 +776,6 @@ export default function FilmsManager({
     };
   }, [selectedView?.items.id]);
 
-  const replaceSelectedItemSearchParam = useCallback(
-    (viewId: string | null, historyMode: "replace" | "push" = "replace") => {
-      replaceSelectedCollectionViewSearchParam({
-        pathname,
-        searchParams,
-        viewId,
-        historyMode,
-      });
-    },
-    [pathname, searchParams],
-  );
-
   const replaceAddItemSearchParam = useCallback(
     (itemId: string | null) => {
       replaceSelectedCollectionAddItemSearchParam({
@@ -793,6 +791,12 @@ export default function FilmsManager({
     setSelectedView(null);
     setSelectedViewPreloadedPeople(null);
     setTrailerMessage("");
+    setIsSelectedViewDirty(false);
+  }, []);
+
+  const selectSelectedView = useCallback((item: FilmCollectionItem) => {
+    setSelectedViewPreloadedPeople(null);
+    setSelectedView(item);
   }, []);
 
   const loadSelectedViewById = useCallback(
@@ -885,66 +889,58 @@ export default function FilmsManager({
     } satisfies FilmResult;
   }, []);
 
+  useEffect(() => {
+    if (!isEditOnly) {
+      return;
+    }
+
+    if (!prefetchedSelectedView) {
+      clearSelectedView();
+      return;
+    }
+
+    setSelectedViewPreloadedPeople(
+      prefetchedSelectedViewPeople
+        ? {
+            itemId: prefetchedSelectedView.items.id,
+            people: prefetchedSelectedViewPeople,
+          }
+        : null,
+    );
+    setSelectedView(prefetchedSelectedView);
+  }, [
+    clearSelectedView,
+    isEditOnly,
+    prefetchedSelectedView,
+    prefetchedSelectedViewPeople,
+  ]);
+
   const openSelectedView = useCallback(
     async (
       item: FilmCollectionItem,
-      options: {
+      _options: {
         syncUrl?: boolean;
         historyMode?: "replace" | "push";
       } = {},
     ) => {
-      const people = await loadStoredPeopleForItem(supabase, item.items.id);
-      setSelectedViewPreloadedPeople({
-        itemId: item.items.id,
-        people,
+      router.push(buildFilmViewHref(item.id, `${Date.now()}-${Math.random()}`), {
+        scroll: false,
       });
-      setSelectedView(item);
-      if (options.syncUrl ?? true) {
-        pendingViewParamSyncRef.current = item.id;
-        replaceSelectedItemSearchParam(item.id, options.historyMode ?? "push");
-      }
     },
-    [replaceSelectedItemSearchParam],
+    [router],
   );
 
-  const closeSelectedView = useCallback((options: CloseSelectedViewRouteOptions = {}) => {
-    if (isSelectedViewDirty) {
-      const shouldClose = window.confirm("Є незбережені зміни. Закрити форму?");
-      if (!shouldClose) {
-        if (options.source === "history") {
-          window.history.forward();
-        }
-        return;
-      }
-    }
-
-    pendingViewParamSyncRef.current = null;
-    clearSelectedView();
+  const closeSelectedView = useCallback(() => {
     setIsSelectedViewDirty(false);
-    if (options.source === "history") {
-      return;
+    if (!isEditOnly) {
+      clearSelectedView();
     }
-    if (hasCollectionEntryHistoryState()) {
-      window.history.back();
-      return;
-    }
-    replaceSelectedItemSearchParam(null);
-  }, [clearSelectedView, isSelectedViewDirty, replaceSelectedItemSearchParam]);
+    onRequestClose?.();
+  }, [clearSelectedView, isEditOnly, onRequestClose]);
 
-  useRequestedCollectionViewSync({
-    pendingViewParamSyncRef,
-    requestedViewId,
-    requestedItemId,
-    selectedViewId: selectedView?.id ?? null,
-    selectedItemId: selectedView?.items.id ?? null,
-    collection,
-    getViewId: (item) => item.id,
-    getItemId: (item) => item.items.id,
-    clearSelectedViewRoute: closeSelectedView,
-    openSelectedView,
-    loadSelectedViewById,
-    loadSelectedViewByItemId,
-  });
+  useEffect(() => {
+    onEditDirtyChange?.(isSelectedViewDirty);
+  }, [isSelectedViewDirty, onEditDirtyChange]);
 
   const openSelectedFilmDraft = useCallback(
     (
@@ -1039,7 +1035,7 @@ export default function FilmsManager({
   );
 
   useEffect(() => {
-    if (readOnly || !requestedAddItemId) {
+    if (isEditOnly || readOnly || !requestedAddItemId) {
       return;
     }
 
@@ -1076,6 +1072,7 @@ export default function FilmsManager({
     loadSelectedFilmByItemId,
     openSelectedFilmDraft,
     openSelectedView,
+    isEditOnly,
     readOnly,
     replaceAddItemSearchParam,
     requestedAddItemId,
@@ -1118,6 +1115,14 @@ export default function FilmsManager({
   }, [yearBounds]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      restoreSnapshotRef.current = null;
+      restoredPageTargetRef.current = 0;
+      restoredScrollYRef.current = null;
+      shouldRestoreScrollRef.current = false;
+      setIsScreenContextReady(true);
+      return;
+    }
     const snapshot = loadCatalogScreenSnapshot<Filters, FilmsViewMode>(screenKey);
     restoreSnapshotRef.current = snapshot;
     restoredPageTargetRef.current = Math.max(0, snapshot?.page ?? 0);
@@ -1143,7 +1148,7 @@ export default function FilmsManager({
     initialLoadRunRef.current = false;
     lastAppliedRequestKeyRef.current = "";
     setIsScreenContextReady(true);
-  }, [screenKey]);
+  }, [isEditOnly, screenKey]);
 
   const persistScreenContext = useCallback(
     (scrollYOverride?: number) => {
@@ -1706,6 +1711,7 @@ export default function FilmsManager({
   }, [friendAccessState, loadRecommendations, logLazy, ownerUserId, readOnly, yearBounds]);
 
   useEffect(() => {
+    if (isEditOnly) return;
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (!isScreenContextReady) return;
     if (!hasApplied) return;
@@ -1722,12 +1728,16 @@ export default function FilmsManager({
     fetchPage,
     friendAccessState,
     hasApplied,
+    isEditOnly,
     isScreenContextReady,
     ownerUserId,
     readOnly,
   ]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     if (readOnly || ownerUserId || !hasApplied) {
       return;
     }
@@ -1745,9 +1755,10 @@ export default function FilmsManager({
     return () => {
       window.removeEventListener(COLLECTION_ENTRY_SAVED_EVENT, handleCollectionEntrySaved);
     };
-  }, [appliedFilters, fetchPage, hasApplied, ownerUserId, readOnly]);
+  }, [appliedFilters, fetchPage, hasApplied, isEditOnly, ownerUserId, readOnly]);
 
   useEffect(() => {
+    if (isEditOnly) return;
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (!isScreenContextReady) return;
     if (initialLoadRunRef.current) return;
@@ -1762,9 +1773,12 @@ export default function FilmsManager({
     setHasApplied(true);
     lastAppliedRequestKeyRef.current = getFiltersRequestKey(DEFAULT_FILTERS);
     void fetchPage(0, DEFAULT_FILTERS);
-  }, [fetchPage, friendAccessState, hasApplied, isScreenContextReady, ownerUserId, readOnly]);
+  }, [fetchPage, friendAccessState, hasApplied, isEditOnly, isScreenContextReady, ownerUserId, readOnly]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     if (!isScreenContextReady || !hasApplied) {
       return;
     }
@@ -1775,9 +1789,22 @@ export default function FilmsManager({
     }
 
     void fetchPage(page + 1, appliedFilters);
-  }, [appliedFilters, fetchPage, hasApplied, hasMore, isLoading, isLoadingMore, isScreenContextReady, page]);
+  }, [
+    appliedFilters,
+    fetchPage,
+    hasApplied,
+    hasMore,
+    isEditOnly,
+    isLoading,
+    isLoadingMore,
+    isScreenContextReady,
+    page,
+  ]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     if (!isScreenContextReady || !shouldRestoreScrollRef.current || typeof window === "undefined") {
       return;
     }
@@ -1807,17 +1834,23 @@ export default function FilmsManager({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [hasMore, isLoading, isLoadingMore, isScreenContextReady, page]);
+  }, [hasMore, isEditOnly, isLoading, isLoadingMore, isScreenContextReady, page]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     if (!isScreenContextReady) {
       return;
     }
 
     persistScreenContext();
-  }, [isScreenContextReady, persistScreenContext]);
+  }, [isEditOnly, isScreenContextReady, persistScreenContext]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     if (!isScreenContextReady || typeof window === "undefined") {
       return;
     }
@@ -1843,7 +1876,7 @@ export default function FilmsManager({
       persistScreenContext(window.scrollY);
       window.removeEventListener("scroll", handleScroll);
     };
-  }, [isScreenContextReady, persistScreenContext]);
+  }, [isEditOnly, isScreenContextReady, persistScreenContext]);
 
   const loadYearBounds = useCallback(async () => {
     const { data: minRows } = await supabase
@@ -1893,10 +1926,15 @@ export default function FilmsManager({
   }, []);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     void loadYearBounds();
-  }, [loadYearBounds]);
+  }, [isEditOnly, loadYearBounds]);
 
   useEffect(() => {
+    if (isEditOnly) return;
+    if (isRouteModalOpen) return;
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (!hasApplied || isLoading || isLoadingMore || !hasMore) return;
     if (viewMode === "directors") return;
@@ -1934,6 +1972,8 @@ export default function FilmsManager({
     friendAccessState,
     hasApplied,
     hasMore,
+    isEditOnly,
+    isRouteModalOpen,
     isLoading,
     isLoadingMore,
     logLazy,
@@ -1944,6 +1984,7 @@ export default function FilmsManager({
   ]);
 
   useEffect(() => {
+    if (isEditOnly) return;
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (!hasApplied || viewMode !== "directors" || !hasMore) return;
     const runId = Date.now();
@@ -1974,6 +2015,7 @@ export default function FilmsManager({
     friendAccessState,
     hasApplied,
     hasMore,
+    isEditOnly,
     ownerUserId,
     page,
     readOnly,
@@ -3553,6 +3595,283 @@ export default function FilmsManager({
       }[friendAccessState]
     : "";
 
+  const refreshPickerModal = isRefreshPickerOpen ? (
+    <CatalogSearchModal
+      title="Оновити фільм"
+      onSearch={handleFilmSearch}
+      getKey={(film) => film.id}
+      initialQuery={refreshSearchQuery}
+      onSelect={async (film) => {
+        await applyRefreshedFilmMetadata(film);
+        setIsRefreshPickerOpen(false);
+      }}
+      onClose={() => setIsRefreshPickerOpen(false)}
+      renderItem={(film) => (
+        <>
+          <div className={styles.posterWrapper}>
+            {film.poster && film.poster !== "N/A" ? (
+              <Image
+                className={styles.poster}
+                src={film.poster}
+                alt={`Постер ${film.title}`}
+                width={180}
+                height={270}
+                unoptimized
+              />
+            ) : (
+              <div className={styles.posterPlaceholder}>No image</div>
+            )}
+          </div>
+          <div className={styles.resultContent}>
+            <div className={styles.titleRow}>
+              <h2 className={styles.resultTitle}>
+                {film.title} <span className={styles.resultYear}>({film.year})</span>
+              </h2>
+              {film.imdbRating ? (
+                <span className={styles.resultRating}>IMDb: {film.imdbRating}</span>
+              ) : null}
+            </div>
+            {film.genres ? <p className={styles.resultMeta}>{film.genres}</p> : null}
+            {film.director ? <p className={styles.resultMeta}>Режисер: {film.director}</p> : null}
+            {film.actors ? <p className={styles.resultMeta}>Актори: {film.actors}</p> : null}
+            <p className={styles.resultPlot}>
+              {film.plot ? film.plot : "Опис недоступний."}
+            </p>
+          </div>
+        </>
+      )}
+    />
+  ) : null;
+
+  const selectedViewModal = selectedView ? (
+    <ExistingCollectionEntryModal
+      key={selectedView.id}
+      title={selectedView.items.title}
+      posterUrl={(selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined}
+      imageUrls={selectedViewItemDraft?.imageUrls ?? selectedViewImageUrls ?? undefined}
+      fitTargetText="цей фільм"
+      onClose={closeSelectedView}
+      onDirtyChange={setIsSelectedViewDirty}
+      readOnly={readOnly}
+      onAddToOwnCollection={() => handleAddToOwnCollection(selectedView.items.id)}
+      previewAction={{
+        label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
+        onClick: handleWatchSelectedViewTrailer,
+        disabled: isTrailerLoading,
+        icon: playIcon,
+      }}
+      previewMenuAction={buildFilmServiceMenuAction(
+        selectedViewItemDraft?.title_original ?? selectedView.items.title_original,
+        selectedViewItemDraft?.title ?? selectedView.items.title,
+      )}
+      extraActions={
+        !readOnly ? (
+          <button
+            type="button"
+            className="btnBase btnSecondary"
+            onClick={() => openRecommend(selectedView.items.id, selectedView.items.title)}
+          >
+            Порекомендувати другу
+          </button>
+        ) : null
+      }
+      initialValues={{
+        viewedAt: selectedView.viewed_at,
+        comment: selectedView.comment,
+        recommendSimilar: selectedView.recommend_similar,
+        isViewed: selectedView.is_viewed,
+        rating: selectedView.rating,
+        viewPercent: selectedView.view_percent,
+        availability: selectedView.availability,
+        shishkaFitAssessment: getStoredShishkaFitAssessment(selectedView),
+      }}
+      availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
+      onRefresh={handleRefreshSelectedFilmMetadata}
+      onEvaluate={(payload) =>
+        evaluateFilmWithProfile(
+          supabase,
+          {
+            title: selectedViewItemDraft?.title ?? selectedView.items.title,
+            year: selectedViewItemDraft?.year ?? selectedView.items.year,
+            mediaType: selectedViewItemDraft?.film_media_type ?? selectedView.items.film_media_type,
+            genres: selectedViewItemDraft?.genres ?? selectedView.items.genres,
+            director: selectedViewItemDraft?.director ?? selectedView.items.director,
+            actors: selectedViewItemDraft?.actors ?? selectedView.items.actors,
+            plot: selectedViewItemDraft?.description ?? selectedView.items.description,
+          },
+          payload.shishkaFitAssessment,
+        )
+      }
+      onPersistEvaluatedAssessment={async (assessment) =>
+        persistViewAssessment(selectedView.id, assessment)
+      }
+      onAdd={(payload) =>
+        handleUpdateView(selectedView.id, selectedView.items.id, selectedViewItemDraft, payload)
+      }
+      onDelete={() => handleDeleteView(selectedView.id)}
+    >
+      {({ fitBadge }) => (
+        <FilmMetadataContent
+          imdbRating={selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating ?? "—"}
+          fitBadge={fitBadge}
+          personalRating={formatPersonalRating(selectedView.rating)}
+          year={selectedViewItemDraft?.year ?? selectedView.items.year}
+          mediaType={selectedViewItemDraft?.film_media_type ?? selectedView.items.film_media_type}
+          originalTitle={renderCopyableFilmTitle(
+            selectedViewItemDraft?.title_original ?? selectedView.items.title_original,
+            "оригінальну",
+          )}
+          englishTitle={renderCopyableFilmTitle(
+            selectedViewItemDraft?.title_en ?? selectedView.items.title_en,
+            "англійську",
+          )}
+          showEnglishTitle={
+            Boolean((selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim()) &&
+            (selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim() !==
+              (selectedViewItemDraft?.title_original ?? selectedView.items.title_original)?.trim()
+          }
+          director={
+            renderDirectorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
+            (selectedViewItemDraft?.director ?? selectedView.items.director)
+          }
+          writers={renderWriterLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople)}
+          producers={
+            renderProducerLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople)
+          }
+          actors={
+            renderActorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
+            (selectedViewItemDraft?.actors ?? selectedView.items.actors)
+          }
+          genres={
+            renderGenreLinks(selectedViewItemDraft?.normalizedGenres ?? selectedViewGenres) ??
+            (selectedViewItemDraft?.genres ?? selectedView.items.genres)
+          }
+          description={selectedViewItemDraft?.description ?? selectedView.items.description}
+          message={trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
+        />
+      )}
+    </ExistingCollectionEntryModal>
+  ) : null;
+
+  const trailerViewerModal = trailerModal ? (
+    <TrailerViewerModal
+      key={`${trailerModal.baseTitle}:${trailerModal.index}:${trailerModal.trailers.length}`}
+      trailers={trailerModal.trailers}
+      initialIndex={trailerModal.index}
+      baseTitle={trailerModal.baseTitle}
+      onClose={() => setTrailerModal(null)}
+    />
+  ) : null;
+
+  const recommendItemModal = recommendItem ? (
+    <RecommendModal
+      title={recommendItem.title}
+      contacts={contacts}
+      onClose={() => setRecommendItem(null)}
+      onSend={handleSendRecommendation}
+    />
+  ) : null;
+
+  const recommendationScopeModal = recommendationScopeState ? (
+    <RecommendationRequestModal
+      title="Рекомендація для кіно"
+      scopeLabel="Формат"
+      options={recommendationScopeState.options}
+      emptyMessage={recommendationScopeState.emptyMessage}
+      isLoading={isPreparingRecommendationRequest}
+      isSubmitting={isGeneratingRecommendations}
+      statusMessage={recommendationMessage}
+      statusTone="error"
+      canPreviewPrompt={isRecommendationPromptDebugEnabled && !readOnly}
+      isPreviewingPrompt={isPreviewingRecommendationPrompt}
+      promptPreview={recommendationPromptPreview}
+      placeholder="щось легше, без жахів, не дуже довге"
+      onClose={() => {
+        setRecommendationScopeState(null);
+        setRecommendationMessage("");
+        setRecommendationPromptPreview("");
+      }}
+      onPreviewPrompt={async (scopeValue, wishes) => {
+        await handlePreviewRecommendationPrompt(scopeValue as "movie" | "tv", wishes);
+      }}
+      onSubmit={async (scopeValue, wishes) => {
+        await handleRecommend(scopeValue as "movie" | "tv", wishes);
+      }}
+    />
+  ) : null;
+
+  const nicknameModal = isNicknameModalOpen ? (
+    <div
+      className={styles.filtersOverlay}
+      role="dialog"
+      aria-modal="true"
+      onClick={() => {
+        if (!isSavingNickname) {
+          setIsNicknameModalOpen(false);
+          setPendingRecommendItem(null);
+        }
+      }}
+    >
+      <div className={styles.filtersModal} onClick={(event) => event.stopPropagation()}>
+        <div className={styles.filtersHeader}>
+          <h2 className={styles.filtersTitle}>Задайте нікнейм перед відправкою</h2>
+        </div>
+        <label className={styles.filtersField}>
+          Нікнейм
+          <input
+            className={styles.filtersInput}
+            value={nicknameValue}
+            maxLength={24}
+            onChange={(event) => setNicknameValue(event.target.value)}
+            disabled={isSavingNickname}
+            autoFocus
+          />
+        </label>
+        <p className={styles.message}>3-24 символи: літери, цифри, _, -</p>
+        {nicknameError ? <p className={styles.errorText}>{nicknameError}</p> : null}
+        <div className={styles.filtersActions}>
+          <button
+            type="button"
+            className="btnBase btnSecondary"
+            onClick={() => {
+              setIsNicknameModalOpen(false);
+              setPendingRecommendItem(null);
+            }}
+            disabled={isSavingNickname}
+          >
+            Скасувати
+          </button>
+          <button
+            type="button"
+            className="btnBase btnPrimary"
+            onClick={() => void saveNicknameAndContinue()}
+            disabled={isSavingNickname}
+          >
+            {isSavingNickname ? "Збереження..." : "Зберегти і продовжити"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  if (isEditOnly) {
+    return (
+      <div className={styles.searchBlock}>
+        {!selectedView ? (
+          <p className={styles.message} aria-live="polite">
+            Підготовка форми редагування...
+          </p>
+        ) : null}
+        {refreshPickerModal}
+        {selectedViewModal}
+        {trailerViewerModal}
+        {recommendItemModal}
+        {recommendationScopeModal}
+        {nicknameModal}
+      </div>
+    );
+  }
+
   return (
     <div className={styles.searchBlock}>
       <div className={styles.filtersWrapper}>
@@ -4509,278 +4828,12 @@ export default function FilmsManager({
         />
       ) : null}
 
-      {isRefreshPickerOpen ? (
-        <CatalogSearchModal
-          title="Оновити фільм"
-          onSearch={handleFilmSearch}
-          getKey={(film) => film.id}
-          initialQuery={refreshSearchQuery}
-          onSelect={async (film) => {
-            await applyRefreshedFilmMetadata(film);
-            setIsRefreshPickerOpen(false);
-          }}
-          onClose={() => setIsRefreshPickerOpen(false)}
-          renderItem={(film) => (
-            <>
-              <div className={styles.posterWrapper}>
-                {film.poster && film.poster !== "N/A" ? (
-                  <Image
-                    className={styles.poster}
-                    src={film.poster}
-                    alt={`Постер ${film.title}`}
-                    width={180}
-                    height={270}
-                    unoptimized
-                  />
-                ) : (
-                  <div className={styles.posterPlaceholder}>No image</div>
-                )}
-              </div>
-              <div className={styles.resultContent}>
-                <div className={styles.titleRow}>
-                  <h2 className={styles.resultTitle}>
-                    {film.title} <span className={styles.resultYear}>({film.year})</span>
-                  </h2>
-                  {film.imdbRating ? (
-                    <span className={styles.resultRating}>IMDb: {film.imdbRating}</span>
-                  ) : null}
-                </div>
-                {film.genres ? <p className={styles.resultMeta}>{film.genres}</p> : null}
-                {film.director ? (
-                  <p className={styles.resultMeta}>Режисер: {film.director}</p>
-                ) : null}
-                {film.actors ? <p className={styles.resultMeta}>Актори: {film.actors}</p> : null}
-                <p className={styles.resultPlot}>
-                  {film.plot ? film.plot : "Опис недоступний."}
-                </p>
-              </div>
-            </>
-          )}
-        />
-      ) : null}
-
-      {selectedView ? (
-        <ExistingCollectionEntryModal
-          key={selectedView.id}
-          title={selectedView.items.title}
-          posterUrl={
-            (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined
-          }
-          imageUrls={selectedViewItemDraft?.imageUrls ?? selectedViewImageUrls ?? undefined}
-          fitTargetText="цей фільм"
-          onClose={closeSelectedView}
-          onDirtyChange={setIsSelectedViewDirty}
-          readOnly={readOnly}
-          onAddToOwnCollection={() => handleAddToOwnCollection(selectedView.items.id)}
-          previewAction={{
-            label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
-            onClick: handleWatchSelectedViewTrailer,
-            disabled: isTrailerLoading,
-            icon: playIcon,
-          }}
-          previewMenuAction={buildFilmServiceMenuAction(
-            selectedViewItemDraft?.title_original ?? selectedView.items.title_original,
-            selectedViewItemDraft?.title ?? selectedView.items.title,
-          )}
-          extraActions={
-            !readOnly ? (
-              <button
-                type="button"
-                className="btnBase btnSecondary"
-                onClick={() =>
-                  openRecommend(selectedView.items.id, selectedView.items.title)
-                }
-              >
-                Порекомендувати другу
-              </button>
-            ) : null
-          }
-          initialValues={{
-            viewedAt: selectedView.viewed_at,
-            comment: selectedView.comment,
-            recommendSimilar: selectedView.recommend_similar,
-            isViewed: selectedView.is_viewed,
-            rating: selectedView.rating,
-            viewPercent: selectedView.view_percent,
-            availability: selectedView.availability,
-            shishkaFitAssessment: getStoredShishkaFitAssessment(selectedView),
-          }}
-          availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
-          onRefresh={handleRefreshSelectedFilmMetadata}
-          onEvaluate={(payload) =>
-            evaluateFilmWithProfile(
-              supabase,
-              {
-                title: selectedViewItemDraft?.title ?? selectedView.items.title,
-                year: selectedViewItemDraft?.year ?? selectedView.items.year,
-                mediaType:
-                  selectedViewItemDraft?.film_media_type ??
-                  selectedView.items.film_media_type,
-                genres: selectedViewItemDraft?.genres ?? selectedView.items.genres,
-                director: selectedViewItemDraft?.director ?? selectedView.items.director,
-                actors: selectedViewItemDraft?.actors ?? selectedView.items.actors,
-                plot:
-                  selectedViewItemDraft?.description ?? selectedView.items.description,
-              },
-              payload.shishkaFitAssessment,
-            )
-          }
-          onPersistEvaluatedAssessment={async (assessment) =>
-            persistViewAssessment(selectedView.id, assessment)
-          }
-          onAdd={(payload) =>
-            handleUpdateView(
-              selectedView.id,
-              selectedView.items.id,
-              selectedViewItemDraft,
-              payload,
-            )
-          }
-          onDelete={() => handleDeleteView(selectedView.id)}
-        >
-          {({ fitBadge }) => (
-            <FilmMetadataContent
-              imdbRating={selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating ?? "—"}
-              fitBadge={fitBadge}
-              personalRating={formatPersonalRating(selectedView.rating)}
-              year={selectedViewItemDraft?.year ?? selectedView.items.year}
-              mediaType={selectedViewItemDraft?.film_media_type ?? selectedView.items.film_media_type}
-              originalTitle={renderCopyableFilmTitle(
-                selectedViewItemDraft?.title_original ?? selectedView.items.title_original,
-                "оригінальну",
-              )}
-              englishTitle={renderCopyableFilmTitle(
-                selectedViewItemDraft?.title_en ?? selectedView.items.title_en,
-                "англійську",
-              )}
-              showEnglishTitle={
-                Boolean((selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim()) &&
-                (selectedViewItemDraft?.title_en ?? selectedView.items.title_en)?.trim() !==
-                  (selectedViewItemDraft?.title_original ?? selectedView.items.title_original)?.trim()
-              }
-              director={
-                renderDirectorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
-                (selectedViewItemDraft?.director ?? selectedView.items.director)
-              }
-              writers={renderWriterLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople)}
-              producers={
-                renderProducerLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople)
-              }
-              actors={
-                renderActorLinks(selectedViewItemDraft?.normalizedPeople ?? selectedViewPeople) ??
-                (selectedViewItemDraft?.actors ?? selectedView.items.actors)
-              }
-              genres={
-                renderGenreLinks(selectedViewItemDraft?.normalizedGenres ?? selectedViewGenres) ??
-                (selectedViewItemDraft?.genres ?? selectedView.items.genres)
-              }
-              description={selectedViewItemDraft?.description ?? selectedView.items.description}
-              message={trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
-            />
-          )}
-        </ExistingCollectionEntryModal>
-      ) : null}
-
-      {trailerModal ? (
-        <TrailerViewerModal
-          key={`${trailerModal.baseTitle}:${trailerModal.index}:${trailerModal.trailers.length}`}
-          trailers={trailerModal.trailers}
-          initialIndex={trailerModal.index}
-          baseTitle={trailerModal.baseTitle}
-          onClose={() => setTrailerModal(null)}
-        />
-      ) : null}
-
-      {recommendItem ? (
-        <RecommendModal
-          title={recommendItem.title}
-          contacts={contacts}
-          onClose={() => setRecommendItem(null)}
-          onSend={handleSendRecommendation}
-        />
-      ) : null}
-
-      {recommendationScopeState ? (
-        <RecommendationRequestModal
-          title="Рекомендація для кіно"
-          scopeLabel="Формат"
-          options={recommendationScopeState.options}
-          emptyMessage={recommendationScopeState.emptyMessage}
-          isLoading={isPreparingRecommendationRequest}
-          isSubmitting={isGeneratingRecommendations}
-          statusMessage={recommendationMessage}
-          statusTone="error"
-          canPreviewPrompt={isRecommendationPromptDebugEnabled && !readOnly}
-          isPreviewingPrompt={isPreviewingRecommendationPrompt}
-          promptPreview={recommendationPromptPreview}
-          placeholder="щось легше, без жахів, не дуже довге"
-          onClose={() => {
-            setRecommendationScopeState(null);
-            setRecommendationMessage("");
-            setRecommendationPromptPreview("");
-          }}
-          onPreviewPrompt={async (scopeValue, wishes) => {
-            await handlePreviewRecommendationPrompt(scopeValue as "movie" | "tv", wishes);
-          }}
-          onSubmit={async (scopeValue, wishes) => {
-            await handleRecommend(scopeValue as "movie" | "tv", wishes);
-          }}
-        />
-      ) : null}
-
-      {isNicknameModalOpen ? (
-        <div
-          className={styles.filtersOverlay}
-          role="dialog"
-          aria-modal="true"
-          onClick={() => {
-            if (!isSavingNickname) {
-              setIsNicknameModalOpen(false);
-              setPendingRecommendItem(null);
-            }
-          }}
-        >
-          <div className={styles.filtersModal} onClick={(event) => event.stopPropagation()}>
-            <div className={styles.filtersHeader}>
-              <h2 className={styles.filtersTitle}>Задайте нікнейм перед відправкою</h2>
-            </div>
-            <label className={styles.filtersField}>
-              Нікнейм
-              <input
-                className={styles.filtersInput}
-                value={nicknameValue}
-                maxLength={24}
-                onChange={(event) => setNicknameValue(event.target.value)}
-                disabled={isSavingNickname}
-                autoFocus
-              />
-            </label>
-            <p className={styles.message}>3-24 символи: літери, цифри, _, -</p>
-            {nicknameError ? <p className={styles.errorText}>{nicknameError}</p> : null}
-            <div className={styles.filtersActions}>
-              <button
-                type="button"
-                className="btnBase btnSecondary"
-                onClick={() => {
-                  setIsNicknameModalOpen(false);
-                  setPendingRecommendItem(null);
-                }}
-                disabled={isSavingNickname}
-              >
-                Скасувати
-              </button>
-              <button
-                type="button"
-                className="btnBase btnPrimary"
-                onClick={() => void saveNicknameAndContinue()}
-                disabled={isSavingNickname}
-              >
-                {isSavingNickname ? "Збереження..." : "Зберегти і продовжити"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {refreshPickerModal}
+      {selectedViewModal}
+      {trailerViewerModal}
+      {recommendItemModal}
+      {recommendationScopeModal}
+      {nicknameModal}
     </div>
   );
 }

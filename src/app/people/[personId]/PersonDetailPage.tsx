@@ -3,12 +3,14 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSelectedLayoutSegment } from "next/navigation";
 import CatalogLayout from "@/components/catalog/CatalogLayout";
 import searchStyles from "@/components/catalog/CatalogSearch.module.css";
 import FilmCollectionPopup, {
   type FilmCollectionPopupCandidate,
   type FilmCollectionPopupView,
 } from "@/components/films/FilmCollectionPopup";
+import { buildPersonFilmViewHref } from "@/lib/people/routes";
 import { supabase } from "@/lib/supabase/client";
 import styles from "@/app/actors/ActorsPage.module.css";
 
@@ -197,6 +199,7 @@ type FilmographySectionProps = {
   labelPlural: string;
   onOpenExisting: (view: FilmCollectionPopupView) => void;
   onOpenCandidate: (candidate: FilmCollectionPopupCandidate) => void;
+  disableAutoLoad?: boolean;
 };
 
 function FilmographySection({
@@ -209,13 +212,14 @@ function FilmographySection({
   labelPlural,
   onOpenExisting,
   onOpenCandidate,
+  disableAutoLoad = false,
 }: FilmographySectionProps) {
   const [visibleCount, setVisibleCount] = useState(FILMOGRAPHY_BATCH_SIZE);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const element = loadMoreRef.current;
-    if (!element || visibleCount >= entries.length) {
+    if (disableAutoLoad || !element || visibleCount >= entries.length) {
       return;
     }
 
@@ -232,7 +236,7 @@ function FilmographySection({
 
     observer.observe(element);
     return () => observer.disconnect();
-  }, [entries.length, visibleCount]);
+  }, [disableAutoLoad, entries.length, visibleCount]);
 
   const visibleEntries = entries.slice(0, visibleCount);
   const hasMore = visibleCount < entries.length;
@@ -348,11 +352,11 @@ function FilmographySection({
 }
 
 export default function PersonDetailPage({ personId }: { personId: string }) {
+  const router = useRouter();
+  const modalRouteSegment = useSelectedLayoutSegment("modal");
+  const isRouteModalOpen = modalRouteSegment !== null;
   const [detail, setDetail] = useState<PersonDetail | null>(null);
   const [collectionFilms, setCollectionFilms] = useState<FilmCollectionPopupView[]>([]);
-  const [selectedExistingFilm, setSelectedExistingFilm] = useState<FilmCollectionPopupView | null>(
-    null,
-  );
   const [selectedCandidateFilm, setSelectedCandidateFilm] =
     useState<FilmCollectionPopupCandidate | null>(null);
   const [message, setMessage] = useState("Завантаження персони…");
@@ -720,7 +724,17 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   emptyMessage="У колекції поки немає фільмів чи серіалів із цією персоною як актором."
                   labelSingular="Роль"
                   labelPlural="Ролі"
-                  onOpenExisting={setSelectedExistingFilm}
+                  disableAutoLoad={isRouteModalOpen}
+                  onOpenExisting={(view) =>
+                    router.push(
+                      buildPersonFilmViewHref(
+                        personId,
+                        view.viewId,
+                        `${Date.now()}-${Math.random()}`,
+                      ),
+                      { scroll: false },
+                    )
+                  }
                   onOpenCandidate={setSelectedCandidateFilm}
                 />
                 <FilmographySection
@@ -744,7 +758,17 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   emptyMessage="Уся доступна акторська фільмографія вже перетинається з колекцією."
                   labelSingular="Роль"
                   labelPlural="Ролі"
-                  onOpenExisting={setSelectedExistingFilm}
+                  disableAutoLoad={isRouteModalOpen}
+                  onOpenExisting={(view) =>
+                    router.push(
+                      buildPersonFilmViewHref(
+                        personId,
+                        view.viewId,
+                        `${Date.now()}-${Math.random()}`,
+                      ),
+                      { scroll: false },
+                    )
+                  }
                   onOpenCandidate={setSelectedCandidateFilm}
                 />
               </>
@@ -767,7 +791,17 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   emptyMessage="У колекції поки немає фільмів чи серіалів із цією персоною як режисером."
                   labelSingular="Кредит"
                   labelPlural="Кредити"
-                  onOpenExisting={setSelectedExistingFilm}
+                  disableAutoLoad={isRouteModalOpen}
+                  onOpenExisting={(view) =>
+                    router.push(
+                      buildPersonFilmViewHref(
+                        personId,
+                        view.viewId,
+                        `${Date.now()}-${Math.random()}`,
+                      ),
+                      { scroll: false },
+                    )
+                  }
                   onOpenCandidate={setSelectedCandidateFilm}
                 />
                 <FilmographySection
@@ -791,7 +825,17 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   emptyMessage="Уся доступна режисерська фільмографія вже перетинається з колекцією."
                   labelSingular="Кредит"
                   labelPlural="Кредити"
-                  onOpenExisting={setSelectedExistingFilm}
+                  disableAutoLoad={isRouteModalOpen}
+                  onOpenExisting={(view) =>
+                    router.push(
+                      buildPersonFilmViewHref(
+                        personId,
+                        view.viewId,
+                        `${Date.now()}-${Math.random()}`,
+                      ),
+                      { scroll: false },
+                    )
+                  }
                   onOpenCandidate={setSelectedCandidateFilm}
                 />
               </>
@@ -814,7 +858,17 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   emptyMessage="У колекції поки немає фільмів чи серіалів із цією персоною як сценаристом."
                   labelSingular="Кредит"
                   labelPlural="Кредити"
-                  onOpenExisting={setSelectedExistingFilm}
+                  disableAutoLoad={isRouteModalOpen}
+                  onOpenExisting={(view) =>
+                    router.push(
+                      buildPersonFilmViewHref(
+                        personId,
+                        view.viewId,
+                        `${Date.now()}-${Math.random()}`,
+                      ),
+                      { scroll: false },
+                    )
+                  }
                   onOpenCandidate={setSelectedCandidateFilm}
                 />
                 <FilmographySection
@@ -838,7 +892,17 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   emptyMessage="Уся доступна сценарна фільмографія вже перетинається з колекцією."
                   labelSingular="Кредит"
                   labelPlural="Кредити"
-                  onOpenExisting={setSelectedExistingFilm}
+                  disableAutoLoad={isRouteModalOpen}
+                  onOpenExisting={(view) =>
+                    router.push(
+                      buildPersonFilmViewHref(
+                        personId,
+                        view.viewId,
+                        `${Date.now()}-${Math.random()}`,
+                      ),
+                      { scroll: false },
+                    )
+                  }
                   onOpenCandidate={setSelectedCandidateFilm}
                 />
               </>
@@ -861,7 +925,17 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   emptyMessage="У колекції поки немає фільмів чи серіалів із цією персоною як продюсером."
                   labelSingular="Кредит"
                   labelPlural="Кредити"
-                  onOpenExisting={setSelectedExistingFilm}
+                  disableAutoLoad={isRouteModalOpen}
+                  onOpenExisting={(view) =>
+                    router.push(
+                      buildPersonFilmViewHref(
+                        personId,
+                        view.viewId,
+                        `${Date.now()}-${Math.random()}`,
+                      ),
+                      { scroll: false },
+                    )
+                  }
                   onOpenCandidate={setSelectedCandidateFilm}
                 />
                 <FilmographySection
@@ -885,7 +959,17 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
                   emptyMessage="Уся доступна продюсерська фільмографія вже перетинається з колекцією."
                   labelSingular="Кредит"
                   labelPlural="Кредити"
-                  onOpenExisting={setSelectedExistingFilm}
+                  disableAutoLoad={isRouteModalOpen}
+                  onOpenExisting={(view) =>
+                    router.push(
+                      buildPersonFilmViewHref(
+                        personId,
+                        view.viewId,
+                        `${Date.now()}-${Math.random()}`,
+                      ),
+                      { scroll: false },
+                    )
+                  }
                   onOpenCandidate={setSelectedCandidateFilm}
                 />
               </>
@@ -893,14 +977,6 @@ export default function PersonDetailPage({ personId }: { personId: string }) {
           </>
         ) : null}
 
-        {selectedExistingFilm ? (
-          <FilmCollectionPopup
-            mode="edit"
-            existingView={selectedExistingFilm}
-            onClose={() => setSelectedExistingFilm(null)}
-            onSaved={loadCollection}
-          />
-        ) : null}
         {selectedCandidateFilm ? (
           <FilmCollectionPopup
             mode="add"

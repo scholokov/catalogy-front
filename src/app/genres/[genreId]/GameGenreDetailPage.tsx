@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter, useSelectedLayoutSegment } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -15,9 +16,14 @@ import CatalogLayout from "@/components/catalog/CatalogLayout";
 import CatalogModal from "@/components/catalog/CatalogModal";
 import TrailerViewerModal from "@/components/films/TrailerViewerModal";
 import searchStyles from "@/components/catalog/CatalogSearch.module.css";
+import type { GameGenreEditEntryView } from "@/lib/catalog/edit/types";
 import { buildGameServiceMenuAction } from "@/lib/collection/serviceSearchLinks";
 import { supabase } from "@/lib/supabase/client";
-import { buildGenreHref, type GenreSource } from "@/lib/genres/routes";
+import {
+  buildGameGenreViewHref,
+  buildGenreHref,
+  type GenreSource,
+} from "@/lib/genres/routes";
 import {
   type GameNormalizedGenre,
   trySyncGameNormalizedGenres,
@@ -50,33 +56,7 @@ type GameGenreRecord = {
   sourceGenreId: string;
 };
 
-type GameGenreView = {
-  viewId: string;
-  viewedAt: string;
-  comment: string | null;
-  recommendSimilar: boolean;
-  isViewed: boolean;
-  rating: number | null;
-  viewPercent: number;
-  availability: string | null;
-  platforms: string[];
-  shishkaFitLabel: ShishkaFitAssessment["label"] | null;
-  shishkaFitReason: string | null;
-  shishkaFitProfileAnalyzedAt: string | null;
-  shishkaFitScopeValue: string | null;
-  item: {
-    id: string;
-    title: string;
-    description: string | null;
-    genres: string | null;
-    posterUrl: string | null;
-    externalId: string | null;
-    year: number | null;
-    imdbRating: string | null;
-    genreItems: GameNormalizedGenre[];
-    trailers: Trailer[] | null;
-  };
-};
+type GameGenreView = GameGenreEditEntryView;
 
 type GameItemDraft = {
   posterUrl: string | null;
@@ -163,6 +143,7 @@ type GameGenreSectionProps = {
   entries: GameGenreView[];
   emptyMessage: string;
   onOpenExisting: (view: GameGenreView) => void;
+  disableAutoLoad?: boolean;
 };
 
 function GameGenreSection({
@@ -170,13 +151,14 @@ function GameGenreSection({
   entries,
   emptyMessage,
   onOpenExisting,
+  disableAutoLoad = false,
 }: GameGenreSectionProps) {
   const [visibleCount, setVisibleCount] = useState(GAME_BATCH_SIZE);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const element = loadMoreRef.current;
-    if (!element || visibleCount >= entries.length) {
+    if (disableAutoLoad || !element || visibleCount >= entries.length) {
       return;
     }
 
@@ -191,7 +173,7 @@ function GameGenreSection({
 
     observer.observe(element);
     return () => observer.disconnect();
-  }, [entries.length, visibleCount]);
+  }, [disableAutoLoad, entries.length, visibleCount]);
 
   const visibleEntries = entries.slice(0, visibleCount);
   const hasMore = visibleCount < entries.length;
@@ -571,17 +553,32 @@ const loadGameGenreCollectionData = async (source: GenreSource, sourceGenreId: s
   };
 };
 
+type GameGenreDetailPageProps = {
+  source: GenreSource;
+  sourceGenreId: string;
+  renderMode?: "catalog" | "edit-only";
+  onRequestClose?: () => void;
+  onEditDirtyChange?: (isDirty: boolean) => void;
+  prefetchedSelectedView?: GameGenreView | null;
+};
+
 export default function GameGenreDetailPage({
   source,
   sourceGenreId,
-}: {
-  source: GenreSource;
-  sourceGenreId: string;
-}) {
+  renderMode = "catalog",
+  onRequestClose,
+  onEditDirtyChange,
+  prefetchedSelectedView,
+}: GameGenreDetailPageProps) {
+  const router = useRouter();
+  const modalRouteSegment = useSelectedLayoutSegment("modal");
+  const isEditOnly = renderMode === "edit-only";
+  const isRouteModalOpen = !isEditOnly && modalRouteSegment !== null;
   const [genre, setGenre] = useState<GameGenreRecord | null>(null);
   const [collectionGames, setCollectionGames] = useState<GameGenreView[]>([]);
   const [selectedExistingGame, setSelectedExistingGame] = useState<GameGenreView | null>(null);
   const [selectedDraft, setSelectedDraft] = useState<GameItemDraft | null>(null);
+  const [isSelectedGameDirty, setIsSelectedGameDirty] = useState(false);
   const [message, setMessage] = useState("Завантаження жанру…");
   const [trailerMessage, setTrailerMessage] = useState("");
   const [isTrailerLoading, setIsTrailerLoading] = useState(false);
@@ -592,6 +589,11 @@ export default function GameGenreDetailPage({
   } | null>(null);
 
   useEffect(() => {
+    if (isEditOnly) {
+      setMessage("");
+      return;
+    }
+
     let isCancelled = false;
 
     void (async () => {
@@ -607,7 +609,20 @@ export default function GameGenreDetailPage({
     return () => {
       isCancelled = true;
     };
-  }, [source, sourceGenreId]);
+  }, [isEditOnly, source, sourceGenreId]);
+
+  useEffect(() => {
+    if (!isEditOnly) {
+      return;
+    }
+
+    setSelectedDraft(null);
+    setSelectedExistingGame(prefetchedSelectedView ?? null);
+  }, [isEditOnly, prefetchedSelectedView]);
+
+  useEffect(() => {
+    onEditDirtyChange?.(isSelectedGameDirty);
+  }, [isSelectedGameDirty, onEditDirtyChange]);
 
   const watchedEntries = useMemo(
     () => collectionGames.filter((entry) => entry.isViewed),
@@ -749,9 +764,16 @@ export default function GameGenreDetailPage({
       setGenre(data.genre);
       setCollectionGames(data.collectionGames);
       setMessage(data.message);
-      setSelectedExistingGame(null);
+      if (isEditOnly) {
+        const updatedGame =
+          data.collectionGames.find((entry) => entry.viewId === selectedExistingGame.viewId) ?? null;
+        setSelectedExistingGame(updatedGame);
+      } else {
+        setSelectedExistingGame(null);
+      }
+      setSelectedDraft(null);
     },
-    [selectedDraft, selectedExistingGame, source, sourceGenreId],
+    [isEditOnly, selectedDraft, selectedExistingGame, source, sourceGenreId],
   );
 
   const handleDeleteSelectedGame = useCallback(async () => {
@@ -769,7 +791,11 @@ export default function GameGenreDetailPage({
     setCollectionGames(data.collectionGames);
     setMessage(data.message);
     setSelectedExistingGame(null);
-  }, [selectedExistingGame, source, sourceGenreId]);
+    setSelectedDraft(null);
+    if (isEditOnly) {
+      onRequestClose?.();
+    }
+  }, [isEditOnly, onRequestClose, selectedExistingGame, source, sourceGenreId]);
 
   const persistSelectedGameAssessment = useCallback(
     async (assessment: ShishkaFitAssessment) => {
@@ -966,20 +992,11 @@ export default function GameGenreDetailPage({
   const activeGame = selectedExistingGame;
   const activeGenres = selectedDraft?.normalizedGenres ?? activeGame?.item.genreItems ?? null;
   const activeGenreText = selectedDraft?.genres ?? activeGame?.item.genres ?? null;
-
-  return (
-    <CatalogLayout
-      title={genre?.name ?? "Жанр"}
-      headerRight={
-        <Link href="/statistics?media=games" className="btnBase btnSecondary">
-          До статистики
-        </Link>
-      }
-    >
-      <div className={styles.content}>
+  const content = (
+    <div className={styles.content}>
         {message ? <p className={styles.message}>{message}</p> : null}
 
-        {genre ? (
+        {!isEditOnly && genre ? (
           <>
             <section className={styles.section}>
               <div className={styles.kpiGrid}>
@@ -1009,9 +1026,18 @@ export default function GameGenreDetailPage({
               title="Пройдене в жанрі"
               entries={watchedEntries}
               emptyMessage="У цьому жанрі поки немає пройдених ігор."
+              disableAutoLoad={isRouteModalOpen}
               onOpenExisting={(view) => {
                 setSelectedDraft(null);
-                setSelectedExistingGame(view);
+                router.push(
+                  buildGameGenreViewHref({
+                    source,
+                    sourceGenreId,
+                    viewId: view.viewId,
+                    navigationToken: `${Date.now()}-${Math.random()}`,
+                  }),
+                  { scroll: false },
+                );
               }}
             />
             <GameGenreSection
@@ -1019,9 +1045,18 @@ export default function GameGenreDetailPage({
               title="Ще не пройдено"
               entries={plannedEntries}
               emptyMessage="У цьому жанрі все в колекції вже пройдено."
+              disableAutoLoad={isRouteModalOpen}
               onOpenExisting={(view) => {
                 setSelectedDraft(null);
-                setSelectedExistingGame(view);
+                router.push(
+                  buildGameGenreViewHref({
+                    source,
+                    sourceGenreId,
+                    viewId: view.viewId,
+                    navigationToken: `${Date.now()}-${Math.random()}`,
+                  }),
+                  { scroll: false },
+                );
               }}
             />
           </>
@@ -1035,9 +1070,14 @@ export default function GameGenreDetailPage({
             }
             fitTargetText="ця гра"
             onClose={() => {
-              setSelectedDraft(null);
-              setSelectedExistingGame(null);
+              setIsSelectedGameDirty(false);
+              if (!isEditOnly) {
+                setSelectedDraft(null);
+                setSelectedExistingGame(null);
+              }
+              onRequestClose?.();
             }}
+            onDirtyChange={setIsSelectedGameDirty}
             size="wide"
             showRecommendSimilar={false}
             availabilityOptions={AVAILABILITY_OPTIONS}
@@ -1114,6 +1154,22 @@ export default function GameGenreDetailPage({
           />
         ) : null}
       </div>
+  );
+
+  if (isEditOnly) {
+    return content;
+  }
+
+  return (
+    <CatalogLayout
+      title={genre?.name ?? "Жанр"}
+      headerRight={
+        <Link href="/statistics?media=games" className="btnBase btnSecondary">
+          До статистики
+        </Link>
+      }
+    >
+      {content}
     </CatalogLayout>
   );
 }

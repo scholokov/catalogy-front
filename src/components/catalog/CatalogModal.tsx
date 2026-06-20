@@ -148,15 +148,36 @@ export default function CatalogModal({
     () => [...(initialValues?.platforms ?? [])].sort().join("|"),
     [initialValues?.platforms],
   );
-  const isEditMode = initialValues !== undefined;
   const initialViewedAt = initialValues?.viewedAt;
   const initialComment = initialValues?.comment;
+  const normalizedInitialComment = useMemo(
+    () => stripShishkaAssessmentFromComment(initialComment),
+    [initialComment],
+  );
   const initialRecommendSimilar = initialValues?.recommendSimilar;
   const initialIsViewed = initialValues?.isViewed;
   const initialRating = initialValues?.rating;
   const initialViewPercent = initialValues?.viewPercent;
   const initialAvailability = initialValues?.availability;
   const initialShishkaFitAssessment = initialValues?.shishkaFitAssessment ?? null;
+  const initialShishkaFitAssessmentKey = useMemo(
+    () =>
+      initialShishkaFitAssessment
+        ? [
+            initialShishkaFitAssessment.label,
+            initialShishkaFitAssessment.reason,
+            initialShishkaFitAssessment.profileAnalyzedAt,
+            initialShishkaFitAssessment.scopeValue,
+          ].join("|")
+        : "",
+    [
+      initialShishkaFitAssessment?.label,
+      initialShishkaFitAssessment?.reason,
+      initialShishkaFitAssessment?.profileAnalyzedAt,
+      initialShishkaFitAssessment?.scopeValue,
+    ],
+  );
+  const isEditMode = initialValues !== undefined;
   const images = useMemo(() => {
     if (imageUrls && imageUrls.length > 0) {
       const unique = Array.from(new Set(imageUrls.filter(Boolean)));
@@ -233,7 +254,7 @@ export default function CatalogModal({
     };
 
     setViewedAt(normalizeDate(initialViewedAt));
-    setComment(stripShishkaAssessmentFromComment(initialComment));
+    setComment(normalizedInitialComment);
     setRecommendSimilar(Boolean(initialRecommendSimilar));
     setIsViewed(initialIsViewed ?? true);
     setRating(initialRating ?? null);
@@ -248,7 +269,7 @@ export default function CatalogModal({
     isEditMode,
     today,
     initialAvailability,
-    initialComment,
+    normalizedInitialComment,
     initialIsViewed,
     initialRating,
     initialRecommendSimilar,
@@ -258,8 +279,16 @@ export default function CatalogModal({
   ]);
 
   useEffect(() => {
-    setShishkaFitAssessment(initialShishkaFitAssessment);
-  }, [initialShishkaFitAssessment]);
+    setShishkaFitAssessment((current) => {
+      const currentKey = current
+        ? [current.label, current.reason, current.profileAnalyzedAt, current.scopeValue].join("|")
+        : "";
+      if (currentKey === initialShishkaFitAssessmentKey) {
+        return current;
+      }
+      return initialShishkaFitAssessment;
+    });
+  }, [initialShishkaFitAssessment, initialShishkaFitAssessmentKey]);
 
   const isDirty = useMemo(() => {
     if (readOnly) {
@@ -276,7 +305,7 @@ export default function CatalogModal({
             return date.toISOString().slice(0, 10);
           })()
         : today) ||
-      comment !== (initialComment ?? "") ||
+      comment !== normalizedInitialComment ||
       recommendSimilar !== Boolean(initialRecommendSimilar) ||
       isViewed !== (initialIsViewed ?? true) ||
       rating !== (initialRating ?? null) ||
@@ -288,7 +317,7 @@ export default function CatalogModal({
     availability,
     comment,
     initialAvailability,
-    initialComment,
+    normalizedInitialComment,
     initialIsViewed,
     initialPlatformsKey,
     initialRating,
@@ -308,10 +337,13 @@ export default function CatalogModal({
 
   useEffect(() => {
     onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  useEffect(() => {
     return () => {
       onDirtyChange?.(false);
     };
-  }, [isDirty, onDirtyChange]);
+  }, [onDirtyChange]);
 
   useEffect(() => {
     if (platformOptions.length === 0) {

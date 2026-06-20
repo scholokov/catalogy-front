@@ -3,11 +3,11 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSelectedLayoutSegment } from "next/navigation";
 import CatalogLayout from "@/components/catalog/CatalogLayout";
 import searchStyles from "@/components/catalog/CatalogSearch.module.css";
-import FilmCollectionPopup, {
-  type FilmCollectionPopupView,
-} from "@/components/films/FilmCollectionPopup";
+import { type FilmCollectionPopupView } from "@/components/films/FilmCollectionPopup";
+import { buildFilmGenreViewHref } from "@/lib/genres/routes";
 import { supabase } from "@/lib/supabase/client";
 import styles from "@/app/actors/ActorsPage.module.css";
 
@@ -36,6 +36,7 @@ type GenreSectionProps = {
   entries: FilmCollectionPopupView[];
   emptyMessage: string;
   onOpenExisting: (view: FilmCollectionPopupView) => void;
+  disableAutoLoad?: boolean;
 };
 
 function GenreSection({
@@ -43,13 +44,14 @@ function GenreSection({
   entries,
   emptyMessage,
   onOpenExisting,
+  disableAutoLoad = false,
 }: GenreSectionProps) {
   const [visibleCount, setVisibleCount] = useState(GENRE_BATCH_SIZE);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const element = loadMoreRef.current;
-    if (!element || visibleCount >= entries.length) {
+    if (disableAutoLoad || !element || visibleCount >= entries.length) {
       return;
     }
 
@@ -64,7 +66,7 @@ function GenreSection({
 
     observer.observe(element);
     return () => observer.disconnect();
-  }, [entries.length, visibleCount]);
+  }, [disableAutoLoad, entries.length, visibleCount]);
 
   const visibleEntries = entries.slice(0, visibleCount);
   const hasMore = visibleCount < entries.length;
@@ -343,11 +345,11 @@ const loadGenreCollectionData = async (genreId: string) => {
 };
 
 export default function GenreDetailPage({ genreId }: { genreId: string }) {
+  const router = useRouter();
+  const modalRouteSegment = useSelectedLayoutSegment("modal");
+  const isRouteModalOpen = modalRouteSegment !== null;
   const [genre, setGenre] = useState<GenreRecord | null>(null);
   const [collectionFilms, setCollectionFilms] = useState<FilmCollectionPopupView[]>([]);
-  const [selectedExistingFilm, setSelectedExistingFilm] = useState<FilmCollectionPopupView | null>(
-    null,
-  );
   const [message, setMessage] = useState("Завантаження жанру…");
 
   useEffect(() => {
@@ -435,30 +437,36 @@ export default function GenreDetailPage({ genreId }: { genreId: string }) {
               title="Переглянуте в жанрі"
               entries={watchedEntries}
               emptyMessage="У цьому жанрі поки немає переглянутих позицій."
-              onOpenExisting={setSelectedExistingFilm}
+              disableAutoLoad={isRouteModalOpen}
+              onOpenExisting={(view) =>
+                router.push(
+                  buildFilmGenreViewHref({
+                    sourceGenreId: genreId,
+                    viewId: view.viewId,
+                    navigationToken: `${Date.now()}-${Math.random()}`,
+                  }),
+                  { scroll: false },
+                )
+              }
             />
             <GenreSection
               key={`${genreId}:planned`}
               title="Ще не переглянуто"
               entries={plannedEntries}
               emptyMessage="У цьому жанрі все в колекції вже переглянуто."
-              onOpenExisting={setSelectedExistingFilm}
+              disableAutoLoad={isRouteModalOpen}
+              onOpenExisting={(view) =>
+                router.push(
+                  buildFilmGenreViewHref({
+                    sourceGenreId: genreId,
+                    viewId: view.viewId,
+                    navigationToken: `${Date.now()}-${Math.random()}`,
+                  }),
+                  { scroll: false },
+                )
+              }
             />
           </>
-        ) : null}
-
-        {selectedExistingFilm ? (
-          <FilmCollectionPopup
-            mode="edit"
-            existingView={selectedExistingFilm}
-            onClose={() => setSelectedExistingFilm(null)}
-            onSaved={async () => {
-              const data = await loadGenreCollectionData(genreId);
-              setGenre(data.genre);
-              setCollectionFilms(data.collectionFilms);
-              setMessage(data.message);
-            }}
-          />
         ) : null}
       </div>
     </CatalogLayout>

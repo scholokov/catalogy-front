@@ -11,7 +11,7 @@ import {
 } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams, useSelectedLayoutSegment } from "next/navigation";
 import { Range, getTrackBackground } from "react-range";
 import ExistingCollectionEntryModal from "@/components/catalog/ExistingCollectionEntryModal";
 import FilterMultiSelectDropdown from "@/components/catalog/FilterMultiSelectDropdown";
@@ -36,13 +36,10 @@ import {
   evaluateGameCollectionFit,
 } from "@/lib/collection/fitEvaluation";
 import {
-  hasCollectionEntryHistoryState,
   readCollectionEntrySearchParams,
   replaceSelectedCollectionAddItemSearchParam,
-  replaceSelectedCollectionViewSearchParam,
-  type CloseSelectedViewRouteOptions,
-  useRequestedCollectionViewSync,
 } from "@/lib/collection/entryRouting";
+import { buildGameViewHref } from "@/lib/catalog/edit/routes";
 import {
   CATALOG_SCREEN_SNAPSHOT_VERSION,
   buildCatalogScreenKey,
@@ -236,6 +233,10 @@ type GamesManagerProps = {
   onCountChange?: (count: number) => void;
   ownerUserId?: string;
   readOnly?: boolean;
+  renderMode?: "catalog" | "edit-only";
+  onRequestClose?: () => void;
+  onEditDirtyChange?: (isDirty: boolean) => void;
+  prefetchedSelectedView?: GameCollectionItem | null;
 };
 
 type Filters = {
@@ -456,13 +457,20 @@ export default function GamesManager({
   onCountChange,
   ownerUserId,
   readOnly = false,
+  renderMode = "catalog",
+  onRequestClose,
+  onEditDirtyChange,
+  prefetchedSelectedView,
 }: GamesManagerProps) {
   const { showSnackbar } = useSnackbar();
   const { openCreateOwnEntry, openDraftEntry } = useCollectionEntryLauncher();
+  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { requestedViewId, requestedItemId, requestedAddItemId } =
-    readCollectionEntrySearchParams(searchParams);
+  const modalRouteSegment = useSelectedLayoutSegment("modal");
+  const { requestedAddItemId } = readCollectionEntrySearchParams(searchParams);
+  const isEditOnly = renderMode === "edit-only";
+  const isRouteModalOpen = !isEditOnly && modalRouteSegment !== null;
   const screenKey = useMemo(
     () => buildCatalogScreenKey({ screen: "games", ownerUserId, readOnly }),
     [ownerUserId, readOnly],
@@ -568,7 +576,6 @@ export default function GamesManager({
   const restoredPageTargetRef = useRef(0);
   const restoredScrollYRef = useRef<number | null>(null);
   const shouldRestoreScrollRef = useRef(false);
-  const pendingViewParamSyncRef = useRef<string | null | false>(false);
   const [isScreenContextReady, setIsScreenContextReady] = useState(false);
   const [recommendItem, setRecommendItem] = useState<{
     itemId: string;
@@ -595,7 +602,6 @@ export default function GamesManager({
   const [visiblePlatforms, setVisiblePlatforms] = useState<string[]>([
     ...GAME_PLATFORM_OPTIONS,
   ]);
-
   useEffect(() => {
     const applyPreferences = () => {
       const prefs = readDisplayPreferences();
@@ -732,18 +738,6 @@ export default function GamesManager({
     }
   }, [selectedView]);
 
-  const replaceSelectedItemSearchParam = useCallback(
-    (viewId: string | null, historyMode: "replace" | "push" = "replace") => {
-      replaceSelectedCollectionViewSearchParam({
-        pathname,
-        searchParams,
-        viewId,
-        historyMode,
-      });
-    },
-    [pathname, searchParams],
-  );
-
   const replaceAddItemSearchParam = useCallback(
     (itemId: string | null) => {
       replaceSelectedCollectionAddItemSearchParam({
@@ -758,6 +752,11 @@ export default function GamesManager({
   const clearSelectedView = useCallback(() => {
     setSelectedView(null);
     setTrailerMessage("");
+    setIsSelectedViewDirty(false);
+  }, []);
+
+  const selectSelectedView = useCallback((item: GameCollectionItem) => {
+    setSelectedView(item);
   }, []);
 
   const loadSelectedViewById = useCallback(
@@ -846,61 +845,45 @@ export default function GamesManager({
     } satisfies GameResult;
   }, []);
 
+  useEffect(() => {
+    if (!isEditOnly) {
+      return;
+    }
+
+    if (!prefetchedSelectedView) {
+      clearSelectedView();
+      return;
+    }
+
+    setSelectedView(prefetchedSelectedView);
+  }, [clearSelectedView, isEditOnly, prefetchedSelectedView]);
+
   const openSelectedView = useCallback(
-    (
+    async (
       item: GameCollectionItem,
-      options: {
+      _options: {
         syncUrl?: boolean;
         historyMode?: "replace" | "push";
       } = {},
     ) => {
-      setSelectedView(item);
-      if (options.syncUrl ?? true) {
-        pendingViewParamSyncRef.current = item.id;
-        replaceSelectedItemSearchParam(item.id, options.historyMode ?? "push");
-      }
+      router.push(buildGameViewHref(item.id, `${Date.now()}-${Math.random()}`), {
+        scroll: false,
+      });
     },
-    [replaceSelectedItemSearchParam],
+    [router],
   );
 
-  const closeSelectedView = useCallback((options: CloseSelectedViewRouteOptions = {}) => {
-    if (isSelectedViewDirty) {
-      const shouldClose = window.confirm("Є незбережені зміни. Закрити форму?");
-      if (!shouldClose) {
-        if (options.source === "history") {
-          window.history.forward();
-        }
-        return;
-      }
-    }
-
-    pendingViewParamSyncRef.current = null;
-    clearSelectedView();
+  const closeSelectedView = useCallback(() => {
     setIsSelectedViewDirty(false);
-    if (options.source === "history") {
-      return;
+    if (!isEditOnly) {
+      clearSelectedView();
     }
-    if (hasCollectionEntryHistoryState()) {
-      window.history.back();
-      return;
-    }
-    replaceSelectedItemSearchParam(null);
-  }, [clearSelectedView, isSelectedViewDirty, replaceSelectedItemSearchParam]);
+    onRequestClose?.();
+  }, [clearSelectedView, isEditOnly, onRequestClose]);
 
-  useRequestedCollectionViewSync({
-    pendingViewParamSyncRef,
-    requestedViewId,
-    requestedItemId,
-    selectedViewId: selectedView?.id ?? null,
-    selectedItemId: selectedView?.items.id ?? null,
-    collection,
-    getViewId: (item) => item.id,
-    getItemId: (item) => item.items.id,
-    clearSelectedViewRoute: closeSelectedView,
-    openSelectedView,
-    loadSelectedViewById,
-    loadSelectedViewByItemId,
-  });
+  useEffect(() => {
+    onEditDirtyChange?.(isSelectedViewDirty);
+  }, [isSelectedViewDirty, onEditDirtyChange]);
 
   const openSelectedGameDraft = useCallback(
     (
@@ -962,7 +945,7 @@ export default function GamesManager({
   );
 
   useEffect(() => {
-    if (readOnly || !requestedAddItemId) {
+    if (isEditOnly || readOnly || !requestedAddItemId) {
       return;
     }
 
@@ -999,6 +982,7 @@ export default function GamesManager({
     loadSelectedGameByItemId,
     openSelectedGameDraft,
     openSelectedView,
+    isEditOnly,
     readOnly,
     replaceAddItemSearchParam,
     requestedAddItemId,
@@ -1041,6 +1025,15 @@ export default function GamesManager({
   }, [yearBounds]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      restoreSnapshotRef.current = null;
+      restoredPageTargetRef.current = 0;
+      restoredScrollYRef.current = null;
+      shouldRestoreScrollRef.current = false;
+      setIsScreenContextReady(true);
+      return;
+    }
+
     const snapshot = loadCatalogScreenSnapshot<Filters, GamesViewMode>(screenKey);
     restoreSnapshotRef.current = snapshot;
     restoredPageTargetRef.current = Math.max(0, snapshot?.page ?? 0);
@@ -1066,7 +1059,7 @@ export default function GamesManager({
     initialLoadRunRef.current = false;
     lastAppliedRequestKeyRef.current = "";
     setIsScreenContextReady(true);
-  }, [screenKey]);
+  }, [isEditOnly, screenKey]);
 
   const persistScreenContext = useCallback(
     (scrollYOverride?: number) => {
@@ -1625,6 +1618,7 @@ export default function GamesManager({
   }, [friendAccessState, loadRecommendations, logLazy, ownerUserId, readOnly, yearBounds]);
 
   useEffect(() => {
+    if (isEditOnly) return;
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (!isScreenContextReady) return;
     if (!hasApplied) return;
@@ -1641,12 +1635,16 @@ export default function GamesManager({
     fetchPage,
     friendAccessState,
     hasApplied,
+    isEditOnly,
     isScreenContextReady,
     ownerUserId,
     readOnly,
   ]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     if (readOnly || ownerUserId || !hasApplied) {
       return;
     }
@@ -1664,9 +1662,10 @@ export default function GamesManager({
     return () => {
       window.removeEventListener(COLLECTION_ENTRY_SAVED_EVENT, handleCollectionEntrySaved);
     };
-  }, [appliedFilters, fetchPage, hasApplied, ownerUserId, readOnly]);
+  }, [appliedFilters, fetchPage, hasApplied, isEditOnly, ownerUserId, readOnly]);
 
   useEffect(() => {
+    if (isEditOnly) return;
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (!isScreenContextReady) return;
     if (initialLoadRunRef.current) return;
@@ -1681,9 +1680,12 @@ export default function GamesManager({
     setHasApplied(true);
     lastAppliedRequestKeyRef.current = getFiltersRequestKey(DEFAULT_FILTERS);
     void fetchPage(0, DEFAULT_FILTERS);
-  }, [fetchPage, friendAccessState, hasApplied, isScreenContextReady, ownerUserId, readOnly]);
+  }, [fetchPage, friendAccessState, hasApplied, isEditOnly, isScreenContextReady, ownerUserId, readOnly]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     if (!isScreenContextReady || !hasApplied) {
       return;
     }
@@ -1694,9 +1696,22 @@ export default function GamesManager({
     }
 
     void fetchPage(page + 1, appliedFilters);
-  }, [appliedFilters, fetchPage, hasApplied, hasMore, isLoading, isLoadingMore, isScreenContextReady, page]);
+  }, [
+    appliedFilters,
+    fetchPage,
+    hasApplied,
+    hasMore,
+    isEditOnly,
+    isLoading,
+    isLoadingMore,
+    isScreenContextReady,
+    page,
+  ]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     if (!isScreenContextReady || !shouldRestoreScrollRef.current || typeof window === "undefined") {
       return;
     }
@@ -1726,17 +1741,23 @@ export default function GamesManager({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [hasMore, isLoading, isLoadingMore, isScreenContextReady, page]);
+  }, [hasMore, isEditOnly, isLoading, isLoadingMore, isScreenContextReady, page]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     if (!isScreenContextReady) {
       return;
     }
 
     persistScreenContext();
-  }, [isScreenContextReady, persistScreenContext]);
+  }, [isEditOnly, isScreenContextReady, persistScreenContext]);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     if (!isScreenContextReady || typeof window === "undefined") {
       return;
     }
@@ -1762,7 +1783,7 @@ export default function GamesManager({
       persistScreenContext(window.scrollY);
       window.removeEventListener("scroll", handleScroll);
     };
-  }, [isScreenContextReady, persistScreenContext]);
+  }, [isEditOnly, isScreenContextReady, persistScreenContext]);
 
   const loadYearBounds = useCallback(async () => {
     const { data: minRows } = await supabase
@@ -1812,10 +1833,15 @@ export default function GamesManager({
   }, []);
 
   useEffect(() => {
+    if (isEditOnly) {
+      return;
+    }
     void loadYearBounds();
-  }, [loadYearBounds]);
+  }, [isEditOnly, loadYearBounds]);
 
   useEffect(() => {
+    if (isEditOnly) return;
+    if (isRouteModalOpen) return;
     if (readOnly && ownerUserId && friendAccessState !== "allowed") return;
     if (!hasApplied || isLoading || isLoadingMore || !hasMore) return;
     const node = loadMoreRef.current;
@@ -1852,6 +1878,8 @@ export default function GamesManager({
     friendAccessState,
     hasApplied,
     hasMore,
+    isEditOnly,
+    isRouteModalOpen,
     isLoading,
     isLoadingMore,
     logLazy,
@@ -3266,6 +3294,248 @@ export default function GamesManager({
       }[friendAccessState]
     : "";
 
+  const refreshPickerModal = isRefreshPickerOpen ? (
+    <CatalogSearchModal
+      title="Оновити гру"
+      onSearch={handleRefreshGameSearch}
+      getKey={(game) => game.id}
+      resultItemClassName={styles.gameSearchResultItem}
+      getResultItemClassName={(game) =>
+        game.isRefreshCurrent ? styles.existingCollectionResult : ""
+      }
+      initialQuery={refreshSearchQuery}
+      onSelect={async (game) => {
+        await applyRefreshedGameMetadata(game);
+        setIsRefreshPickerOpen(false);
+      }}
+      onClose={() => setIsRefreshPickerOpen(false)}
+      renderItem={(game) => <GameSearchItem game={game} hideInCollectionHint />}
+    />
+  ) : null;
+
+  const selectedViewModal = selectedView ? (
+    <ExistingCollectionEntryModal
+      key={selectedView.id}
+      title={selectedView.items.title}
+      posterUrl={(selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined}
+      fitTargetText="ця гра"
+      platformOptions={visiblePlatforms}
+      availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
+      onClose={closeSelectedView}
+      onDirtyChange={setIsSelectedViewDirty}
+      readOnly={readOnly}
+      onAddToOwnCollection={() => handleAddToOwnCollection(selectedView.items.id)}
+      previewAction={{
+        label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
+        onClick: handleWatchSelectedViewTrailer,
+        disabled: isTrailerLoading,
+        icon: playIcon,
+      }}
+      previewMenuAction={buildGameServiceMenuAction(selectedView.items.title)}
+      extraActions={
+        readOnly ? null : (
+          <button
+            type="button"
+            className="btnBase btnSecondary"
+            onClick={() => openRecommend(selectedView.items.id, selectedView.items.title)}
+          >
+            Порекомендувати другу
+          </button>
+        )
+      }
+      initialValues={{
+        viewedAt: selectedView.viewed_at,
+        comment: selectedView.comment,
+        recommendSimilar: selectedView.recommend_similar,
+        isViewed: selectedView.is_viewed,
+        rating: selectedView.rating,
+        viewPercent: selectedView.view_percent,
+        platforms: selectedView.platforms ?? [],
+        availability: selectedView.availability,
+        shishkaFitAssessment: getStoredShishkaFitAssessment(selectedView),
+      }}
+      onRefresh={handleRefreshSelectedGameMetadata}
+      onEvaluate={(payload) =>
+        evaluateGameWithProfile(
+          {
+            title: selectedView.items.title,
+            year: selectedViewItemDraft?.year ?? selectedView.items.year,
+            genres: selectedViewItemDraft?.genres ?? selectedView.items.genres,
+            description: selectedViewItemDraft?.description ?? selectedView.items.description,
+            platforms: payload.platforms,
+          },
+          payload.shishkaFitAssessment,
+        )
+      }
+      onPersistEvaluatedAssessment={async (assessment) =>
+        persistViewAssessment(selectedView.id, assessment)
+      }
+      onAdd={(payload) =>
+        handleUpdateView(selectedView.id, selectedView.items.id, selectedViewItemDraft, payload)
+      }
+      onDelete={() => handleDeleteView(selectedView.id)}
+    >
+      {({ fitBadge }) => (
+        <div className={styles.resultContent}>
+          <div className={styles.titleRow}>
+            <span className={styles.resultRating}>
+              {getExternalRatingLabel(
+                selectedViewItemDraft?.ratingSource,
+                selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating,
+              )}
+              : {selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating ?? "—"}
+            </span>
+            {fitBadge}
+            <span className={styles.resultRating}>
+              Мій: {formatPersonalRating(selectedView.rating)}
+            </span>
+          </div>
+          {(selectedViewItemDraft?.year ?? selectedView.items.year) ? (
+            <p className={styles.resultMeta}>
+              Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
+            </p>
+          ) : null}
+          {selectedViewItemDraft?.normalizedGenres?.length ||
+          selectedViewGenres.length > 0 ||
+          (selectedViewItemDraft?.genres ?? selectedView.items.genres) ? (
+            <p className={styles.resultMeta}>
+              Жанри:{" "}
+              {renderGenreLinks(selectedViewItemDraft?.normalizedGenres ?? selectedViewGenres) ??
+                (selectedViewItemDraft?.genres ?? selectedView.items.genres)}
+            </p>
+          ) : null}
+          {(selectedViewItemDraft?.description ?? selectedView.items.description) ? (
+            <ModalDescription
+              text={selectedViewItemDraft?.description ?? selectedView.items.description ?? ""}
+            />
+          ) : (
+            <p className={styles.resultPlot}>Опис недоступний.</p>
+          )}
+          {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
+        </div>
+      )}
+    </ExistingCollectionEntryModal>
+  ) : null;
+
+  const trailerViewerModal = trailerModal ? (
+    <TrailerViewerModal
+      key={`${trailerModal.baseTitle}:${trailerModal.index}:${trailerModal.trailers.length}`}
+      trailers={trailerModal.trailers}
+      initialIndex={trailerModal.index}
+      baseTitle={trailerModal.baseTitle}
+      onClose={() => setTrailerModal(null)}
+    />
+  ) : null;
+
+  const recommendItemModal = recommendItem ? (
+    <RecommendModal
+      title={recommendItem.title}
+      contacts={contacts}
+      onClose={() => setRecommendItem(null)}
+      onSend={handleSendRecommendation}
+    />
+  ) : null;
+
+  const recommendationScopeModal = recommendationScopeState ? (
+    <RecommendationRequestModal
+      title="Рекомендація для ігор"
+      scopeLabel="Платформа"
+      options={recommendationScopeState.options}
+      emptyMessage={recommendationScopeState.emptyMessage}
+      isLoading={isPreparingRecommendationRequest}
+      isSubmitting={isGeneratingRecommendations}
+      statusMessage={recommendationMessage}
+      statusTone="error"
+      canPreviewPrompt={isRecommendationPromptDebugEnabled}
+      isPreviewingPrompt={isPreviewingRecommendationPrompt}
+      promptPreview={recommendationPromptPreview}
+      placeholder="щось легше, без жахів, не дуже довге"
+      onClose={() => {
+        setRecommendationScopeState(null);
+        setRecommendationMessage("");
+        setRecommendationPromptPreview("");
+      }}
+      onPreviewPrompt={async (scopeValue, wishes) => {
+        await handlePreviewRecommendationPrompt(scopeValue, wishes);
+      }}
+      onSubmit={async (scopeValue, wishes) => {
+        await handleRecommend(scopeValue, wishes);
+      }}
+    />
+  ) : null;
+
+  const nicknameModal = isNicknameModalOpen ? (
+    <div
+      className={styles.filtersOverlay}
+      role="dialog"
+      aria-modal="true"
+      onClick={() => {
+        if (!isSavingNickname) {
+          setIsNicknameModalOpen(false);
+          setPendingRecommendItem(null);
+        }
+      }}
+    >
+      <div className={styles.filtersModal} onClick={(event) => event.stopPropagation()}>
+        <div className={styles.filtersHeader}>
+          <h2 className={styles.filtersTitle}>Задайте нікнейм перед відправкою</h2>
+        </div>
+        <label className={styles.filtersField}>
+          Нікнейм
+          <input
+            className={styles.filtersInput}
+            value={nicknameValue}
+            maxLength={24}
+            onChange={(event) => setNicknameValue(event.target.value)}
+            disabled={isSavingNickname}
+            autoFocus
+          />
+        </label>
+        <p className={styles.message}>3-24 символи: літери, цифри, _, -</p>
+        {nicknameError ? <p className={styles.errorText}>{nicknameError}</p> : null}
+        <div className={styles.filtersActions}>
+          <button
+            type="button"
+            className="btnBase btnSecondary"
+            onClick={() => {
+              setIsNicknameModalOpen(false);
+              setPendingRecommendItem(null);
+            }}
+            disabled={isSavingNickname}
+          >
+            Скасувати
+          </button>
+          <button
+            type="button"
+            className="btnBase btnPrimary"
+            onClick={() => void saveNicknameAndContinue()}
+            disabled={isSavingNickname}
+          >
+            {isSavingNickname ? "Збереження..." : "Зберегти і продовжити"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  if (isEditOnly) {
+    return (
+      <div className={styles.searchBlock}>
+        {!selectedView ? (
+          <p className={styles.message} aria-live="polite">
+            Підготовка форми редагування...
+          </p>
+        ) : null}
+        {refreshPickerModal}
+        {selectedViewModal}
+        {trailerViewerModal}
+        {recommendItemModal}
+        {recommendationScopeModal}
+        {nicknameModal}
+      </div>
+    );
+  }
+
   return (
     <div className={styles.searchBlock}>
       <div className={styles.filtersWrapper}>
@@ -4258,248 +4528,12 @@ export default function GamesManager({
         />
       ) : null}
 
-      {isRefreshPickerOpen ? (
-        <CatalogSearchModal
-          title="Оновити гру"
-          onSearch={handleRefreshGameSearch}
-          getKey={(game) => game.id}
-          resultItemClassName={styles.gameSearchResultItem}
-          getResultItemClassName={(game) =>
-            game.isRefreshCurrent ? styles.existingCollectionResult : ""
-          }
-          initialQuery={refreshSearchQuery}
-          onSelect={async (game) => {
-            await applyRefreshedGameMetadata(game);
-            setIsRefreshPickerOpen(false);
-          }}
-          onClose={() => setIsRefreshPickerOpen(false)}
-          renderItem={(game) => <GameSearchItem game={game} hideInCollectionHint />}
-        />
-      ) : null}
-
-      {selectedView ? (
-        <ExistingCollectionEntryModal
-          key={selectedView.id}
-          title={selectedView.items.title}
-          posterUrl={
-            (selectedViewItemDraft?.poster_url ?? selectedView.items.poster_url) ?? undefined
-          }
-          fitTargetText="ця гра"
-          platformOptions={visiblePlatforms}
-          availabilityOptions={showAvailability ? AVAILABILITY_OPTIONS : []}
-          onClose={closeSelectedView}
-          onDirtyChange={setIsSelectedViewDirty}
-          readOnly={readOnly}
-          onAddToOwnCollection={() => handleAddToOwnCollection(selectedView.items.id)}
-          previewAction={{
-            label: isTrailerLoading ? "Завантаження..." : "Переглянути трейлер",
-            onClick: handleWatchSelectedViewTrailer,
-            disabled: isTrailerLoading,
-            icon: playIcon,
-          }}
-          previewMenuAction={buildGameServiceMenuAction(
-            selectedView.items.title,
-          )}
-          extraActions={
-            readOnly ? null : (
-              <button
-                type="button"
-                className="btnBase btnSecondary"
-                onClick={() =>
-                  openRecommend(selectedView.items.id, selectedView.items.title)
-                }
-              >
-                Порекомендувати другу
-              </button>
-            )
-          }
-          initialValues={{
-            viewedAt: selectedView.viewed_at,
-            comment: selectedView.comment,
-            recommendSimilar: selectedView.recommend_similar,
-            isViewed: selectedView.is_viewed,
-            rating: selectedView.rating,
-            viewPercent: selectedView.view_percent,
-            platforms: selectedView.platforms ?? [],
-            availability: selectedView.availability,
-            shishkaFitAssessment: getStoredShishkaFitAssessment(selectedView),
-          }}
-          onRefresh={handleRefreshSelectedGameMetadata}
-          onEvaluate={(payload) =>
-            evaluateGameWithProfile(
-              {
-                title: selectedView.items.title,
-                year: selectedViewItemDraft?.year ?? selectedView.items.year,
-                genres: selectedViewItemDraft?.genres ?? selectedView.items.genres,
-                description:
-                  selectedViewItemDraft?.description ?? selectedView.items.description,
-                platforms: payload.platforms,
-              },
-              payload.shishkaFitAssessment,
-            )
-          }
-          onPersistEvaluatedAssessment={async (assessment) =>
-            persistViewAssessment(selectedView.id, assessment)
-          }
-          onAdd={(payload) =>
-            handleUpdateView(
-              selectedView.id,
-              selectedView.items.id,
-              selectedViewItemDraft,
-              payload,
-            )
-          }
-          onDelete={() => handleDeleteView(selectedView.id)}
-        >
-          {({ fitBadge }) => (
-            <div className={styles.resultContent}>
-              <div className={styles.titleRow}>
-                <span className={styles.resultRating}>
-                  {getExternalRatingLabel(
-                    selectedViewItemDraft?.ratingSource,
-                    selectedViewItemDraft?.imdb_rating ?? selectedView.items.imdb_rating,
-                  )}
-                  :{" "}
-                  {selectedViewItemDraft?.imdb_rating ??
-                    selectedView.items.imdb_rating ??
-                    "—"}
-                </span>
-                {fitBadge}
-                <span className={styles.resultRating}>
-                  Мій: {formatPersonalRating(selectedView.rating)}
-                </span>
-              </div>
-              {(selectedViewItemDraft?.year ?? selectedView.items.year) ? (
-                <p className={styles.resultMeta}>
-                  Рік: {selectedViewItemDraft?.year ?? selectedView.items.year}
-                </p>
-              ) : null}
-              {selectedViewItemDraft?.normalizedGenres?.length ||
-              selectedViewGenres.length > 0 ||
-              (selectedViewItemDraft?.genres ?? selectedView.items.genres) ? (
-                <p className={styles.resultMeta}>
-                  Жанри:{" "}
-                  {renderGenreLinks(selectedViewItemDraft?.normalizedGenres ?? selectedViewGenres) ??
-                    (selectedViewItemDraft?.genres ?? selectedView.items.genres)}
-                </p>
-              ) : null}
-              {(selectedViewItemDraft?.description ?? selectedView.items.description) ? (
-                <ModalDescription
-                  text={
-                    selectedViewItemDraft?.description ??
-                    selectedView.items.description ??
-                    ""
-                  }
-                />
-              ) : (
-                <p className={styles.resultPlot}>Опис недоступний.</p>
-              )}
-              {trailerMessage ? <p className={styles.message}>{trailerMessage}</p> : null}
-            </div>
-          )}
-        </ExistingCollectionEntryModal>
-      ) : null}
-
-      {trailerModal ? (
-        <TrailerViewerModal
-          key={`${trailerModal.baseTitle}:${trailerModal.index}:${trailerModal.trailers.length}`}
-          trailers={trailerModal.trailers}
-          initialIndex={trailerModal.index}
-          baseTitle={trailerModal.baseTitle}
-          onClose={() => setTrailerModal(null)}
-        />
-      ) : null}
-
-      {recommendItem ? (
-        <RecommendModal
-          title={recommendItem.title}
-          contacts={contacts}
-          onClose={() => setRecommendItem(null)}
-          onSend={handleSendRecommendation}
-        />
-      ) : null}
-
-      {recommendationScopeState ? (
-        <RecommendationRequestModal
-          title="Рекомендація для ігор"
-          scopeLabel="Платформа"
-          options={recommendationScopeState.options}
-          emptyMessage={recommendationScopeState.emptyMessage}
-          isLoading={isPreparingRecommendationRequest}
-          isSubmitting={isGeneratingRecommendations}
-          statusMessage={recommendationMessage}
-          statusTone="error"
-          canPreviewPrompt={isRecommendationPromptDebugEnabled}
-          isPreviewingPrompt={isPreviewingRecommendationPrompt}
-          promptPreview={recommendationPromptPreview}
-          placeholder="щось легше, без жахів, не дуже довге"
-          onClose={() => {
-            setRecommendationScopeState(null);
-            setRecommendationMessage("");
-            setRecommendationPromptPreview("");
-          }}
-          onPreviewPrompt={async (scopeValue, wishes) => {
-            await handlePreviewRecommendationPrompt(scopeValue, wishes);
-          }}
-          onSubmit={async (scopeValue, wishes) => {
-            await handleRecommend(scopeValue, wishes);
-          }}
-        />
-      ) : null}
-
-      {isNicknameModalOpen ? (
-        <div
-          className={styles.filtersOverlay}
-          role="dialog"
-          aria-modal="true"
-          onClick={() => {
-            if (!isSavingNickname) {
-              setIsNicknameModalOpen(false);
-              setPendingRecommendItem(null);
-            }
-          }}
-        >
-          <div className={styles.filtersModal} onClick={(event) => event.stopPropagation()}>
-            <div className={styles.filtersHeader}>
-              <h2 className={styles.filtersTitle}>Задайте нікнейм перед відправкою</h2>
-            </div>
-            <label className={styles.filtersField}>
-              Нікнейм
-              <input
-                className={styles.filtersInput}
-                value={nicknameValue}
-                maxLength={24}
-                onChange={(event) => setNicknameValue(event.target.value)}
-                disabled={isSavingNickname}
-                autoFocus
-              />
-            </label>
-            <p className={styles.message}>3-24 символи: літери, цифри, _, -</p>
-            {nicknameError ? <p className={styles.errorText}>{nicknameError}</p> : null}
-            <div className={styles.filtersActions}>
-              <button
-                type="button"
-                className="btnBase btnSecondary"
-                onClick={() => {
-                  setIsNicknameModalOpen(false);
-                  setPendingRecommendItem(null);
-                }}
-                disabled={isSavingNickname}
-              >
-                Скасувати
-              </button>
-              <button
-                type="button"
-                className="btnBase btnPrimary"
-                onClick={() => void saveNicknameAndContinue()}
-                disabled={isSavingNickname}
-              >
-                {isSavingNickname ? "Збереження..." : "Зберегти і продовжити"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {refreshPickerModal}
+      {selectedViewModal}
+      {trailerViewerModal}
+      {recommendItemModal}
+      {recommendationScopeModal}
+      {nicknameModal}
     </div>
   );
 }
