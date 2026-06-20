@@ -24,6 +24,7 @@ type ExistingCollectionEntryModalProps = {
   fitTargetText: string;
   readOnly: boolean;
   onClose: () => void;
+  onDirtyChange?: (isDirty: boolean) => void;
   onAddToOwnCollection: () => Promise<void> | void;
   previewAction: {
     label: string;
@@ -61,6 +62,7 @@ export default function ExistingCollectionEntryModal({
   fitTargetText,
   readOnly,
   onClose,
+  onDirtyChange,
   onAddToOwnCollection,
   previewAction,
   previewMenuAction,
@@ -88,6 +90,7 @@ export default function ExistingCollectionEntryModal({
       initialValues={initialValues}
       submitLabel={readOnly ? "Відкрити форму додавання" : "Зберегти"}
       onClose={onClose}
+      onDirtyChange={onDirtyChange}
       readOnly={readOnly}
       onReadOnlyPrimaryAction={onAddToOwnCollection}
       readOnlyPrimarySuccessMessage={null}
