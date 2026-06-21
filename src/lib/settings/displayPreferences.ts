@@ -16,6 +16,21 @@ export const DEFAULT_GAME_PLATFORM_OPTIONS = [
   "Other",
 ] as const;
 
+export const AVAILABILITY_OPTIONS = [
+  "В колекції",
+  "Тимчасовий доступ",
+  "У друзів",
+  "Відсутній",
+] as const;
+
+export type AvailabilityOption = (typeof AVAILABILITY_OPTIONS)[number];
+
+export const isAvailabilityOption = (
+  value: string | null | undefined,
+): value is AvailabilityOption =>
+  typeof value === "string" &&
+  (AVAILABILITY_OPTIONS as readonly string[]).includes(value);
+
 export type DisplayPreferences = {
   showFilmAvailability: boolean;
   showGameAvailability: boolean;

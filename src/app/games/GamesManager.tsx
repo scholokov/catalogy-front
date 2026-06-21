@@ -78,6 +78,7 @@ import {
 import { type GameNormalizedGenre } from "@/lib/games/normalizedMetadata";
 import { loadStoredGameGenresForItem } from "@/lib/games/storedGenres";
 import {
+  AVAILABILITY_OPTIONS,
   DEFAULT_GAME_PLATFORM_OPTIONS,
   readDisplayPreferences,
   DISPLAY_PREFERENCES_STORAGE_KEY,
@@ -283,12 +284,7 @@ const SORT_OPTIONS: Array<{ value: SortBy; label: string }> = [
   { value: "year", label: "Рік релізу" },
 ];
 const GAME_PLATFORM_OPTIONS = [...DEFAULT_GAME_PLATFORM_OPTIONS];
-const AVAILABILITY_OPTIONS = [
-  "В колекції",
-  "Тимчасовий доступ",
-  "У друзів",
-  "Відсутній",
-];
+const normalizeGameExternalId = (value?: string | null) => value?.trim() || null;
 const PAGE_SIZE = 20;
 const LOAD_AHEAD_PX = 700;
 const NICKNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
@@ -2058,8 +2054,9 @@ export default function GamesManager({
   const gameViewsByExternalId = useMemo(() => {
     const map = new Map<string, GameCollectionItem>();
     collection.forEach((item) => {
-      if (item.items.external_id) {
-        map.set(item.items.external_id, item);
+      const externalId = normalizeGameExternalId(item.items.external_id);
+      if (externalId) {
+        map.set(externalId, item);
       }
     });
     return map;
@@ -2355,7 +2352,7 @@ export default function GamesManager({
         if (
           item.inCollection ||
           item.existingViewId ||
-          gameViewsByExternalId.get(item.id) ||
+          gameViewsByExternalId.get(normalizeGameExternalId(item.id) ?? "") ||
           recommendationExistingExternalKeys.has(item.id)
         ) {
           return false;
@@ -2872,7 +2869,9 @@ export default function GamesManager({
       const results = data.results ?? [];
       return results
         .map((item) => {
-          const existingView = gameViewsByExternalId.get(item.id);
+          const existingView = gameViewsByExternalId.get(
+            normalizeGameExternalId(item.id) ?? "",
+          );
           return {
             ...item,
             inCollection: Boolean(existingView),

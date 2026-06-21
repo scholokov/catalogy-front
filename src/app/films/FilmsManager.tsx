@@ -67,6 +67,7 @@ import {
 import { useCollectionEntryLauncher } from "@/lib/collection/entryLauncher";
 import { supabase } from "@/lib/supabase/client";
 import {
+  AVAILABILITY_OPTIONS,
   readDisplayPreferences,
   DISPLAY_PREFERENCES_STORAGE_KEY,
 } from "@/lib/settings/displayPreferences";
@@ -308,12 +309,6 @@ const SORT_OPTIONS: Array<{ value: SortBy; label: string }> = [
   { value: "rating", label: "Особистий рейтинг" },
   { value: "year", label: "Рік релізу" },
 ];
-const AVAILABILITY_OPTIONS = [
-  "В колекції",
-  "Тимчасовий доступ",
-  "У друзів",
-  "Відсутній",
-];
 const PAGE_SIZE = 20;
 const LOAD_AHEAD_PX = 700;
 const NICKNAME_PATTERN = /^[A-Za-z0-9_-]{3,24}$/;
@@ -322,8 +317,9 @@ const normalizeFilmMediaType = (value?: string | null): "movie" | "tv" | null =>
   return null;
 };
 const getFilmExternalKey = (externalId?: string | null, mediaType?: string | null) => {
-  if (!externalId) return null;
-  return `${normalizeFilmMediaType(mediaType) ?? "movie"}:${externalId}`;
+  const normalizedExternalId = externalId?.trim();
+  if (!normalizedExternalId) return null;
+  return `${normalizeFilmMediaType(mediaType) ?? "movie"}:${normalizedExternalId}`;
 };
 const DEFAULT_FILTERS: Filters = {
   availabilityAll: true,

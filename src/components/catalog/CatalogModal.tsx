@@ -26,8 +26,8 @@ type CatalogModalProps = {
   onClose: () => void;
   size?: "default" | "wide";
   readOnly?: boolean;
-  platformOptions?: string[];
-  availabilityOptions?: string[];
+  platformOptions?: readonly string[];
+  availabilityOptions?: readonly string[];
   onAdd?: (payload: {
     viewedAt: string;
     comment: string;
@@ -92,6 +92,8 @@ type FitPopoverPlacement = {
   horizontal: "left" | "right" | "center";
   vertical: "above" | "below";
 };
+
+type ConfirmAction = "delete" | "discard";
 
 const RATING_MIN = 1;
 const RATING_MAX = 5;
@@ -211,7 +213,7 @@ export default function CatalogModal({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
-  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [isPlatformsOpen, setIsPlatformsOpen] = useState(false);
   const [isAvailabilityOpen, setIsAvailabilityOpen] = useState(false);
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
@@ -586,7 +588,8 @@ export default function CatalogModal({
     if (isSaving || isRefreshing) {
       return;
     }
-    if (isDirty && !window.confirm("Є незбережені зміни. Закрити форму?")) {
+    if (isDirty) {
+      setConfirmAction("discard");
       return;
     }
     onClose();
@@ -595,11 +598,18 @@ export default function CatalogModal({
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (confirmAction) {
+          event.preventDefault();
+          if (!isDeleting) {
+            setConfirmAction(null);
+          }
+          return;
+        }
         requestClose();
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-        if (isSaving || isConfirmOpen) {
+        if (isSaving || confirmAction) {
           return;
         }
         event.preventDefault();
@@ -609,7 +619,7 @@ export default function CatalogModal({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isConfirmOpen, isSaving, requestClose]);
+  }, [confirmAction, isDeleting, isSaving, requestClose]);
 
   const handleAdd = async () => {
     if (readOnly) {
@@ -682,7 +692,7 @@ export default function CatalogModal({
       return;
     }
 
-    setIsConfirmOpen(true);
+    setConfirmAction("delete");
   };
 
   const handleRefresh = async () => {
@@ -749,6 +759,7 @@ export default function CatalogModal({
     try {
       await onDelete();
       showSnackbar("Видалено");
+      setConfirmAction(null);
       onClose();
     } catch (error) {
       const message =
@@ -761,9 +772,14 @@ export default function CatalogModal({
     }
   };
 
-  const cancelDelete = () => {
+  const cancelConfirm = () => {
     if (isDeleting) return;
-    setIsConfirmOpen(false);
+    setConfirmAction(null);
+  };
+
+  const confirmDiscard = () => {
+    setConfirmAction(null);
+    onClose();
   };
 
   const goPrev = () => {
@@ -1547,23 +1563,27 @@ export default function CatalogModal({
             </div>
           </div>
         </div>
-        {isConfirmOpen ? (
+        {confirmAction ? (
           <div
             className={styles.confirmOverlay}
             role="dialog"
             aria-modal="true"
-            onClick={cancelDelete}
+            onClick={cancelConfirm}
           >
             <div
               className={styles.confirmModal}
               onClick={(event) => event.stopPropagation()}
             >
-              <p className={styles.confirmText}>Видалити запис?</p>
+              <p className={styles.confirmText}>
+                {confirmAction === "delete"
+                  ? "Видалити запис?"
+                  : "Є незбережені зміни. Закрити форму без збереження?"}
+              </p>
               <div className={styles.confirmActions}>
                 <button
                   type="button"
                   className="btnBase btnSecondary"
-                  onClick={cancelDelete}
+                  onClick={cancelConfirm}
                   disabled={isDeleting}
                 >
                   Скасувати
@@ -1571,10 +1591,14 @@ export default function CatalogModal({
                 <button
                   type="button"
                   className="btnBase btnPrimary"
-                  onClick={confirmDelete}
+                  onClick={confirmAction === "delete" ? confirmDelete : confirmDiscard}
                   disabled={isDeleting}
                 >
-                  {isDeleting ? "Видалення..." : "Видалити"}
+                  {confirmAction === "delete"
+                    ? isDeleting
+                      ? "Видалення..."
+                      : "Видалити"
+                    : "Закрити без збереження"}
                 </button>
               </div>
             </div>

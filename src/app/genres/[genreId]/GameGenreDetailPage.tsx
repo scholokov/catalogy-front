@@ -29,7 +29,10 @@ import {
   trySyncGameNormalizedGenres,
 } from "@/lib/games/normalizedMetadata";
 import { normalizeGamePlatforms } from "@/lib/games/platforms";
-import { DEFAULT_GAME_PLATFORM_OPTIONS } from "@/lib/settings/displayPreferences";
+import {
+  AVAILABILITY_OPTIONS,
+  DEFAULT_GAME_PLATFORM_OPTIONS,
+} from "@/lib/settings/displayPreferences";
 import {
   fetchLatestGameFitProfileAnalysis,
   requestGameFitEvaluation,
@@ -70,7 +73,6 @@ type GameItemDraft = {
 
 const GAME_BATCH_SIZE = 12;
 const GAME_PLATFORM_OPTIONS = [...DEFAULT_GAME_PLATFORM_OPTIONS];
-const AVAILABILITY_OPTIONS = ["В колекції", "Тимчасовий доступ", "У друзів", "Відсутній"];
 const ALLOWED_GAME_IMAGE_HOSTS = new Set([
   "images.igdb.com",
   "media.rawg.io",

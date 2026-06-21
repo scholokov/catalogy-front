@@ -4,17 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CatalogLayout from "@/components/catalog/CatalogLayout";
 import { supabase } from "@/lib/supabase/client";
 import {
+  AVAILABILITY_OPTIONS,
   DEFAULT_GAME_PLATFORM_OPTIONS,
+  isAvailabilityOption,
   writeDisplayPreferences,
 } from "@/lib/settings/displayPreferences";
 import styles from "./SettingsPage.module.css";
-
-const AVAILABILITY_OPTIONS = [
-  "В колекції",
-  "Тимчасовий доступ",
-  "У друзів",
-  "Відсутній",
-];
 
 type TelegramLinkTokenRow = {
   id: string;
@@ -450,13 +445,11 @@ export default function SettingsPage() {
           ? defaultGamePlatform
           : null,
       settings_default_film_availability:
-        defaultFilmAvailability &&
-        AVAILABILITY_OPTIONS.includes(defaultFilmAvailability)
+        isAvailabilityOption(defaultFilmAvailability)
           ? defaultFilmAvailability
           : null,
       settings_default_game_availability:
-        defaultGameAvailability &&
-        AVAILABILITY_OPTIONS.includes(defaultGameAvailability)
+        isAvailabilityOption(defaultGameAvailability)
           ? defaultGameAvailability
           : null,
       settings_default_film_is_viewed: defaultFilmIsViewed,
@@ -488,11 +481,11 @@ export default function SettingsPage() {
           ? defaultGamePlatform
           : null,
       defaultFilmAvailability:
-        defaultFilmAvailability && AVAILABILITY_OPTIONS.includes(defaultFilmAvailability)
+        isAvailabilityOption(defaultFilmAvailability)
           ? defaultFilmAvailability
           : null,
       defaultGameAvailability:
-        defaultGameAvailability && AVAILABILITY_OPTIONS.includes(defaultGameAvailability)
+        isAvailabilityOption(defaultGameAvailability)
           ? defaultGameAvailability
           : null,
       defaultFilmIsViewed,

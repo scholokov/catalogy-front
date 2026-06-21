@@ -38,21 +38,17 @@ import {
 } from "@/lib/games/collectionFlow";
 import { type GameNormalizedGenre } from "@/lib/games/normalizedMetadata";
 import { loadStoredGameGenresForItem } from "@/lib/games/storedGenres";
-import { DEFAULT_GAME_PLATFORM_OPTIONS, readDisplayPreferences } from "@/lib/settings/displayPreferences";
+import {
+  AVAILABILITY_OPTIONS,
+  DEFAULT_GAME_PLATFORM_OPTIONS,
+  readDisplayPreferences,
+} from "@/lib/settings/displayPreferences";
 import {
   mergeShishkaAssessmentIntoComment,
   type ShishkaFitAssessment,
 } from "@/lib/shishka/fitAssessment";
 import { supabase } from "@/lib/supabase/client";
 import styles from "@/components/catalog/CatalogSearch.module.css";
-
-const AVAILABILITY_OPTIONS = [
-  "В колекції",
-  "Тимчасовий доступ",
-  "Пройдено/переглянуто десь",
-  "Продано",
-  "Втрачено",
-];
 
 type HostProps = {
   request: CollectionEntryLaunchRequest | null;
@@ -106,7 +102,7 @@ type FilmEntryState = {
   trailers?: FilmCollectionTrailer[] | null;
   existingView: ExistingOwnView | null;
   initialValues: SharedInitialValues;
-  availabilityOptions: string[];
+  availabilityOptions: readonly string[];
   recommendationScopeValue?: string | null;
 };
 
@@ -126,8 +122,8 @@ type GameEntryState = {
   trailers?: GameCollectionTrailer[] | null;
   existingView: ExistingOwnView | null;
   initialValues: SharedInitialValues;
-  availabilityOptions: string[];
-  platformOptions: string[];
+  availabilityOptions: readonly string[];
+  platformOptions: readonly string[];
   recommendationScopeValue?: string | null;
 };
 

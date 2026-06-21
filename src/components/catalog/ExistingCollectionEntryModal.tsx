@@ -47,8 +47,8 @@ type ExistingCollectionEntryModalProps = {
     availability?: string | null;
     shishkaFitAssessment?: ShishkaFitAssessment | null;
   };
-  availabilityOptions?: string[];
-  platformOptions?: string[];
+  availabilityOptions?: readonly string[];
+  platformOptions?: readonly string[];
   onRefresh?: () => Promise<void>;
   onEvaluate?: (payload: CatalogModalPayload) => Promise<ShishkaFitAssessment>;
   onPersistEvaluatedAssessment?: (assessment: ShishkaFitAssessment) => Promise<void>;

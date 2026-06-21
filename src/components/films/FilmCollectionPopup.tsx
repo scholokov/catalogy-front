@@ -22,6 +22,7 @@ import {
   persistFilmViewAssessment,
 } from "@/lib/films/fitAssessmentFlow";
 import {
+  AVAILABILITY_OPTIONS,
   DISPLAY_PREFERENCES_STORAGE_KEY,
   readDisplayPreferences,
 } from "@/lib/settings/displayPreferences";
@@ -135,13 +136,6 @@ type FilmCollectionPopupProps = {
   onClose: () => void;
   onSaved: () => Promise<void> | void;
 };
-
-const AVAILABILITY_OPTIONS = [
-  "В колекції",
-  "Тимчасовий доступ",
-  "У друзів",
-  "Відсутній",
-];
 
 export default function FilmCollectionPopup({
   mode,
