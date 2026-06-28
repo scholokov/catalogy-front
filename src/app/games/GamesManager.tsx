@@ -32,6 +32,7 @@ import {
   patchCollectionEntryByViewId,
   patchCollectionEntryTrailersByItemId,
   persistCollectionEntryAssessment,
+  removeCollectionEntryByViewId,
 } from "@/lib/collection/existingEntryState";
 import {
   evaluateGameCollectionFit,
@@ -51,8 +52,11 @@ import {
   type CatalogScreenSnapshot,
 } from "@/lib/collection/screenContext";
 import {
+  COLLECTION_ENTRY_DELETED_EVENT,
   COLLECTION_ENTRY_SAVED_EVENT,
+  emitCollectionEntryDeleted,
   emitCollectionEntrySaved,
+  type CollectionEntryDeletedEventDetail,
   type CollectionEntrySavedEventDetail,
 } from "@/lib/collection/events";
 import {
@@ -1714,18 +1718,25 @@ export default function GamesManager({
     };
 
     window.addEventListener(COLLECTION_ENTRY_SAVED_EVENT, handleCollectionEntrySaved);
+    const handleCollectionEntryDeleted = (event: Event) => {
+      const detail = (event as CustomEvent<CollectionEntryDeletedEventDetail>).detail;
+      if (detail?.mediaKind !== "game" || !detail.viewId) {
+        return;
+      }
+
+      removeCollectionEntryByViewId({
+        viewId: detail.viewId,
+        setCollection,
+        setSelectedView,
+      });
+    };
+
+    window.addEventListener(COLLECTION_ENTRY_DELETED_EVENT, handleCollectionEntryDeleted);
     return () => {
       window.removeEventListener(COLLECTION_ENTRY_SAVED_EVENT, handleCollectionEntrySaved);
+      window.removeEventListener(COLLECTION_ENTRY_DELETED_EVENT, handleCollectionEntryDeleted);
     };
-  }, [
-    appliedFilters,
-    fetchPage,
-    hasApplied,
-    isEditOnly,
-    loadSelectedViewById,
-    ownerUserId,
-    readOnly,
-  ]);
+  }, [fetchPage, hasApplied, isEditOnly, loadSelectedViewById, ownerUserId, readOnly]);
 
   useEffect(() => {
     if (isEditOnly) return;
@@ -2873,8 +2884,16 @@ export default function GamesManager({
 
   const handleDeleteView = async (viewId: string) => {
     await deleteCollectionView({ supabase, viewId });
-    setHasApplied(true);
-    void fetchPage(0, appliedFilters);
+    removeCollectionEntryByViewId({
+      viewId,
+      setCollection,
+      setSelectedView,
+    });
+    emitCollectionEntryDeleted({
+      mediaKind: "game",
+      itemId: null,
+      viewId,
+    });
   };
 
   const handleAddToOwnCollection = async (itemId: string) => {

@@ -105,6 +105,19 @@ export const patchCollectionEntryByViewId = <T extends Identifiable>({
   );
 };
 
+export const removeCollectionEntryByViewId = <T extends Identifiable>({
+  viewId,
+  setCollection,
+  setSelectedView,
+}: {
+  viewId: string;
+  setCollection: Dispatch<SetStateAction<T[]>>;
+  setSelectedView: Dispatch<SetStateAction<T | null>>;
+}) => {
+  setCollection((prev) => prev.filter((item) => item.id !== viewId));
+  setSelectedView((prev) => (prev && prev.id === viewId ? null : prev));
+};
+
 export const patchCollectionEntryByItemId = <
   T extends Identifiable & ItemIdentifiable,
 >({
