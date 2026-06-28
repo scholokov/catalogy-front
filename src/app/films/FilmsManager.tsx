@@ -31,6 +31,7 @@ import {
   deleteCollectionView,
   formatCollectionEntryPersonalRating as formatPersonalRating,
   getStoredCollectionEntryFitAssessment as getStoredShishkaFitAssessment,
+  patchCollectionEntryByViewId,
   patchCollectionEntryTrailersByItemId,
   persistCollectionEntryAssessment,
 } from "@/lib/collection/existingEntryState";
@@ -50,6 +51,7 @@ import {
 } from "@/lib/collection/screenContext";
 import {
   COLLECTION_ENTRY_SAVED_EVENT,
+  emitCollectionEntrySaved,
   type CollectionEntrySavedEventDetail,
 } from "@/lib/collection/events";
 import {
@@ -1782,6 +1784,25 @@ export default function FilmsManager({
         return;
       }
 
+      if (detail.viewId) {
+        const viewId = detail.viewId;
+        void (async () => {
+          const updatedView = await loadSelectedViewById(viewId);
+          if (!updatedView) {
+            void fetchPage(0, appliedFilters);
+            return;
+          }
+
+          patchCollectionEntryByViewId({
+            viewId,
+            setCollection,
+            setSelectedView,
+            applyPatch: () => updatedView,
+          });
+        })();
+        return;
+      }
+
       void fetchPage(0, appliedFilters);
     };
 
@@ -1789,7 +1810,15 @@ export default function FilmsManager({
     return () => {
       window.removeEventListener(COLLECTION_ENTRY_SAVED_EVENT, handleCollectionEntrySaved);
     };
-  }, [appliedFilters, fetchPage, hasApplied, isEditOnly, ownerUserId, readOnly]);
+  }, [
+    appliedFilters,
+    fetchPage,
+    hasApplied,
+    isEditOnly,
+    loadSelectedViewById,
+    ownerUserId,
+    readOnly,
+  ]);
 
   useEffect(() => {
     if (isEditOnly) return;
@@ -3176,6 +3205,11 @@ export default function FilmsManager({
             }
           : item.items,
       }),
+    });
+    emitCollectionEntrySaved({
+      mediaKind: "film",
+      itemId,
+      viewId,
     });
     setSelectedViewItemDraft(null);
   };

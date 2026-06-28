@@ -697,6 +697,7 @@ export default function CollectionEntryHost({ request, onClose }: HostProps) {
             emitCollectionEntrySaved({
               mediaKind: "film",
               itemId: result.itemId ?? state.itemId ?? null,
+              viewId: result.viewId ?? state.existingView?.id ?? null,
             });
             await request.onCompleted?.();
           }}
@@ -757,6 +758,7 @@ export default function CollectionEntryHost({ request, onClose }: HostProps) {
           emitCollectionEntrySaved({
             mediaKind: "game",
             itemId: result.itemId ?? state.itemId ?? null,
+            viewId: result.viewId ?? state.existingView?.id ?? null,
           });
           await request.onCompleted?.();
         }}

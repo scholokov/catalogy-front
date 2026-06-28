@@ -69,6 +69,7 @@ export const saveFilmDraftToCollection = async ({
     });
     return {
       itemId: film.itemId,
+      viewId,
       updatedExistingView: true,
     };
   }
@@ -78,7 +79,10 @@ export const saveFilmDraftToCollection = async ({
     film,
     payload,
     allowUpdateExistingView: allowUpdateExistingViewForNew,
-  });
+  }).then((result) => ({
+    ...result,
+    viewId: null,
+  }));
 };
 
 export const saveGameDraftToCollection = async ({
@@ -103,6 +107,7 @@ export const saveGameDraftToCollection = async ({
     });
     return {
       itemId: game.itemId,
+      viewId,
       updatedExistingView: true,
     };
   }
@@ -112,5 +117,8 @@ export const saveGameDraftToCollection = async ({
     game,
     payload,
     allowUpdateExistingView: allowUpdateExistingViewForNew,
-  });
+  }).then((result) => ({
+    ...result,
+    viewId: null,
+  }));
 };

@@ -3,6 +3,7 @@ export const COLLECTION_ENTRY_SAVED_EVENT = "collection:entry-saved";
 export type CollectionEntrySavedEventDetail = {
   mediaKind: "film" | "game";
   itemId: string | null;
+  viewId?: string | null;
 };
 
 export const emitCollectionEntrySaved = (
